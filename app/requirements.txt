@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+sqlalchemy[asyncio]==2.0.25
+asyncpg==0.29.0
+confluent-kafka
+python-dotenv
+aiokafka
