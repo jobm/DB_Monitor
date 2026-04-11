@@ -103,10 +103,11 @@ services:
   monitor-server:
     build:
       context: ./app
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
-      POSTGRES_URL: postgresql://postgres:postgres@postgres-monitor:5432/postgres
-      KAFKA_BROKER: kafka:9092  # Use internal Docker network
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_URL: postgresql+asyncpg://postgres:postgres@postgres-monitor:5432/postgres
+      KAFKA_BROKER: kafka:9092
+      KAFKA_TOPICS: catalogdb.public.categories,catalogdb.public.products,orderdb.public.customers,orderdb.public.orders,shippingdb.public.drivers,shippingdb.public.shipments
     depends_on:
       - kafka
       - postgres-monitor
@@ -125,3 +126,38 @@ services:
     environment:
       - MAX_RETRIES=50
       - RETRY_DELAY=10
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./monitoring/prometheus/:/etc/prometheus/
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    depends_on:
+      - monitor-server
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    volumes:
+      - ./monitoring/alertmanager/:/etc/alertmanager/
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    ports:
+      - "9094:9093"
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus

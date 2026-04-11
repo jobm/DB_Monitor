@@ -8,13 +8,22 @@ RUN apt-get update && apt-get install -y \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /bin/
 
-# Install Python dependencies explicitly avoiding psycopg2
-RUN pip install --no-cache-dir -r requirements.txt && \
-    pip uninstall -y psycopg2 psycopg2-binary 2>/dev/null || true
+# Copy dependencies first to leverage caching
+COPY pyproject.toml uv.lock ./
 
+# Install dependencies (system-wide since it's a docker container)
+# Also prevent psycopg2 from being installed since asyncpg is used
+RUN uv sync --frozen --no-install-project --no-dev && \
+    uv pip uninstall --system -y psycopg2 psycopg2-binary 2>/dev/null || true
+
+# Copy application code
 COPY . .
 
+# Install the project itself
+RUN uv sync --frozen --no-dev
+
 EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

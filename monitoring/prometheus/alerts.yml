@@ -1,0 +1,20 @@
+groups:
+  - name: db_monitor_alerts
+    rules:
+      - alert: HighErrorRate
+        expr: rate(db_monitor_events_failed_total[1m]) > 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High Kafka event processing failure rate"
+          description: "DB Monitor is failing to process CDC events at a high rate (> 1/sec). Check database logs for connectivity issues."
+
+      - alert: APIHighLatency
+        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2.0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API Latency is High"
+          description: "The 95th percentile of the DB Monitor API is responding slower than 2 seconds!"

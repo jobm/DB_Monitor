@@ -110,6 +110,7 @@ graph LR
    ```bash
    ./register-connectors.sh
    ```
+   - Requires `curl` and `jq` to be installed locally.
 
 5. The application will be available at:
    - FastAPI Application: http://localhost:8000
