@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
@@ -23,10 +33,20 @@ class MonitoredTable(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    columns = relationship("MonitoredColumn", back_populates="table", cascade="all, delete-orphan")
+    columns = relationship(
+        "MonitoredColumn",
+        back_populates="table",
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
-        Index("ix_monitored_tables_service_db_table", "service_name", "database_name", "table_name", unique=True),
+        Index(
+            "ix_monitored_tables_service_db_table",
+            "service_name",
+            "database_name",
+            "table_name",
+            unique=True,
+        ),
     )
 
 
@@ -36,7 +56,11 @@ class MonitoredColumn(Base):
     __tablename__ = "monitored_columns"
 
     id = Column(Integer, primary_key=True, index=True)
-    table_id = Column(Integer, ForeignKey("monitored_tables.id", ondelete="CASCADE"), nullable=False)
+    table_id = Column(
+        Integer,
+        ForeignKey("monitored_tables.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     column_name = Column(String(128), nullable=False)
     data_type = Column(String(64), nullable=False)
     is_primary_key = Column(Boolean, default=False)
@@ -47,16 +71,22 @@ class MonitoredColumn(Base):
 
     __table_args__ = (
         Index("ix_monitored_columns_table_id", "table_id"),
+        Index(
+            "ux_monitored_columns_table_column",
+            "table_id",
+            "column_name",
+            unique=True,
+        ),
     )
 
 
 class KafkaEventLegacy(Base):
-	"""Legacy raw event table (kept for backward compatibility / migration)."""
+    """Legacy raw event table (kept for backward compatibility)."""
 
-	__tablename__ = "kafka_events"
+    __tablename__ = "kafka_events"
 
-	id = Column(Integer, primary_key=True, index=True)
-	value = Column(Text, nullable=False)
+    id = Column(Integer, primary_key=True, index=True)
+    value = Column(Text, nullable=False)
 
 
 class KafkaEvent(Base):
@@ -75,8 +105,15 @@ class KafkaEvent(Base):
     event_time = Column(DateTime(timezone=True), nullable=False, index=True)
     user_id = Column(String(128), nullable=True, index=True)
     service_name = Column(String(128), nullable=True, index=True)
+    kafka_topic = Column(String(256), nullable=True)
+    kafka_partition = Column(Integer, nullable=True)
+    kafka_offset = Column(BigInteger, nullable=True)
 
-    source_table_id = Column(Integer, ForeignKey("monitored_tables.id"), nullable=True)
+    source_table_id = Column(
+        Integer,
+        ForeignKey("monitored_tables.id"),
+        nullable=True,
+    )
     operation = Column(String(16), nullable=True)  # INSERT, UPDATE, DELETE
 
     event_data = Column(JSONB, nullable=True)
@@ -86,6 +123,69 @@ class KafkaEvent(Base):
     __table_args__ = (
         Index("ix_events_type_time", "event_type", "event_time"),
         Index("ix_events_source_table_time", "source_table_id", "event_time"),
+        Index(
+            "ux_events_kafka_position",
+            "kafka_topic",
+            "kafka_partition",
+            "kafka_offset",
+            unique=True,
+        ),
+    )
+
+
+class ConsumerCheckpoint(Base):
+    """Tracks the last committed Kafka offset per consumer group partition."""
+
+    __tablename__ = "consumer_checkpoints"
+
+    id = Column(Integer, primary_key=True, index=True)
+    consumer_group = Column(String(128), nullable=False)
+    kafka_topic = Column(String(256), nullable=False)
+    kafka_partition = Column(Integer, nullable=False)
+    kafka_offset = Column(BigInteger, nullable=False)
+    last_event_time = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index(
+            "ux_consumer_checkpoints_group_topic_partition",
+            "consumer_group",
+            "kafka_topic",
+            "kafka_partition",
+            unique=True,
+        ),
+        Index("ix_consumer_checkpoints_updated_at", "updated_at"),
+    )
+
+
+class DeadLetterEvent(Base):
+    """Persists failed consumer messages for operator replay workflows."""
+
+    __tablename__ = "dead_letter_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    service_name = Column(String(128), nullable=True, index=True)
+    kafka_topic = Column(String(256), nullable=False)
+    kafka_partition = Column(Integer, nullable=False)
+    kafka_offset = Column(BigInteger, nullable=False)
+    operation = Column(String(16), nullable=True)
+    raw_payload = Column(Text, nullable=False)
+    error_message = Column(Text, nullable=False)
+    failed_at = Column(DateTime(timezone=True), server_default=func.now())
+    is_replayed = Column(Boolean, default=False, nullable=False)
+    replayed_at = Column(DateTime(timezone=True), nullable=True)
+    replay_error = Column(Text, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ux_dead_letter_events_kafka_position",
+            "kafka_topic",
+            "kafka_partition",
+            "kafka_offset",
+            unique=True,
+        ),
+        Index("ix_dead_letter_events_failed_at", "failed_at"),
+        Index("ix_dead_letter_events_is_replayed", "is_replayed"),
     )
 
 
@@ -95,9 +195,21 @@ class ColumnChange(Base):
     __tablename__ = "column_changes"
 
     id = Column(Integer, primary_key=True, index=True)
-    event_id = Column(Integer, ForeignKey("events.id", ondelete="CASCADE"), nullable=False)
-    table_id = Column(Integer, ForeignKey("monitored_tables.id", ondelete="CASCADE"), nullable=False)
-    column_id = Column(Integer, ForeignKey("monitored_columns.id", ondelete="CASCADE"), nullable=False)
+    event_id = Column(
+        Integer,
+        ForeignKey("events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    table_id = Column(
+        Integer,
+        ForeignKey("monitored_tables.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    column_id = Column(
+        Integer,
+        ForeignKey("monitored_columns.id", ondelete="CASCADE"),
+        nullable=False,
+    )
 
     operation = Column(String(16), nullable=False)
     old_value = Column(JSONB, nullable=True)
@@ -106,7 +218,12 @@ class ColumnChange(Base):
     changed_at = Column(DateTime(timezone=True), nullable=False, index=True)
 
     __table_args__ = (
-        Index("ix_changes_table_col_time", "table_id", "column_id", "changed_at"),
+        Index(
+            "ix_changes_table_col_time",
+            "table_id",
+            "column_id",
+            "changed_at",
+        ),
     )
 
 
@@ -118,8 +235,10 @@ class ApiKey(Base):
     id = Column(Integer, primary_key=True, index=True)
     key_hash = Column(String(255), nullable=False)
     owner_name = Column(String(128), nullable=False)
-    role = Column(String(32), nullable=False, default="viewer")  # "admin" or "viewer"
+    role = Column(String(32), nullable=False, default="viewer")
     is_active = Column(Boolean, default=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -129,12 +248,20 @@ class ApiAuditLog(Base):
     __tablename__ = "api_audit_logs"
 
     id = Column(Integer, primary_key=True, index=True)
-    api_key_id = Column(Integer, ForeignKey("api_keys.id", ondelete="SET NULL"), nullable=True)
+    api_key_id = Column(
+        Integer,
+        ForeignKey("api_keys.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     endpoint = Column(String(255), nullable=False)
     method = Column(String(16), nullable=False)
     status_code = Column(Integer, nullable=False)
     ip_address = Column(String(64), nullable=True)
-    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    timestamp = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
 
     __table_args__ = (
         Index("ix_api_audit_logs_api_key_time", "api_key_id", "timestamp"),

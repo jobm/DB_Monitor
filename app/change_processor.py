@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 from collections.abc import Callable
 from typing import Any, Optional
 
-from sqlalchemy import and_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from models import ColumnChange, KafkaEvent, MonitoredColumn, MonitoredTable
 
@@ -20,8 +20,18 @@ class ChangeProcessor:
     def __init__(self, session_factory: Callable):
         self.session_factory = session_factory
 
-    async def process_event(self, event: KafkaEvent) -> None:
+    async def process_event(self, event: KafkaEvent, session=None) -> None:
         """Process an event and extract column changes."""
+        if session is None:
+            async with self.session_factory() as owned_session:
+                async with owned_session.begin():
+                    await self._process_event(event, owned_session)
+            return
+
+        await self._process_event(event, session)
+
+    async def _process_event(self, event: KafkaEvent, session) -> None:
+        """Process an event within an existing database session."""
         if not event.event_data or not event.source_table_id:
             return
 
@@ -29,21 +39,31 @@ class ChangeProcessor:
         operation = event.operation
 
         if operation == "INSERT":
-            await self._process_insert(event, payload)
+            await self._process_insert(session, event, payload)
         elif operation == "UPDATE":
-            await self._process_update(event, payload)
+            await self._process_update(session, event, payload)
         elif operation == "DELETE":
-            await self._process_delete(event, payload)
+            await self._process_delete(session, event, payload)
 
-    async def _process_insert(self, event: KafkaEvent, payload: dict[str, Any]) -> None:
+    async def _process_insert(
+        self,
+        session,
+        event: KafkaEvent,
+        payload: dict[str, Any],
+    ) -> None:
         """Process INSERT - new values in 'after' field."""
         after = payload.get("after", {})
         if not after:
             return
 
-        await self._save_changes(event, None, after)
+        await self._save_changes(session, event, None, after)
 
-    async def _process_update(self, event: KafkaEvent, payload: dict[str, Any]) -> None:
+    async def _process_update(
+        self,
+        session,
+        event: KafkaEvent,
+        payload: dict[str, Any],
+    ) -> None:
         """Process UPDATE - old values in 'before', new in 'after'."""
         before = payload.get("before", {})
         after = payload.get("after", {})
@@ -51,38 +71,44 @@ class ChangeProcessor:
         if not after:
             return
 
-        await self._save_changes(event, before, after)
+        await self._save_changes(session, event, before, after)
 
-    async def _process_delete(self, event: KafkaEvent, payload: dict[str, Any]) -> None:
+    async def _process_delete(
+        self,
+        session,
+        event: KafkaEvent,
+        payload: dict[str, Any],
+    ) -> None:
         """Process DELETE - old values in 'before'."""
         before = payload.get("before", {})
         if not before:
             return
 
-        await self._save_changes(event, before, None)
+        await self._save_changes(session, event, before, None)
 
     async def _save_changes(
         self,
+        session,
         event: KafkaEvent,
         old_data: Optional[dict[str, Any]],
         new_data: Optional[dict[str, Any]],
     ) -> None:
         """Save column changes to the database."""
-        async with self.session_factory() as session:
-            col_stmt = select(MonitoredColumn).where(
-                MonitoredColumn.table_id == event.source_table_id,
-                MonitoredColumn.audit_enabled == True,
-            )
-            result = await session.execute(col_stmt)
-            columns = result.scalars().all()
+        col_stmt = select(MonitoredColumn).where(
+            MonitoredColumn.table_id == event.source_table_id,
+            MonitoredColumn.audit_enabled.is_(True),
+        )
+        result = await session.execute(col_stmt)
+        columns = result.scalars().all()
 
-            changes_to_insert = []
-            for col in columns:
-                old_val = old_data.get(col.column_name) if old_data else None
-                new_val = new_data.get(col.column_name) if new_data else None
+        changes_to_insert = []
+        for col in columns:
+            old_val = old_data.get(col.column_name) if old_data else None
+            new_val = new_data.get(col.column_name) if new_data else None
 
-                if old_val != new_val:
-                    changes_to_insert.append({
+            if old_val != new_val:
+                changes_to_insert.append(
+                    {
                         "event_id": event.id,
                         "table_id": event.source_table_id,
                         "column_id": col.id,
@@ -90,25 +116,28 @@ class ChangeProcessor:
                         "old_value": old_val,
                         "new_value": new_val,
                         "changed_at": event.event_time,
-                    })
+                    }
+                )
 
-            if changes_to_insert:
-                session.add_all([ColumnChange(**c) for c in changes_to_insert])
-                await session.commit()
+        if changes_to_insert:
+            session.add_all([ColumnChange(**c) for c in changes_to_insert])
 
     async def get_changes(
         self,
         table_id: int,
         column_id: Optional[int] = None,
-        from_time: Optional[Any] = None,
-        to_time: Optional[Any] = None,
+        from_time: Optional[datetime] = None,
+        to_time: Optional[datetime] = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         """Query column changes with filters."""
         async with self.session_factory() as session:
             stmt = (
                 select(ColumnChange, MonitoredColumn)
-                .join(MonitoredColumn, ColumnChange.column_id == MonitoredColumn.id)
+                .join(
+                    MonitoredColumn,
+                    ColumnChange.column_id == MonitoredColumn.id,
+                )
                 .where(ColumnChange.table_id == table_id)
             )
 
@@ -131,20 +160,29 @@ class ChangeProcessor:
                     "operation": change.operation,
                     "old_value": change.old_value,
                     "new_value": change.new_value,
-                    "changed_at": change.changed_at.isoformat() if change.changed_at else None,
+                    "changed_at": (
+                        change.changed_at.isoformat()
+                        if change.changed_at
+                        else None
+                    ),
                 }
                 for change, col in rows
             ]
 
     async def get_value_at_time(
         self,
+        service_name: str,
         table_name: str,
         column_name: str,
-        timestamp: Any,
+        timestamp: datetime,
     ) -> Optional[Any]:
         """Get the value of a column at a specific point in time."""
         async with self.session_factory() as session:
-            table_stmt = select(MonitoredTable).where(MonitoredTable.table_name == table_name)
+            table_stmt = select(MonitoredTable).where(
+                MonitoredTable.service_name == service_name,
+                MonitoredTable.table_name == table_name,
+                MonitoredTable.is_active.is_(True),
+            )
             table_result = await session.execute(table_stmt)
             table = table_result.scalar_one_or_none()
             if not table:

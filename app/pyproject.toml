@@ -10,9 +10,14 @@ dependencies = [
     "asyncpg==0.29.0",
     "confluent-kafka>=2.13.2",
     "fastapi>=0.135.1",
-    "passlib>=1.7.4",
+    "PyJWT>=2.10.1",
     "prometheus-client>=0.24.1",
     "python-dotenv>=1.2.2",
     "sqlalchemy[asyncio]==2.0.25",
     "uvicorn[standard]>=0.41.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.0",
 ]

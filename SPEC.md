@@ -1,277 +1,312 @@
-# DB Monitor - Technical Specification
+# DB Monitor Technical Specification
 
-**Version:** 1.0  
-**Date:** 2026-02-27  
-**Status:** Draft for Review
-
----
-
-## 1. Executive Summary
-
-**Purpose:** Real-time database audit and change tracking system for microservices and multi-DB environments.
-
-**Current State:** Foundation exists (FastAPI + Kafka + Debezium + PostgreSQL). Functional for basic event capture but missing critical capabilities for audit/compliance use cases.
-
-**Target State:** Production-ready audit system with table/column visibility, temporal change tracking, and visualization capabilities.
+**Version:** 1.1  
+**Date:** 2026-04-29  
+**Status:** Current-state specification
 
 ---
 
-## 2. Gap Analysis
+## 1. Purpose
 
-| Capability | Current | Required | Priority |
-|------------|---------|----------|----------|
-| Schema registry (what tables/columns exist) | ❌ | ✅ | P0 |
-| Column-level change tracking | ❌ | ✅ | P0 |
-| Temporal queries (value at time T) | ❌ | ✅ | P0 |
-| Multi-topic/multi-service support | ⚠️ | ✅ | P0 |
-| Horizontal scaling | ❌ | ✅ | P1 |
-| Dead-letter queue (DLQ) | ❌ | ✅ | P1 |
-| Observability (metrics, tracing) | ❌ | ✅ | P1 |
-| Batch processing | ❌ | ✅ | P1 |
-| Visualization/API filtering | ⚠️ | ✅ | P2 |
+DB Monitor captures change-data-capture events from multiple PostgreSQL services via Debezium and Kafka, stores both raw and derived audit data, and exposes query, monitoring, and realtime interfaces for operators and downstream consumers.
+
+The goal of this document is to describe the system as it is currently implemented, clearly separate completed work from partial work, and record the next improvements without treating them as already done.
 
 ---
 
-## 3. Target Architecture
+## 2. System overview
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Source Databases                         │
-│   (Order, Catalog, Shipping, + any number of services)         │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │ Debezium CDC
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     Kafka (Message Bus)                         │
-│  Topics: {service}.{db}.{table} - one per monitored table      │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-┌───────────────┐  ┌───────────────┐  ┌───────────────┐
-│ Consumer      │  │ Consumer      │  │ Consumer      │  ← Horizontal
-│ Instance 1    │  │ Instance 2    │  │ Instance N    │    Scale-out
-└───────┬───────┘  └───────┬───────┘  └───────┬───────┘
-        │                 │                 │
-        └─────────────────┼─────────────────┘
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Monitor Database                             │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
-│  │ schema_catalog│  │ column_changes│  │ events       │         │
-│  │ (tables)     │  │ (history)     │  │ (raw events) │         │
-│  └──────────────┘  └──────────────┘  └──────────────┘         │
-└─────────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        FastAPI API                               │
-│  /tables, /tables/{name}/columns, /changes, /events             │
-└─────────────────────────────────────────────────────────────────┘
+```text
+Source Postgres DBs -> Debezium connectors -> Kafka topics -> FastAPI consumer -> Monitor Postgres
+                                                                      |-> REST API
+                                                                      |-> WebSocket stream
+                                                                      |-> Prometheus metrics
 ```
 
+### Monitored source services
+
+| Service prefix | Tables |
+| --- | --- |
+| `orderdb` | `public.orders`, `public.customers` |
+| `catalogdb` | `public.categories`, `public.products` |
+| `shippingdb` | `public.shipments`, `public.drivers` |
+
+### Runtime services
+
+| Component | Responsibility |
+| --- | --- |
+| Debezium Connect | Reads WAL and publishes CDC events to Kafka |
+| Kafka | Transport for CDC topics and DLQ messages |
+| FastAPI app | Consumes CDC events and serves APIs |
+| Monitor PostgreSQL | Stores raw events, schema catalog, change history, and API audit data |
+| Prometheus / Grafana / Alertmanager | Metrics collection and visualization |
+
 ---
 
-## 4. Data Model
+## 3. Implemented capabilities
 
-### 4.1 Schema Catalog (NEW)
+| Capability | Status | Notes |
+| --- | --- | --- |
+| Multi-topic Kafka consumption | Implemented | Configured via `KAFKA_TOPICS` |
+| Manual offset commits | Implemented | Commits happen after processing paths complete |
+| Batch processing | Implemented | Controlled by `BATCH_ENABLED` and `BATCH_SIZE` |
+| DLQ forwarding | Implemented | Failed messages are sent to `db-monitor-dlq` when enabled |
+| Circuit breaker | Implemented | Protects processing during repeated failures |
+| Schema catalog | Implemented | `monitored_tables` and `monitored_columns` |
+| Schema discovery | Implemented | Reads Debezium schema envelopes when present, otherwise infers from `before`/`after` payloads |
+| Column-level change history | Implemented | Stored in `column_changes` |
+| Point-in-time lookup | Implemented | Canonical route is `/changes/{service}/{table}/{column}/at` |
+| Event filtering and search | Implemented | `/events` supports pagination and basic filters |
+| API-key auth and RBAC | Implemented | `viewer` and `admin` roles |
+| API audit logging | Implemented | Stored in `api_audit_logs` |
+| WebSocket broadcast | Implemented | `/ws/events` pushes new events |
+| Prometheus metrics | Implemented | Metrics endpoint plus discovery, consumer, and request metrics |
+| Structured request logging | Implemented | JSON logging formatter in app startup |
+| Component health checks | Implemented | `/health` checks lifecycle, DB connectivity, and consumer state |
 
-```python
-class MonitoredTable(Base):
-    __tablename__ = "monitored_tables"
-    
-    id = Column(Integer, primary_key=True)
-    service_name = Column(String(128), nullable=False)  # e.g., "order", "catalog"
-    database_name = Column(String(128), nullable=False) # e.g., "orderdb"
-    table_name = Column(String(128), nullable=False)    # e.g., "orders"
-    topic_name = Column(String(256), nullable=False)    # Kafka topic
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, server_default=func.now())
-    
-    __table_args__ = (
-        Index("ix_tables_service_db_table", "service_name", "database_name", "table_name", unique=True),
-    )
+---
 
+## 4. Partial or open capabilities
 
-class MonitoredColumn(Base):
-    __tablename__ = "monitored_columns"
-    
-    id = Column(Integer, primary_key=True)
-    table_id = Column(Integer, ForeignKey("monitored_tables.id"), nullable=False)
-    column_name = Column(String(128), nullable=False)
-    data_type = Column(String(64), nullable=False)
-    is_primary_key = Column(Boolean, default=False)
-    is_nullable = Column(Boolean, default=True)
-    audit_enabled = Column(Boolean, default=True)  # Track changes?
-    
-    __table_args__ = (
-        Index("ix_columns_table_id", "table_id"),
-    )
+| Capability | Status | Current state |
+| --- | --- | --- |
+| Exact schema fidelity | Partial | When Debezium schema envelopes are disabled, types and PK metadata are inferred and therefore best-effort |
+| Horizontal scaling validation | Partial | Consumer group support exists, but scale-out behavior is not covered by automated validation in this repo |
+| Deep Kafka diagnostics | Partial | Health reporting tracks consumer runtime state, not broker-admin lag or partition diagnostics |
+| Formal database migrations | Not implemented | Startup still relies on `Base.metadata.create_all()` and a lightweight backfill helper |
+| Distributed tracing | Not implemented | No OpenTelemetry integration yet |
+| Event replay | Not implemented | No explicit replay workflow or admin control path |
+| Distributed cache | Not implemented | Schema cache is in-process with TTL and invalidation |
+
+---
+
+## 5. Data model
+
+### 5.1 `events`
+
+Structured event storage.
+
+Key fields:
+
+- `event_type`
+- `event_time`
+- `user_id`
+- `service_name`
+- `source_table_id`
+- `operation`
+- `event_data`
+- `raw_payload`
+- `capture_time`
+
+### 5.2 `monitored_tables`
+
+Tracks discovered tables.
+
+Key fields:
+
+- `service_name`
+- `database_name`
+- `table_name`
+- `topic_name`
+- `is_active`
+
+Uniqueness is enforced across `service_name`, `database_name`, and `table_name`.
+
+### 5.3 `monitored_columns`
+
+Tracks discovered columns per table.
+
+Key fields:
+
+- `table_id`
+- `column_name`
+- `data_type`
+- `is_primary_key`
+- `is_nullable`
+- `audit_enabled`
+
+Uniqueness is enforced across `table_id` and `column_name`.
+
+### 5.4 `column_changes`
+
+Stores per-column deltas.
+
+Key fields:
+
+- `event_id`
+- `table_id`
+- `column_id`
+- `operation`
+- `old_value`
+- `new_value`
+- `changed_at`
+
+### 5.5 `api_keys`
+
+Stores hashed API keys and access roles.
+
+### 5.6 `api_audit_logs`
+
+Stores per-request API access records for authenticated and anonymous requests.
+
+---
+
+## 6. Processing model
+
+1. The consumer subscribes to the configured Kafka topics.
+2. Each message is parsed into a `KafkaEvent`.
+3. The event pipeline may filter or transform the event.
+4. The raw structured event is persisted.
+5. Schema discovery updates `monitored_tables` and `monitored_columns`.
+6. Column-level deltas are extracted into `column_changes`.
+7. The event is broadcast to WebSocket subscribers.
+8. Kafka offsets are committed after the processing path completes.
+9. The committed topic/partition offsets are persisted as recovery checkpoints.
+
+Error handling:
+
+- transient DB writes are retried with exponential backoff
+- repeated failures trip the circuit breaker
+- failed messages are persisted for DLQ replay and can also be forwarded to the DLQ topic
+
+---
+
+## 7. API surface
+
+### Public
+
+- `GET /health`
+- `GET /livez`
+- `GET /readyz`
+- `GET /metrics`
+- `POST /auth/bootstrap`
+
+### Session
+
+- `POST /auth/token`
+- `POST /auth/ws-token`
+
+### Viewer
+
+- `GET /info`
+- `GET /tables`
+- `GET /tables/{service_name}/{table_name}`
+- `GET /tables/{service_name}/{table_name}/columns`
+- `GET /events`
+- `GET /events/stats`
+- `GET /changes`
+- `GET /changes/{service_name}/{table_name}/{column_name}/at`
+- `GET /changes/{service.table}/{column_name}/at` (legacy-compatible route)
+
+### Admin
+
+- `POST /auth/keys`
+- `POST /auth/keys/{key_id}/rotate`
+- `POST /auth/keys/{key_id}/revoke`
+- `GET /admin/checkpoints`
+- `GET /admin/dlq`
+- `POST /admin/dlq/{dlq_event_id}/replay`
+
+### Realtime
+
+- `GET /ws/events?session_token=<short-lived-token>`
+
+Behavioral notes:
+
+- `/changes` accepts either `table_name=<service>.<table>` or `service_name=<service>&table_name=<table>`
+- timestamp filters use ISO 8601 strings
+- point-in-time lookups are service-aware to avoid table-name ambiguity across multiple monitored services
+
+---
+
+## 8. Observability
+
+Current observability includes:
+
+- Prometheus counters and histograms for event consumption, processing failures, DB writes, Kafka commits, and API latency
+- Gauges for discovered tables, discovered columns, circuit-breaker state, consumer lag, and last successful commit timestamp
+- JSON-formatted logs for HTTP requests and runtime events
+- Buffered audit-log persistence so request latency no longer waits on direct audit DB writes
+- `/health` component checks for lifecycle state, DB connectivity, and consumer runtime status
+
+Not yet implemented:
+
+- distributed tracing
+- broker-admin lag inspection
+- alert-rule ownership inside this repo
+
+---
+
+## 9. Security model
+
+- API keys are hashed before storage
+- `viewer` keys can read data and metadata
+- `admin` keys can mint new keys
+- the bootstrap endpoint is intentionally one-time and only works before any active keys exist
+- WebSocket access requires the same API key format via query string
+
+Limitations:
+
+- there is no tenant isolation
+- there is no per-table or per-column authorization policy
+
+---
+
+## 10. Validation workflow
+
+### Unit tests
+
+```bash
+make monitor-test
 ```
 
-### 4.2 Column Change History (NEW)
+This runs the repository unit/regression suite through the app's managed `uv` environment.
 
-```python
-class ColumnChange(Base):
-    __tablename__ = "column_changes"
-    
-    id = Column(Integer, primary_key=True)
-    event_id = Column(Integer, ForeignKey("events.id"), nullable=False)
-    table_id = Column(Integer, ForeignKey("monitored_tables.id"), nullable=False)
-    column_id = Column(Integer, ForeignKey("monitored_columns.id"), nullable=False)
-    
-    operation = Column(String(16), nullable=False)  # INSERT, UPDATE, DELETE
-    old_value = Column(JSON, nullable=True)          # Previous value
-    new_value = Column(JSON, nullable=True)          # New value
-    
-    changed_at = Column(DateTime(timezone=True), nullable=False, index=True)
-    
-    __table_args__ = (
-        Index("ix_changes_table_col_time", "table_id", "column_id", "changed_at"),
-    )
+### Integration checks
+
+```bash
+make monitor-test-integration
 ```
 
-### 4.3 Existing Events (RETAIN + extend)
+This expects the stack to already be reachable on `localhost:8000`.
 
-Keep `KafkaEvent` table, add:
-- `source_table_id` - FK to `MonitoredTable`
-- `operation` - INSERT/UPDATE/DELETE
+### Local development
 
----
-
-## 5. API Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /tables` | List all monitored tables |
-| `GET /tables/{service}/{table}` | Get table schema (columns, types) |
-| `GET /tables/{service}/{table}/columns` | Column details |
-| `GET /changes` | Query column changes with filters |
-| `GET /changes/{table}/{column}` | History of changes for specific column |
-| `GET /changes/{table}/{column}/at?timestamp=T` | Value at specific time |
-| `GET /events` | Raw events (retain existing) |
-| `GET /events/stats` | Aggregated statistics |
+```bash
+cd app
+uv sync --group dev
+uv run uvicorn main:app --reload
+```
 
 ---
 
-## 6. Prioritized Tasks
+## 11. Known limitations
 
-### Phase 1: Core Schema & Discovery (Week 1-2)
-
-| # | Task | Description |
-|---|------|-------------|
-| 1.1 | **Schema Catalog Model** | Add `MonitoredTable`, `MonitoredColumn` models |
-| 1.2 | **Auto-discovery** | Parse Debezium messages to extract schema, auto-register tables/columns |
-| 1.3 | **Discovery API** | Implement `/tables` endpoints |
-| 1.4 | **Schema Indexing** | Add proper DB indexes for catalog queries |
-
-### Phase 2: Change Tracking (Week 2-3)
-
-| # | Task | Description |
-|---|------|-------------|
-| 2.1 | **Column Change Model** | Add `ColumnChange` model with indexes |
-| 2.2 | **Change Processor** | Extract column-level deltas from Debezium payloads |
-| 2.3 | **Temporal Queries** | Implement `/changes` with time-based filtering |
-| 2.4 | **Point-in-time Lookup** | "What was value at T?" query logic |
-
-### Phase 3: Resilience & Scale (Week 3-4)
-
-| # | Task | Description |
-|---|------|-------------|
-| 3.1 | **Multi-topic Consumer** | Subscribe to all monitored topics dynamically |
-| 3.2 | **Horizontal Scaling** | Consumer group for parallel processing |
-| 3.3 | **Dead-letter Queue** | Kafka DLQ topic for failed messages |
-| 3.4 | **Circuit Breaker** | Prevent cascade failures on DB/Kafka issues |
-| 3.5 | **Batch Processing** | Bulk inserts for high-throughput scenarios |
-
-### Phase 4: Observability (Week 4-5)
-
-| # | Task | Description |
-|---|------|-------------|
-| 4.1 | **Prometheus Metrics** | Request latency, event throughput, consumer lag |
-| 4.2 | **Structured Logging** | JSON logs with correlation IDs |
-| 4.3 | **Health Checks** | Deep health (DB, Kafka connectivity) |
-| 4.4 | **Tracing** | OpenTelemetry integration |
-
-### Phase 5: Visualization & UX (Week 5-6)
-
-| # | Task | Description |
-|---|------|-------------|
-| 5.1 | **API Filtering** | Pagination, sorting, field selection |
-| 5.2 | **Date Range Queries** | Filter by time range |
-| 5.3 | **Aggregation Stats** | Count by table, operation type, time |
-| 5.4 | **Simple Dashboard** | (Optional) Basic UI or Grafana datasource |
+1. Formal migration management is still missing.
+2. Schema discovery quality depends on whether Debezium schema envelopes are enabled.
+3. Health reporting does not yet include Kafka admin-plane checks or lag by topic/partition.
+4. Horizontal scaling is supported by consumer-group design but not proven by automated repository tests.
+5. The auth library currently emits an upstream Python deprecation warning in tests.
 
 ---
 
-## 7. Infrastructure Recommendations
+## 12. Near-term roadmap
 
-### 7.1 Resilience
+### Priority 1
 
-| Tool | Purpose | When to Add |
-|------|---------|-------------|
-| **Dead-letter Queue (Kafka)** | Failed message handling | Phase 3 |
-| **Circuit Breaker** (Python `circuitbreaker`) | DB/Kafka failure protection | Phase 3 |
-| **Retry with Backoff** | Already implemented ✅ | - |
-| **Graceful Shutdown** | Already implemented ✅ | - |
-| **Health Checks** | Already implemented (basic) | Enhance in Phase 4 |
+- introduce a formal migration workflow
+- extend health reporting with Kafka admin diagnostics where practical
+- add more end-to-end validation around CDC ingestion and auth-protected routes
 
-### 7.2 Scalability
+### Priority 2
 
-| Tool | Purpose | When to Add |
-|------|---------|-------------|
-| **Kafka Consumer Groups** | Horizontal scale | Phase 3 (minimal change) |
-| **Connection Pooling** | Already using asyncpg ✅ | - |
-| **Batch Inserts** | Throughput optimization | Phase 3 |
-| **Read Replicas** | Query scaling | If API latency high |
-| **Redis Cache** | Frequent queries | Phase 2+ if needed |
+- add distributed tracing
+- improve schema fidelity when schema envelopes are absent
+- define operational runbooks for DLQ handling and replay
+- keep `docs/runbooks/recovery-and-validation.md` aligned with admin recovery endpoints
 
-### 7.3 Observability
+### Priority 3
 
-| Tool | Purpose | When to Add |
-|------|---------|-------------|
-| **Prometheus + Metrics & dashboards | Phase 4 Grafana** | |
-| **OpenTelemetry** | Distributed tracing | Phase 4 |
-| **ELK Stack** | Log aggregation | Phase 4 |
-
-### 7.4 Optional Enhancements (Later)
-
-| Tool | Use Case |
-|------|----------|
-| **Apache Iceberg / Delta Lake** | Time-travel queries on raw data |
-| **ClickHouse** | High-speed analytics on audit data |
-| **Grafana** | Pre-built dashboards |
-
----
-
-## 8. Immediate Next Steps
-
-1. **Start Phase 1.1** - Create schema catalog models
-2. **Decide** - Auto-discover tables from Kafka or configure via YAML/env?
-3. **Decide** - Keep PostgreSQL or consider ClickHouse for change history?
-
----
-
-## 9. Success Criteria
-
-- [x] Can list all monitored tables across all services
-- [x] Can see column definitions (name, type, PK)
-- [x] Can query "what changed in table X between T1 and T2"
-- [x] Can query "what was value of column Y at time T"
-- [x] System handles 10K+ events/second without degradation (batch processing)
-- [x] Failed messages go to DLQ, not lost
-- [x] Horizontal scaling works (multiple consumer instances via consumer group)
-
----
-
-## Implementation Status
-
-### Completed (v1.0)
-
-| Phase | Status | Notes |
-|-------|--------|-------|
-| Phase 1: Schema & Discovery | ✅ | Schema discovery from Debezium, /tables API |
-| Phase 2: Change Tracking | ✅ | ColumnChange model, change processor, temporal queries |
-| Phase 3: Resilience & Scale | ✅ | Multi-topic, DLQ, circuit breaker, batch processing |
-| Phase 4: Observability | ✅ | Prometheus metrics, structured logging |
-| Phase 5: API & UX | ✅ | Pagination, filtering, stats endpoint |
+- add replay/admin tooling
+- add richer aggregation and analytics endpoints
+- evaluate distributed caching only if the in-process cache becomes a real bottleneck

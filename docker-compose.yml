@@ -103,18 +103,43 @@ services:
   monitor-server:
     build:
       context: ./app
-    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["sh", "/app/container-entrypoint.sh"]
+    init: true
+    restart: unless-stopped
     environment:
-      POSTGRES_URL: postgresql+asyncpg://postgres:postgres@postgres-monitor:5432/postgres
+      APP_ENV: production
+      DB_SCHEMA_MODE: validate
+      APP_SHUTDOWN_TIMEOUT_SECONDS: ${APP_SHUTDOWN_TIMEOUT_SECONDS:-45}
+      ALLOW_BOOTSTRAP: ${ALLOW_BOOTSTRAP:-false}
+      POSTGRES_URL_FILE: /run/secrets/monitor_postgres_url
       KAFKA_BROKER: kafka:9092
-      KAFKA_TOPICS: catalogdb.public.categories,catalogdb.public.products,orderdb.public.customers,orderdb.public.orders,shippingdb.public.drivers,shippingdb.public.shipments
+      JWT_SECRET_FILE: /run/secrets/monitor_jwt_secret
+      JWT_SECRET_NEXT_FILE: /run/secrets/monitor_jwt_secret_next
     depends_on:
       - kafka
       - postgres-monitor
     ports:
       - "8000:8000"
     volumes:
-      - ./app:/app
+      - ./connectors:/connectors:ro
+      - ./secrets:/run/secrets:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 45s
 
   connector-registrar:
     build:
@@ -126,9 +151,12 @@ services:
     environment:
       - MAX_RETRIES=50
       - RETRY_DELAY=10
+    volumes:
+      - ./connectors:/connectors:ro
 
   prometheus:
     image: prom/prometheus:latest
+    restart: unless-stopped
     volumes:
       - ./monitoring/prometheus/:/etc/prometheus/
     command:
@@ -143,6 +171,7 @@ services:
 
   alertmanager:
     image: prom/alertmanager:latest
+    restart: unless-stopped
     volumes:
       - ./monitoring/alertmanager/:/etc/alertmanager/
     command:
@@ -153,6 +182,7 @@ services:
 
   grafana:
     image: grafana/grafana:latest
+    restart: unless-stopped
     ports:
       - "3000:3000"
     environment:

@@ -1,4 +1,4 @@
-.PHONY: monitor-help monitor-up monitor-down monitor-logs monitor-register monitor-dev monitor-test monitor-tui monitor-tui-build
+.PHONY: monitor-help monitor-up monitor-down monitor-logs monitor-register monitor-dev monitor-migrate monitor-test monitor-test-integration monitor-test-smoke monitor-tui monitor-tui-build
 
 .DEFAULT_GOAL := monitor-help
 
@@ -33,8 +33,17 @@ monitor-register: ## Register Debezium connectors
 monitor-dev: ## Run FastAPI app locally for debugging (Docker handles this - prefer 'make monitor-up')
 	cd app && uv run uvicorn main:app --reload --port 8001
 
-monitor-test: ## Run integration and unit tests
-	cd app && uv run pytest ../tests/
+monitor-migrate: ## Apply tracked database migrations locally
+	cd app && uv run python migrate.py apply
+
+monitor-test: ## Run unit tests
+	cd app && uv run --group dev python -m pytest ../tests/
+
+monitor-test-integration: ## Run integration checks against a running stack
+	cd app && uv run --group dev python ../scripts/run_integration_tests.py
+
+monitor-test-smoke: ## Run the smoke load gate against a running stack
+	cd app && uv run --group dev python ../scripts/load_test.py --workers 8 --requests 10 --targets events,stats,tables,checkpoints --max-failures 0 --min-success-rate 1.0 --max-p95-ms 2000
 
 monitor-tui-build: ## Build/install TUI dependencies
 	cd tui && uv sync

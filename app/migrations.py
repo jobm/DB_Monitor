@@ -1,23 +1,325 @@
-"""Best-effort data migrations for DB Monitor.
+"""Tracked schema and data migrations for DB Monitor.
 
-This project currently uses `Base.metadata.create_all()` on startup rather than a
-formal migration framework. Until Alembic is introduced, we keep migrations here
-and run them during `init_db()`.
-
-High Priority TODO #1 requires a migration path from the legacy `kafka_events`
-(raw text) table to the new structured `events` table.
+The app no longer mutates schema implicitly on every startup. Instead, startup
+either applies tracked migrations in development-style environments or validates
+that all known migrations have already been applied in production-style
+environments.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from event_parser import parse_event_payload
-from models import KafkaEvent, KafkaEventLegacy
+from models import Base, KafkaEvent, KafkaEventLegacy
+
+
+SCHEMA_MIGRATIONS_TABLE = "schema_migrations"
+
+
+@dataclass(frozen=True)
+class Migration:
+    """Single tracked migration step."""
+
+    version: str
+    description: str
+    apply: Callable[[AsyncConnection, Callable], Any]
+
+
+async def _ensure_migration_table(connection: AsyncConnection) -> None:
+    """Create the migration tracking table when it is missing."""
+    await connection.execute(
+        text(
+            f"""
+            CREATE TABLE IF NOT EXISTS {SCHEMA_MIGRATIONS_TABLE} (
+                version VARCHAR(64) PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+    )
+
+
+async def _get_applied_versions(connection: AsyncConnection) -> set[str]:
+    """Return the set of tracked migration versions already applied."""
+    result = await connection.execute(
+        text(
+            f"SELECT version FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY version"
+        )
+    )
+    return {row[0] for row in result.fetchall()}
+
+
+async def _record_migration(
+    connection: AsyncConnection,
+    migration: Migration,
+) -> None:
+    """Persist a successful migration application in the tracking table."""
+    await connection.execute(
+        text(
+            f"""
+            INSERT INTO {SCHEMA_MIGRATIONS_TABLE} (version, description)
+            VALUES (:version, :description)
+            ON CONFLICT (version) DO NOTHING
+            """
+        ),
+        {
+            "version": migration.version,
+            "description": migration.description,
+        },
+    )
+
+
+async def _apply_base_schema(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Create the current model-defined schema for fresh databases."""
+    del session_factory
+    await connection.run_sync(Base.metadata.create_all)
+
+
+async def _apply_event_ingestion_columns(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Ensure idempotent-ingestion columns exist on legacy events tables."""
+    del session_factory
+    statements = [
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_topic VARCHAR(256)",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_partition INTEGER",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_offset INTEGER",
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_events_kafka_position "
+            "ON events (kafka_topic, kafka_partition, kafka_offset)"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
+async def _apply_legacy_event_backfill(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Backfill structured events from the legacy raw event table."""
+    del connection
+    await migrate_legacy_kafka_events(session_factory)
+
+
+async def _apply_api_key_lifecycle_columns(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Add API key expiration and revocation lifecycle columns."""
+    del session_factory
+    statements = [
+        "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
+        "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ",
+        (
+            "CREATE INDEX IF NOT EXISTS ix_api_keys_expires_at "
+            "ON api_keys (expires_at)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS ix_api_keys_revoked_at "
+            "ON api_keys (revoked_at)"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
+async def _apply_recovery_tables(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Create checkpoint and persistent DLQ tables for recovery workflows."""
+    del session_factory
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS consumer_checkpoints (
+            id SERIAL PRIMARY KEY,
+            consumer_group VARCHAR(128) NOT NULL,
+            kafka_topic VARCHAR(256) NOT NULL,
+            kafka_partition INTEGER NOT NULL,
+            kafka_offset BIGINT NOT NULL,
+            last_event_time TIMESTAMPTZ NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "ux_consumer_checkpoints_group_topic_partition "
+            "ON consumer_checkpoints "
+            "(consumer_group, kafka_topic, kafka_partition)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS ix_consumer_checkpoints_updated_at "
+            "ON consumer_checkpoints (updated_at)"
+        ),
+        """
+        CREATE TABLE IF NOT EXISTS dead_letter_events (
+            id SERIAL PRIMARY KEY,
+            service_name VARCHAR(128) NULL,
+            kafka_topic VARCHAR(256) NOT NULL,
+            kafka_partition INTEGER NOT NULL,
+            kafka_offset BIGINT NOT NULL,
+            operation VARCHAR(16) NULL,
+            raw_payload TEXT NOT NULL,
+            error_message TEXT NOT NULL,
+            failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            is_replayed BOOLEAN NOT NULL DEFAULT FALSE,
+            replayed_at TIMESTAMPTZ NULL,
+            replay_error TEXT NULL
+        )
+        """,
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "ux_dead_letter_events_kafka_position "
+            "ON dead_letter_events "
+            "(kafka_topic, kafka_partition, kafka_offset)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS ix_dead_letter_events_failed_at "
+            "ON dead_letter_events (failed_at)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS ix_dead_letter_events_is_replayed "
+            "ON dead_letter_events (is_replayed)"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
+async def _apply_bigint_kafka_offsets(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Widen Kafka offset columns so large offsets do not overflow int32."""
+    del session_factory
+    statements = [
+        (
+            "ALTER TABLE events ALTER COLUMN kafka_offset "
+            "TYPE BIGINT USING kafka_offset::BIGINT"
+        ),
+        (
+            "ALTER TABLE consumer_checkpoints ALTER COLUMN kafka_offset "
+            "TYPE BIGINT USING kafka_offset::BIGINT"
+        ),
+        (
+            "ALTER TABLE dead_letter_events ALTER COLUMN kafka_offset "
+            "TYPE BIGINT USING kafka_offset::BIGINT"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(
+        version="0001_base_schema",
+        description="Create the baseline DB Monitor schema",
+        apply=_apply_base_schema,
+    ),
+    Migration(
+        version="0002_event_ingestion_columns",
+        description="Add Kafka position columns for idempotent ingestion",
+        apply=_apply_event_ingestion_columns,
+    ),
+    Migration(
+        version="0003_legacy_event_backfill",
+        description="Backfill structured events from the legacy raw table",
+        apply=_apply_legacy_event_backfill,
+    ),
+    Migration(
+        version="0004_api_key_lifecycle_columns",
+        description="Add API key expiration and revocation lifecycle columns",
+        apply=_apply_api_key_lifecycle_columns,
+    ),
+    Migration(
+        version="0005_recovery_tables",
+        description="Add persistent checkpoints and DLQ recovery tables",
+        apply=_apply_recovery_tables,
+    ),
+    Migration(
+        version="0006_bigint_kafka_offsets",
+        description="Widen Kafka offset columns to bigint",
+        apply=_apply_bigint_kafka_offsets,
+    ),
+)
+
+CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
+
+
+async def get_pending_migrations(engine: AsyncEngine) -> list[Migration]:
+    """Return the ordered list of migrations that have not been applied."""
+    async with engine.begin() as connection:
+        await _ensure_migration_table(connection)
+        applied_versions = await _get_applied_versions(connection)
+
+    return [
+        migration
+        for migration in MIGRATIONS
+        if migration.version not in applied_versions
+    ]
+
+
+async def apply_migrations(
+    session_factory: Callable,
+    engine: AsyncEngine,
+) -> list[str]:
+    """Apply all pending migrations and return their versions."""
+    applied_versions: list[str] = []
+
+    for migration in await get_pending_migrations(engine):
+        async with engine.begin() as connection:
+            await _ensure_migration_table(connection)
+            await migration.apply(connection, session_factory)
+            await _record_migration(connection, migration)
+        applied_versions.append(migration.version)
+
+    return applied_versions
+
+
+async def validate_migrations(engine: AsyncEngine) -> None:
+    """Raise when the database is missing required tracked migrations."""
+    pending = await get_pending_migrations(engine)
+    if pending:
+        pending_versions = ", ".join(
+            migration.version for migration in pending
+        )
+        raise RuntimeError(
+            "Database schema is not up to date. "
+            "Run the migration command before starting the app. "
+            f"Pending migrations: {pending_versions}"
+        )
+
+
+async def ensure_event_ingestion_columns(session_factory: Callable) -> None:
+    """Backward-compatible helper for targeted legacy ingestion upgrades."""
+
+    statements = [
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_topic VARCHAR(256)",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_partition INTEGER",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_offset BIGINT",
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_events_kafka_position "
+            "ON events (kafka_topic, kafka_partition, kafka_offset)"
+        ),
+    ]
+
+    async with session_factory() as session:
+        for statement in statements:
+            await session.execute(text(statement))
+        await session.commit()
 
 
 async def migrate_legacy_kafka_events(

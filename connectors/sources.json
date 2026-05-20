@@ -1,0 +1,31 @@
+{
+  "connectors": [
+    {
+      "source_name": "catalogdb",
+      "database_hostname": "postgres-catalog",
+      "tables": [
+        "public.categories",
+        "public.products"
+      ],
+      "enabled": true
+    },
+    {
+      "source_name": "orderdb",
+      "database_hostname": "postgres-order",
+      "tables": [
+        "public.orders",
+        "public.customers"
+      ],
+      "enabled": true
+    },
+    {
+      "source_name": "shippingdb",
+      "database_hostname": "postgres-shipping",
+      "tables": [
+        "public.shipments",
+        "public.drivers"
+      ],
+      "enabled": true
+    }
+  ]
+}

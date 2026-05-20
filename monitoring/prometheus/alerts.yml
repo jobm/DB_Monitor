@@ -11,10 +11,73 @@ groups:
           description: "DB Monitor is failing to process CDC events at a high rate (> 1/sec). Check database logs for connectivity issues."
 
       - alert: APIHighLatency
-        expr: histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) > 2.0
-        for: 2m
+        expr: histogram_quantile(0.95, sum(rate(db_monitor_api_request_duration_seconds_bucket[5m])) by (le)) > 1.0
+        for: 5m
         labels:
           severity: warning
         annotations:
           summary: "API Latency is High"
-          description: "The 95th percentile of the DB Monitor API is responding slower than 2 seconds!"
+          description: "The 95th percentile of the DB Monitor API has stayed above 1 second for 5 minutes. Check pool pressure, hot endpoints, and recent deploy changes."
+
+      - alert: DatabasePoolUtilizationHigh
+        expr: db_monitor_db_pool_utilization_ratio > 0.90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database pool utilization is sustained above 90%"
+          description: "DB Monitor has kept more than 90% of total DB pool capacity checked out for 5 minutes. Check request concurrency, pool sizing, and slow queries."
+
+      - alert: DatabasePoolOverflowActive
+        expr: db_monitor_db_pool_overflow_connections > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database pool overflow connections are in use"
+          description: "DB Monitor has been using overflow DB connections for at least 5 minutes. This indicates sustained pressure beyond the base pool size."
+
+      - alert: ConsumerLagBacklog
+        expr: max(db_monitor_consumer_lag) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka consumer lag is above the readiness threshold"
+          description: "At least one DB Monitor partition has lag above 1000 for 5 minutes. Check Kafka health, connector throughput, and monitor-server capacity."
+
+      - alert: ConsumerCommitStalled
+        expr: db_monitor_consumer_last_successful_commit_timestamp_seconds > 0 and (time() - db_monitor_consumer_last_successful_commit_timestamp_seconds) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka commits appear stalled"
+          description: "DB Monitor has not recorded a successful Kafka commit for more than 5 minutes after previously committing offsets. Check consumer logs, DB availability, and circuit-breaker state."
+
+      - alert: DeadLetterBacklogPending
+        expr: db_monitor_dlq_records_pending > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Dead-letter records are waiting for replay"
+          description: "Persisted DLQ records have remained pending for more than 5 minutes. Inspect /admin/dlq and replay or remediate the underlying ingestion failure."
+
+      - alert: ConsumerCircuitBreakerOpen
+        expr: max(db_monitor_circuit_breaker_state{breaker="kafka_consumer"}) == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka consumer circuit breaker is open"
+          description: "The DB Monitor Kafka consumer circuit breaker has been open for at least 1 minute. New events are being skipped until the underlying failure path recovers."
+
+      - alert: FailedAuthAttemptsSpike
+        expr: sum(rate(db_monitor_failed_auth_attempts_total[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Authentication failures are spiking"
+          description: "DB Monitor is seeing a sustained elevated rate of failed authentication attempts. Check auth logs, token rotation state, and client credentials."

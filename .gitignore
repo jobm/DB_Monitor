@@ -11,3 +11,7 @@ __pycache__/
 .DS_Store
 .venv*
 .github
+
+secrets/*
+!secrets/README.md
+!secrets/*.example

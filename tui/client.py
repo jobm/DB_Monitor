@@ -8,6 +8,8 @@ class DBMonitorClient:
     def __init__(self, base_url: str = "http://localhost:8000"):
         self.base_url = base_url.rstrip("/")
         self.api_key: Optional[str] = None
+        self._access_token: Optional[str] = None
+        self._ws_session_token: Optional[str] = None
         self._client: Optional[httpx.AsyncClient] = None
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._ws_task: Optional[asyncio.Task] = None
@@ -17,16 +19,54 @@ class DBMonitorClient:
     def set_credentials(self, base_url: str, api_key: str):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self._access_token = None
+        self._ws_session_token = None
         if self._client:
             self._client.headers.update(self._get_headers())
 
-    def _get_headers(self) -> Dict[str, str]:
+    def _get_api_key_headers(self) -> Dict[str, str]:
         headers = {}
         if self.api_key:
             headers["X-API-Key"] = self.api_key
         return headers
 
+    def _get_headers(self) -> Dict[str, str]:
+        headers = {}
+        if self._access_token:
+            headers["Authorization"] = f"Bearer {self._access_token}"
+        elif self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return headers
+
+    async def _exchange_access_token(self) -> None:
+        if not self.api_key or self._access_token:
+            return
+
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_api_key_headers(),
+            timeout=10.0,
+        ) as client:
+            response = await client.post("/auth/token")
+            response.raise_for_status()
+            self._access_token = response.json()["access_token"]
+
+    async def _exchange_ws_session_token(self) -> None:
+        if not self.api_key or self._ws_session_token:
+            return
+
+        await self._exchange_access_token()
+        async with httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._get_headers(),
+            timeout=10.0,
+        ) as client:
+            response = await client.post("/auth/ws-token")
+            response.raise_for_status()
+            self._ws_session_token = response.json()["session_token"]
+
     async def get_client(self) -> httpx.AsyncClient:
+        await self._exchange_access_token()
         if self._client is None:
             self._client = httpx.AsyncClient(
                 base_url=self.base_url, headers=self._get_headers(), timeout=10.0
@@ -38,6 +78,8 @@ class DBMonitorClient:
         if self._client:
             await self._client.aclose()
             self._client = None
+        self._access_token = None
+        self._ws_session_token = None
 
     async def _disconnect_ws(self):
         self._ws_running = False
@@ -51,6 +93,7 @@ class DBMonitorClient:
             except asyncio.CancelledError:
                 pass
             self._ws_task = None
+        self._clear_event_queue()
 
     async def _ws_listener(self):
         try:
@@ -69,9 +112,11 @@ class DBMonitorClient:
         """Connect to WebSocket for real-time events."""
         if self._ws_running and self._ws:
             return
+        self._clear_event_queue()
+        await self._exchange_ws_session_token()
         ws_url = self.base_url.replace("http://", "ws://").replace("https://", "wss://")
         self._ws = await websockets.connect(
-            f"{ws_url}/ws/events?api_key={self.api_key}"
+            f"{ws_url}/ws/events?session_token={self._ws_session_token}",
         )
         self._ws_running = True
         self._ws_task = asyncio.create_task(self._ws_listener())
@@ -82,6 +127,13 @@ class DBMonitorClient:
             return await asyncio.wait_for(self._event_queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
+
+    def _clear_event_queue(self) -> None:
+        while not self._event_queue.empty():
+            try:
+                self._event_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
     async def check_health(self) -> bool:
         try:

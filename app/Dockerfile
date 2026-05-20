@@ -25,5 +25,11 @@ COPY . .
 # Install the project itself
 RUN uv sync --frozen --no-dev
 
+RUN groupadd --gid 1001 appuser && \
+    useradd --uid 1001 --gid 1001 --create-home --shell /usr/sbin/nologin appuser && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
 EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["sh", "/app/container-entrypoint.sh"]

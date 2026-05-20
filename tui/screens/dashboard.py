@@ -33,6 +33,7 @@ class DashboardScreen(Screen):
         super().__init__(**kwargs)
         self.selected_service = None
         self._ws_task = None
+        self._displayed_event_ids: set[str] = set()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -78,12 +79,16 @@ class DashboardScreen(Screen):
         else:
             await self._load_events()
 
-    def _prepend_event(self, ev: dict) -> None:
-        table = self.query_one("#events-table", DataTable)
+    def _event_matches_current_view(self, ev: dict) -> bool:
+        if self.selected_service is None:
+            return True
+        return ev.get("service_name") == self.selected_service
+
+    def _format_event_row(self, ev: dict) -> tuple[str, str, str, str, str, str]:
         time_str = ev.get("event_time", "")
         if time_str and "T" in time_str:
             time_str = time_str.split("T")[1][:8]
-        table.add_row(
+        return (
             str(ev.get("id", "")),
             time_str,
             ev.get("service_name", ""),
@@ -91,6 +96,18 @@ class DashboardScreen(Screen):
             ev.get("event_type", ""),
             str(ev.get("source_table_id", "")),
         )
+
+    def _prepend_event(self, ev: dict) -> None:
+        if not self._event_matches_current_view(ev):
+            return
+
+        table = self.query_one("#events-table", DataTable)
+        event_id = str(ev.get("id", ""))
+        if not event_id or event_id in self._displayed_event_ids:
+            return
+
+        table.add_row(*self._format_event_row(ev))
+        self._displayed_event_ids.add(event_id)
         label = self.query_one("#view-label", Label)
         view_text = self.selected_service if self.selected_service else "All"
         label.update(f"Recent Events | View: {view_text} (live)")
@@ -120,18 +137,13 @@ class DashboardScreen(Screen):
             )
             table = self.query_one("#events-table", DataTable)
             table.clear()
+            self._displayed_event_ids.clear()
             for ev in events:
-                time_str = ev.get("event_time", "")
-                if time_str and "T" in time_str:
-                    time_str = time_str.split("T")[1][:8]
-                table.add_row(
-                    str(ev.get("id", "")),
-                    time_str,
-                    ev.get("service_name", ""),
-                    ev.get("operation", ""),
-                    ev.get("event_type", ""),
-                    str(ev.get("source_table_id", "")),
-                )
+                event_id = str(ev.get("id", ""))
+                if not event_id or event_id in self._displayed_event_ids:
+                    continue
+                table.add_row(*self._format_event_row(ev))
+                self._displayed_event_ids.add(event_id)
             label = self.query_one("#view-label", Label)
             view_text = self.selected_service if self.selected_service else "All"
             label.update(f"Recent Events | View: {view_text}")

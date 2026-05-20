@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import logging
+import time
 from collections.abc import Callable
-from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from metrics import columns_discovered_total, tables_discovered_total
 from models import KafkaEvent, MonitoredColumn, MonitoredTable
 
 logger = logging.getLogger(__name__)
@@ -20,19 +19,31 @@ logger = logging.getLogger(__name__)
 class SchemaDiscovery:
     """Discovers and maintains schema catalog from Debezium CDC events."""
 
-    def __init__(self, session_factory: Callable):
+    def __init__(self, session_factory: Callable, cache_ttl_seconds: float = 60.0):
         self.session_factory = session_factory
-        self._table_cache = {}
+        self._cache_ttl_seconds = cache_ttl_seconds
+        self._table_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
-    async def process_event(self, event: KafkaEvent) -> Optional[int]:
+    async def process_event(
+        self,
+        event: KafkaEvent,
+        session=None,
+    ) -> Optional[int]:
         """Process an event to discover/update schema. Returns source_table_id."""
+        if session is None:
+            async with self.session_factory() as owned_session:
+                async with owned_session.begin():
+                    return await self._process_event(event, owned_session)
+
+        return await self._process_event(event, session)
+
+    async def _process_event(self, event: KafkaEvent, session) -> Optional[int]:
+        """Process an event within an existing database session."""
         if not event.event_data:
             return None
 
         payload = event.event_data
-        source = payload.get("source")
-        if not isinstance(source, dict):
-            source = payload.get("payload", {}).get("source")
+        source = self._extract_source(payload)
         if not isinstance(source, dict):
             return None
 
@@ -50,101 +61,252 @@ class SchemaDiscovery:
         topic_name = event.service_name
 
         table_id = await self._upsert_table(
+            session=session,
             service_name=service_name,
             database_name=db_name,
             table_name=table_identifier,
             topic_name=topic_name,
         )
 
-        schema = payload.get("schema") or (
-            payload.get("payload", {}).get("schema")
-            if isinstance(payload.get("payload"), dict)
-            else None
-        )
-        if table_id and schema:
-            await self._upsert_columns(table_id, schema)
+        column_definitions = self._extract_column_definitions(payload)
+        if table_id and column_definitions:
+            await self._upsert_columns(session, table_id, column_definitions)
+
+        self._invalidate_table_cache(service_name, table_identifier)
 
         return table_id
 
     async def _upsert_table(
         self,
+        session,
         service_name: str,
         database_name: str,
         table_name: str,
         topic_name: str,
     ) -> int:
         """Upsert a monitored table and return its ID."""
-        async with self.session_factory() as session:
-            stmt = (
-                pg_insert(MonitoredTable)
-                .values(
-                    service_name=service_name,
-                    database_name=database_name,
-                    table_name=table_name,
-                    topic_name=topic_name,
-                    is_active=True,
-                )
-                .on_conflict_do_update(
-                    index_elements=["service_name", "database_name", "table_name"],
-                    set_={
-                        "topic_name": topic_name,
-                        "is_active": True,
-                    },
-                )
-                .returning(MonitoredTable.id)
+        stmt = (
+            pg_insert(MonitoredTable)
+            .values(
+                service_name=service_name,
+                database_name=database_name,
+                table_name=table_name,
+                topic_name=topic_name,
+                is_active=True,
             )
-            result = await session.execute(stmt)
-            table_id = result.scalar_one()
-            await session.commit()
-            return table_id
+            .on_conflict_do_update(
+                index_elements=["service_name", "database_name", "table_name"],
+                set_={
+                    "topic_name": topic_name,
+                    "is_active": True,
+                },
+            )
+            .returning(MonitoredTable.id)
+        )
+        result = await session.execute(stmt)
+        table_id = result.scalar_one()
+        await self._refresh_schema_metrics(session)
+        return table_id
 
-    async def _upsert_columns(self, table_id: int, schema: dict[str, Any]) -> None:
-        """Upsert columns from Debezium schema."""
-        async with self.session_factory() as session:
-            columns_to_insert = []
+    async def _upsert_columns(
+        self,
+        session,
+        table_id: int,
+        column_definitions: list[dict[str, Any]],
+    ) -> None:
+        """Upsert columns from Debezium schema or inferred row payloads."""
+        if column_definitions:
+            insert_stmt = pg_insert(MonitoredColumn).values(
+                [{**column, "table_id": table_id} for column in column_definitions]
+            )
+            stmt = insert_stmt.on_conflict_do_update(
+                index_elements=["table_id", "column_name"],
+                set_={
+                    "data_type": insert_stmt.excluded.data_type,
+                    "is_primary_key": insert_stmt.excluded.is_primary_key,
+                    "is_nullable": insert_stmt.excluded.is_nullable,
+                },
+            )
+            await session.execute(stmt)
+            await self._refresh_schema_metrics(session)
 
-            fields = schema.get("fields", {})
-            if isinstance(fields, dict):
-                for field_name, field_def in fields.items():
-                    if field_name in ("__crct", "__deleted"):
-                        continue
+    def _extract_source(self, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+        source = payload.get("source")
+        if isinstance(source, dict):
+            return source
 
-                    field_type = field_def.get("type", "unknown")
-                    if isinstance(field_type, dict):
-                        field_type = field_type.get(
-                            "name", field_type.get("type", "unknown")
-                        )
+        nested_payload = payload.get("payload")
+        if isinstance(nested_payload, dict):
+            nested_source = nested_payload.get("source")
+            if isinstance(nested_source, dict):
+                return nested_source
 
-                    is_pk = field_def.get("optional", True) is False and field_def.get(
-                        "primaryKey", False
-                    )
+        return None
 
-                    columns_to_insert.append(
-                        {
-                            "table_id": table_id,
-                            "column_name": field_name,
-                            "data_type": str(field_type),
-                            "is_primary_key": is_pk,
-                            "is_nullable": field_def.get("optional", True),
-                            "audit_enabled": True,
-                        }
-                    )
+    def _extract_column_definitions(
+        self, payload: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        schema = payload.get("schema")
+        if not isinstance(schema, dict):
+            nested_payload = payload.get("payload")
+            if isinstance(nested_payload, dict):
+                nested_schema = nested_payload.get("schema")
+                if isinstance(nested_schema, dict):
+                    schema = nested_schema
 
-            if columns_to_insert:
-                stmt = (
-                    pg_insert(MonitoredColumn)
-                    .values(columns_to_insert)
-                    .on_conflict_do_update(
-                        index_elements=["table_id", "column_name"],
-                        set_={
-                            "data_type": MonitoredColumn.data_type,
-                            "is_primary_key": MonitoredColumn.is_primary_key,
-                            "is_nullable": MonitoredColumn.is_nullable,
-                        },
-                    )
-                )
-                await session.execute(stmt)
-                await session.commit()
+        column_definitions = (
+            self._extract_columns_from_schema(schema) if isinstance(schema, dict) else []
+        )
+        if column_definitions:
+            return column_definitions
+
+        return self._extract_columns_from_payload(payload)
+
+    def _extract_columns_from_schema(
+        self, schema: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        row_fields = self._extract_row_fields(schema.get("fields"))
+        if not row_fields:
+            return []
+
+        columns: list[dict[str, Any]] = []
+        for field_def in row_fields:
+            if not isinstance(field_def, dict):
+                continue
+
+            field_name = field_def.get("field") or field_def.get("name")
+            if not field_name or str(field_name).startswith("__"):
+                continue
+
+            field_type = field_def.get("type") or field_def.get("name") or "unknown"
+            columns.append(
+                {
+                    "column_name": str(field_name),
+                    "data_type": self._normalize_field_type(field_type),
+                    "is_primary_key": bool(field_def.get("primaryKey", False)),
+                    "is_nullable": bool(field_def.get("optional", True)),
+                    "audit_enabled": True,
+                }
+            )
+
+        return columns
+
+    def _extract_row_fields(self, fields: Any) -> list[dict[str, Any]]:
+        if isinstance(fields, list):
+            row_container = self._find_row_schema(fields)
+            if isinstance(row_container, dict) and isinstance(
+                row_container.get("fields"), list
+            ):
+                return [field for field in row_container["fields"] if isinstance(field, dict)]
+            return [field for field in fields if isinstance(field, dict)]
+
+        if isinstance(fields, dict):
+            for candidate_name in ("after", "before"):
+                candidate = fields.get(candidate_name)
+                if isinstance(candidate, dict) and isinstance(candidate.get("fields"), list):
+                    return [field for field in candidate["fields"] if isinstance(field, dict)]
+
+            extracted_fields: list[dict[str, Any]] = []
+            for field_name, field_def in fields.items():
+                if isinstance(field_def, dict):
+                    extracted_fields.append({"field": field_name, **field_def})
+            return extracted_fields
+
+        return []
+
+    def _find_row_schema(self, fields: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        for candidate in fields:
+            field_name = candidate.get("field") or candidate.get("name")
+            if field_name in {"after", "before"} and isinstance(candidate.get("fields"), list):
+                return candidate
+        return None
+
+    def _extract_columns_from_payload(
+        self, payload: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        row_versions: list[dict[str, Any]] = []
+        for row_key in ("after", "before"):
+            row_data = payload.get(row_key)
+            if not isinstance(row_data, dict):
+                nested_payload = payload.get("payload")
+                if isinstance(nested_payload, dict):
+                    nested_row_data = nested_payload.get(row_key)
+                    if isinstance(nested_row_data, dict):
+                        row_data = nested_row_data
+
+            if isinstance(row_data, dict):
+                row_versions.append(row_data)
+
+        if not row_versions:
+            return []
+
+        ordered_columns: list[str] = []
+        for row_version in row_versions:
+            for column_name in row_version:
+                if column_name.startswith("__") or column_name in ordered_columns:
+                    continue
+                ordered_columns.append(column_name)
+
+        columns: list[dict[str, Any]] = []
+        for column_name in ordered_columns:
+            sample_value = next(
+                (
+                    row_version[column_name]
+                    for row_version in row_versions
+                    if column_name in row_version and row_version[column_name] is not None
+                ),
+                None,
+            )
+            columns.append(
+                {
+                    "column_name": column_name,
+                    "data_type": self._infer_data_type(sample_value),
+                    "is_primary_key": False,
+                    "is_nullable": any(
+                        column_name in row_version and row_version[column_name] is None
+                        for row_version in row_versions
+                    ),
+                    "audit_enabled": True,
+                }
+            )
+
+        return columns
+
+    def _normalize_field_type(self, field_type: Any) -> str:
+        if isinstance(field_type, dict):
+            return str(field_type.get("name") or field_type.get("type") or "unknown")
+        return str(field_type)
+
+    def _infer_data_type(self, value: Any) -> str:
+        if value is None:
+            return "unknown"
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, int):
+            return "integer"
+        if isinstance(value, float):
+            return "number"
+        if isinstance(value, list):
+            return "array"
+        if isinstance(value, dict):
+            return "object"
+        return "string"
+
+    def _invalidate_table_cache(self, service_name: str, table_name: str) -> None:
+        self._table_cache.pop(self._cache_key(service_name, table_name), None)
+
+    def _cache_key(self, service_name: str, table_name: str) -> str:
+        return f"{service_name}:{table_name}"
+
+    async def _refresh_schema_metrics(self, session) -> None:
+        table_count_result = await session.execute(
+            select(func.count()).select_from(MonitoredTable).where(MonitoredTable.is_active == True)
+        )
+        column_count_result = await session.execute(
+            select(func.count()).select_from(MonitoredColumn)
+        )
+        tables_discovered_total.set(int(table_count_result.scalar() or 0))
+        columns_discovered_total.set(int(column_count_result.scalar() or 0))
 
     async def get_all_tables(self) -> list[dict[str, Any]]:
         """Get all monitored tables."""
@@ -205,9 +367,13 @@ class SchemaDiscovery:
         self, service_name: str, table_name: str
     ) -> Optional[dict[str, Any]]:
         """Get a table by service and table name."""
-        cache_key = f"{service_name}:{table_name}"
-        if cache_key in self._table_cache:
-            return self._table_cache[cache_key]
+        cache_key = self._cache_key(service_name, table_name)
+        cached = self._table_cache.get(cache_key)
+        if cached:
+            cached_at, cached_table = cached
+            if time.monotonic() - cached_at <= self._cache_ttl_seconds:
+                return cached_table
+            self._table_cache.pop(cache_key, None)
 
         async with self.session_factory() as session:
             stmt = select(MonitoredTable).where(
@@ -220,7 +386,8 @@ class SchemaDiscovery:
             if not table:
                 return None
             res = await self.get_table_by_id(table.id)
-            self._table_cache[cache_key] = res
+            if res is not None:
+                self._table_cache[cache_key] = (time.monotonic(), res)
             return res
 
 

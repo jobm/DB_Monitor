@@ -1,0 +1,7 @@
+{
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "plugin.name": "pgoutput",
+    "publication.autocreate.mode": "filtered"
+  }
+}

@@ -1,180 +1,248 @@
-# Database Change Data Capture (CDC) Monitor
+# DB Monitor
 
-A robust Change Data Capture (CDC) monitoring system built with FastAPI, Kafka, and Debezium. This project enables real-time tracking and auditing of database changes across multiple databases, making it ideal for audit trails, data synchronization, and compliance monitoring.
+DB Monitor is a FastAPI-based CDC monitoring service that consumes Debezium events from Kafka, stores them in PostgreSQL, and exposes raw events, discovered table metadata, column-level changes, metrics, and realtime notifications.
 
 ## Architecture
 
-```mermaid
-graph LR
-    subgraph Source Databases
-        DB1[Order DB]
-        DB2[Catalog DB]
-        DB3[Shipping DB]
-    end
-
-    subgraph CDC Layer
-        D[Debezium Connectors]
-    end
-
-    subgraph Message Bus
-        K[Kafka]
-    end
-
-    subgraph Monitor Application
-        C[Consumer Service]
-        A[FastAPI App]
-        MD[(Monitor DB)]
-    end
-
-    DB1 --> D
-    DB2 --> D
-    DB3 --> D
-    D --> K
-    K --> C
-    C --> MD
-    A --> MD
-
-    style Source Databases fill:#f9f,stroke:#333,stroke-width:2px
-    style CDC Layer fill:#bbf,stroke:#333,stroke-width:2px
-    style Message Bus fill:#bfb,stroke:#333,stroke-width:2px
-    style Monitor Application fill:#fbb,stroke:#333,stroke-width:2px
+```text
+Source Postgres DBs -> Debezium -> Kafka -> FastAPI consumer -> Monitor Postgres -> API / WebSocket / Metrics
 ```
 
-## Features
+The default stack monitors three source databases:
 
-- Real-time database change monitoring
-- Support for multiple source databases
-- Configurable CDC connectors using Debezium
-- Asynchronous event processing
-- RESTful API for querying captured events
-- Health check endpoints
-- Docker containerization
-- Graceful shutdown handling
+| Service | Source tables | External DB port |
+| --- | --- | --- |
+| `orderdb` | `public.orders`, `public.customers` | `5434` |
+| `catalogdb` | `public.categories`, `public.products` | `5435` |
+| `shippingdb` | `public.shipments`, `public.drivers` | `5436` |
 
-## Prerequisites
+The monitor database is exposed on `5437`.
 
-- Docker and Docker Compose
-- Python 3.9+
-- PostgreSQL 15
-- Kafka
-- Debezium
+## Current capabilities
 
-## Project Structure
+- Multi-topic Kafka consumption with manual commits
+- Retry, batching, DLQ forwarding, and circuit-breaker protection
+- Persistent Kafka checkpoint snapshots and DLQ replay controls for recovery
+- Schema discovery for monitored tables and columns
+- Column-level change history and point-in-time lookup
+- API-key lifecycle management plus short-lived bearer and WebSocket session tokens
+- Buffered API audit logging off the request path
+- Prometheus metrics and a bundled Prometheus/Grafana/Alertmanager stack
+- WebSocket event broadcast for live updates, including cross-replica fanout via Postgres backplane
 
+## Quick start
+
+1. Start the stack:
+   ```bash
+   mkdir -p secrets
+   cp secrets/monitor_postgres_url.example secrets/monitor_postgres_url
+   cp secrets/monitor_jwt_secret.example secrets/monitor_jwt_secret
+   ALLOW_BOOTSTRAP=true docker compose up -d
+   ```
+2. Check the service:
+   ```bash
+   curl http://localhost:8000/readyz
+   ```
+3. Bootstrap the first admin key:
+   ```bash
+   curl -X POST "http://localhost:8000/auth/bootstrap?owner_name=admin"
+   ```
+4. Exchange the returned `id.secret` value for a short-lived bearer token:
+    ```bash
+    curl -X POST \
+       -H "X-API-Key: <id.secret>" \
+       http://localhost:8000/auth/token
+    ```
+
+The compose stack now runs with `APP_ENV=production`, applies migrations before
+startup, then validates schema state on boot. `ALLOW_BOOTSTRAP` defaults to
+`false`, so first-time local initialization must opt in explicitly as shown
+above. In deployed environments, keep bootstrap disabled and pre-provision or
+rotate admin keys out of band.
+
+The monitor container now runs as a non-root user and starts through an explicit
+entrypoint that applies migrations, then `exec`s the app process for cleaner
+signal handling. Production deployments can also source sensitive values from
+`POSTGRES_URL_FILE`, `JWT_SECRET_FILE`, and `KAFKA_SSL_PASSWORD_FILE` instead of
+plain environment variables. Graceful shutdown timing is configurable with
+`APP_SHUTDOWN_TIMEOUT_SECONDS`.
+
+Database pool sizing is now configurable with `DB_POOL_SIZE`,
+`DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT_SECONDS`, `DB_POOL_RECYCLE_SECONDS`, and
+`DB_POOL_PRE_PING` so production deployments can tune connection pressure
+explicitly.
+
+JWT signing now supports a staged rotation window through `JWT_SECRET_NEXT` or
+`JWT_SECRET_NEXT_FILE`. The app always signs with `JWT_SECRET`, but it will
+accept tokens signed by either secret while the overlap window is active. The
+intended rotation flow is: set `JWT_SECRET_NEXT`, deploy, wait for outstanding
+access and WebSocket session tokens to expire, promote the next secret into
+`JWT_SECRET`, then remove `JWT_SECRET_NEXT`.
+
+Connectors are registered automatically by the `connector-registrar` service. You can also run `./register-connectors.sh` manually.
+
+Connector configs now use a reusable template in `connectors/postgres-template.json`
+plus a canonical manifest in `connectors/sources.json`. Add a new source by
+appending one manifest entry instead of creating another full
+`*-connector.json` file.
+
+Each enabled manifest entry only needs the source identity, hostname, and
+monitored tables:
+
+```json
+{
+   "source_name": "catalogdb",
+   "database_hostname": "postgres-catalog",
+   "tables": ["public.categories", "public.products"],
+   "enabled": true
+}
 ```
-├── app/
-│   ├── consumer/           # Kafka consumer implementation
-│   ├── __init__.py
-│   ├── config.py          # Configuration settings
-│   ├── consumer_service.py # Kafka consumer service
-│   ├── extensions.py      # Database extensions
-│   ├── lifecycle_manager.py# Application lifecycle management
-│   ├── main.py           # FastAPI application entry point
-│   ├── models.py         # Database models
-│   ├── routes.py         # API routes
-│   └── requirements.txt   # Python dependencies
-├── connectors/           # Debezium connector configurations
-│   ├── catalogdb-connector.json
-│   ├── orderdb-connector.json
-│   └── shippingdb-connector.json
-├── init/                # Database initialization scripts
-│   ├── catalog.sql
-│   ├── order.sql
-│   └── shipping.sql
-├── docker-compose.yml   # Docker services configuration
-├── Dockerfile.register  # Connector registration container
-└── register-connectors.sh # Connector registration script
-```
 
-## Setup and Installation
+The registrar derives repeated Debezium fields from `source_name`, including the
+connector name, topic prefix, replication slot, and schema history topic. Use
+optional fields like `connector_name`, `slot_name`, `history_topic`, or
+`config_overrides` only when a source must deviate from the defaults.
 
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   cd DB_Monitor
-   ```
+Both the connector registrar and the FastAPI consumer now read the same
+manifest. That keeps Debezium registration and `KAFKA_TOPICS` subscription
+aligned without maintaining two separate topic lists.
 
-2. Create a `.env` file in the root directory:
-   ```env
-   KAFKA_BROKER=kafka:9092
-   KAFKA_TOPIC=orderdb.public.orders
-   POSTGRES_URL=postgresql+asyncpg://postgres:postgres@postgres-monitor:5432/postgres
-   ```
+## Service endpoints
 
-3. Start the infrastructure services:
-   ```bash
-   docker-compose up -d
-   ```
+| Service | URL |
+| --- | --- |
+| FastAPI app | `http://localhost:8000` |
+| Kafka UI | `http://localhost:8080` |
+| Kafka Connect | `http://localhost:8083` |
+| Prometheus | `http://localhost:9090` |
+| Grafana | `http://localhost:3000` |
+| Alertmanager | `http://localhost:9094` |
 
-4. Register the Debezium connectors:
-   ```bash
-   ./register-connectors.sh
-   ```
-   - Requires `curl` and `jq` to be installed locally.
+## API highlights
 
-5. The application will be available at:
-   - FastAPI Application: http://localhost:8000
-   - Kafka UI: http://localhost:8080
-   - Kafka Connect UI: http://localhost:8083
+Public endpoints:
 
-## Available Endpoints
+- `GET /health`
+- `GET /livez`
+- `GET /readyz`
+- `GET /metrics`
+- `POST /auth/bootstrap` (only succeeds before any active key exists)
 
-- `GET /events` - Retrieve all captured database events
-- `GET /health` - Check application health status
-- `GET /info` - Get application information
+Session endpoints:
 
-## Monitoring Setup
+- `POST /auth/token`
+- `POST /auth/ws-token`
 
-1. The system monitors three source databases:
-   - Order Database (Port 5434)
-   - Catalog Database (Port 5435)
-   - Shipping Database (Port 5436)
+Viewer endpoints:
 
-2. Events are captured and stored in:
-   - Monitor Database (Port 5437)
+- `GET /info`
+- `GET /tables`
+- `GET /tables/{service_name}/{table_name}`
+- `GET /tables/{service_name}/{table_name}/columns`
+- `GET /events`
+- `GET /events/stats`
+- `GET /changes`
+- `GET /changes/{service_name}/{table_name}/{column_name}/at`
+- `GET /changes/{service.table}/{column_name}/at` (legacy-compatible form)
 
-3. Kafka and Zookeeper are accessible at:
-   - Kafka: localhost:9093 (External), kafka:9092 (Internal)
-   - Zookeeper: localhost:2181
+Admin endpoint:
+
+- `POST /auth/keys`
+- `POST /auth/keys/{key_id}/rotate`
+- `POST /auth/keys/{key_id}/revoke`
+- `GET /admin/checkpoints`
+- `GET /admin/dlq`
+- `POST /admin/dlq/{dlq_event_id}/replay`
+
+Realtime endpoint:
+
+- `GET /ws/events?session_token=<short-lived-token>`
+
+See `api-docs.md` for request and response details.
 
 ## Development
 
-1. Create a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # Linux/Mac
-   ```
+Install app dependencies, including the test group:
 
-2. Install dependencies:
-   ```bash
-   cd app
-   pip install -r requirements.txt
-   ```
+```bash
+cd app
+uv sync --group dev
+```
 
-3. Run the application locally:
-   ```bash
-   uvicorn main:app --reload
-   ```
+Run the API locally:
 
-## Production Deployment
+```bash
+cd app
+uv run python start_monitor.py
+```
 
-The application is containerized and can be deployed using Docker Compose. For production deployment:
+Apply tracked migrations locally before startup when you want an explicit schema
+step:
 
-1. Update the environment variables in the `.env` file
-2. Adjust the `docker-compose.yml` file for production settings
-3. Deploy using Docker Compose:
-   ```bash
-   docker-compose -f docker-compose.prod.yml up -d
-   ```
+```bash
+make monitor-migrate
+```
 
-## Contributing
+Validate that the database is already up to date without applying changes:
 
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
+```bash
+cd app
+uv run python migrate.py validate
+```
 
-## License
+Run connector registration locally against the Docker Compose stack:
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+```bash
+./register-connectors.sh
+```
+
+Preview rendered connector payloads without calling Kafka Connect:
+
+```bash
+DRY_RUN=true ./register-connectors.sh
+```
+
+Useful commands:
+
+```bash
+make monitor-up
+make monitor-test
+make monitor-test-integration
+make monitor-test-smoke
+make monitor-tui
+```
+
+`monitor-test-integration` expects the stack to already be running on `localhost:8000`.
+It now validates the admin checkpoint and DLQ replay recovery endpoints in
+addition to the core viewer surfaces.
+GitHub Actions now runs both the unit suite and a live integration job that
+starts the infrastructure stack, launches the app locally against it, and runs
+the same integration script automatically on pushes and pull requests. That
+workflow now finishes with a smoke-load gate that exercises the mixed
+`events,stats,tables,checkpoints` profile and fails if it sees request errors,
+sub-100% success rate, or a p95 above 2000 ms.
+
+`monitor-test-smoke` expects `DB_MONITOR_ADMIN_API_KEY` to be set unless the
+stack is still in first-run bootstrap mode.
+
+Operational recovery and live-validation steps are documented in
+`docs/runbooks/recovery-and-validation.md`.
+Alert thresholds and first-response guidance are documented in
+`docs/runbooks/alerts-and-thresholds.md`.
+
+## Data model summary
+
+- `events`: structured raw CDC events
+- `monitored_tables`: discovered tables keyed by service/database/table
+- `monitored_columns`: discovered columns for each monitored table
+- `column_changes`: per-column history with `old_value` and `new_value`
+- `api_keys`: hashed API keys and roles
+- `api_audit_logs`: API access log entries
+
+## Known limitations
+
+- Production deployments should run `uv run python migrate.py apply` before app
+   startup and use `APP_ENV=production` or `DB_SCHEMA_MODE=validate` so the app
+   fails fast when required migrations are missing.
+- When Debezium schema envelopes are disabled, column discovery falls back to inferring column names and coarse types from `before`/`after` payloads. Primary key and nullability metadata are therefore best-effort in that mode.
+- `/health` checks application lifecycle state, database connectivity, and consumer state, but it does not yet expose full broker lag or deep Kafka admin diagnostics.
