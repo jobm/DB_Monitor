@@ -20,7 +20,10 @@ if str(REPO_ROOT) not in sys.path:
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
-from consumer_service import _store_event_graph_with_retries
+from consumer_service import (
+    _serialize_broker_fields,
+    _store_event_graph_with_retries,
+)
 from sqlalchemy import select
 from extensions import AsyncSessionLocal
 from models import DeadLetterEvent, KafkaEvent
@@ -164,9 +167,15 @@ async def seed_dead_letter_event() -> int:
     async with AsyncSessionLocal() as session:
         dlq_event = DeadLetterEvent(
             service_name="orderdb",
-            kafka_topic="orderdb.public.orders",
-            kafka_partition=0,
-            kafka_offset=kafka_offset,
+            **_serialize_broker_fields(
+                broker_kind="kafka",
+                broker_destination="orderdb.public.orders",
+                broker_substream="0",
+                broker_position=str(kafka_offset),
+                kafka_topic="orderdb.public.orders",
+                kafka_partition=0,
+                kafka_offset=kafka_offset,
+            ),
             operation="UPDATE",
             raw_payload=raw_payload,
             error_message="integration seeded replay",
