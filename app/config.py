@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import ssl
 from pathlib import Path
@@ -24,6 +25,13 @@ def _default_schema_mode(app_env: str) -> str:
     return "apply"
 
 
+def _parse_csv_list(value: str | None) -> list[str]:
+    """Parse a comma-separated configuration string into trimmed values."""
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def _get_env_or_file(name: str, default: str | None = None) -> str | None:
     """Return a config value from NAME or NAME_FILE."""
     value = os.getenv(name)
@@ -35,9 +43,13 @@ def _get_env_or_file(name: str, default: str | None = None) -> str | None:
         resolved_path = Path(file_path)
         if not resolved_path.exists():
             _config_error(
-                f"{name}_FILE points to '{resolved_path}', but that file does not exist.",
+                (
+                    f"{name}_FILE points to '{resolved_path}', but that "
+                    "file does not exist."
+                ),
                 hint=(
-                    f"Mount the secret file at that path or set {name} directly."
+                    "Mount the secret file at that path or set "
+                    f"{name} directly."
                 ),
             )
         try:
@@ -45,7 +57,10 @@ def _get_env_or_file(name: str, default: str | None = None) -> str | None:
         except OSError as exc:
             _config_error(
                 f"Failed to read {name}_FILE from '{resolved_path}'.",
-                hint=f"Check file permissions and contents. Original error: {exc}",
+                hint=(
+                    "Check file permissions and contents. "
+                    f"Original error: {exc}"
+                ),
             )
 
     return default
@@ -92,15 +107,238 @@ if KAFKA_SECURITY_PROTOCOL in ("SSL", "SASL_SSL"):
         )
 
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "orderdb.public.orders")
-KAFKA_TOPICS = (
-    os.getenv("KAFKA_TOPICS", "").split(",")
-    if os.getenv("KAFKA_TOPICS")
-    else [KAFKA_TOPIC]
-)
+KAFKA_TOPICS = _parse_csv_list(os.getenv("KAFKA_TOPICS")) or [KAFKA_TOPIC]
 KAFKA_CONSUMER_GROUP = os.getenv(
     "KAFKA_CONSUMER_GROUP",
     "fastapi-consumer-group",
 )
+
+
+def _default_kafka_cluster() -> dict[str, object]:
+    """Build the single-cluster compatibility config."""
+    return {
+        "name": "default",
+        "bootstrap_servers": [KAFKA_BROKER],
+        "topics": list(KAFKA_TOPICS),
+        "consumer_group": KAFKA_CONSUMER_GROUP,
+    }
+
+
+def _normalize_bootstrap_servers(
+    value: str | list[str] | None,
+    cluster_name: str,
+) -> list[str]:
+    """Normalize bootstrap server values into a non-empty list."""
+    if isinstance(value, str):
+        servers = _parse_csv_list(value)
+    elif isinstance(value, list):
+        servers = [
+            str(server).strip()
+            for server in value
+            if str(server).strip()
+        ]
+    else:
+        servers = []
+
+    if not servers:
+        _config_error(
+            f"Kafka cluster '{cluster_name}' must define bootstrap_servers.",
+            hint="Set bootstrap_servers to a host:port string or list.",
+        )
+    return servers
+
+
+def _normalize_cluster_topics(
+    value: object,
+    cluster_name: str,
+) -> list[str]:
+    """Normalize per-cluster topic configuration."""
+    if value is None:
+        topics = list(KAFKA_TOPICS)
+    elif isinstance(value, str):
+        topics = _parse_csv_list(value)
+    elif isinstance(value, list):
+        topics = [str(topic).strip() for topic in value if str(topic).strip()]
+    else:
+        topics = []
+
+    if not topics:
+        _config_error(
+            f"Kafka cluster '{cluster_name}' must define at least one topic.",
+            hint="Set topics as a list or comma-separated string.",
+        )
+    return topics
+
+
+def _normalize_partition_list(
+    value: object,
+    cluster_name: str,
+    topic_name: str,
+) -> list[int]:
+    """Normalize an explicit partition list for one topic."""
+    if isinstance(value, str):
+        raw_partitions = _parse_csv_list(value)
+    elif isinstance(value, list):
+        raw_partitions = value
+    else:
+        raw_partitions = []
+
+    partitions: list[int] = []
+    for raw_partition in raw_partitions:
+        try:
+            partition = int(raw_partition)
+        except (TypeError, ValueError):
+            _config_error(
+                (
+                    f"Kafka cluster '{cluster_name}' topic '{topic_name}' "
+                    "contains an invalid partition value."
+                ),
+                hint="Use integer partition numbers such as [0, 1, 2].",
+            )
+        if partition < 0:
+            _config_error(
+                (
+                    f"Kafka cluster '{cluster_name}' topic '{topic_name}' "
+                    "contains a negative partition."
+                ),
+                hint="Use partition numbers greater than or equal to zero.",
+            )
+        partitions.append(partition)
+
+    if not partitions:
+        _config_error(
+            (
+                f"Kafka cluster '{cluster_name}' topic '{topic_name}' must "
+                "define at least one partition."
+            ),
+            hint="Set topic_partitions to a non-empty list or CSV string.",
+        )
+
+    return sorted(set(partitions))
+
+
+def _normalize_topic_partitions(
+    value: object,
+    cluster_name: str,
+) -> dict[str, list[int]] | None:
+    """Normalize explicit topic-to-partition placement config."""
+    if value is None:
+        return None
+
+    if not isinstance(value, dict) or not value:
+        _config_error(
+            f"Kafka cluster '{cluster_name}' has invalid topic_partitions.",
+            hint="Use a JSON object like {'orders.events': [0, 1] }.",
+        )
+
+    topic_partitions: dict[str, list[int]] = {}
+    for raw_topic_name, raw_partitions in value.items():
+        topic_name = str(raw_topic_name).strip()
+        if not topic_name:
+            _config_error(
+                f"Kafka cluster '{cluster_name}' has an empty topic name.",
+                hint="Provide non-empty topic names in topic_partitions.",
+            )
+        topic_partitions[topic_name] = _normalize_partition_list(
+            raw_partitions,
+            cluster_name,
+            topic_name,
+        )
+
+    return topic_partitions
+
+
+def _load_kafka_clusters() -> list[dict[str, object]]:
+    """Load multi-cluster Kafka configuration from JSON when provided."""
+    raw_clusters = os.getenv("KAFKA_CLUSTERS")
+    if not raw_clusters:
+        return [_default_kafka_cluster()]
+
+    try:
+        parsed = json.loads(raw_clusters)
+    except json.JSONDecodeError as exc:
+        _config_error(
+            "Invalid KAFKA_CLUSTERS format.",
+            hint=(
+                "Provide a JSON array of cluster definitions with name, "
+                "bootstrap_servers, and optional topics/consumer_group. "
+                f"Original error: {exc}"
+            ),
+        )
+
+    if not isinstance(parsed, list) or not parsed:
+        _config_error(
+            "Invalid KAFKA_CLUSTERS format.",
+            hint="Provide a non-empty JSON array of cluster definitions.",
+        )
+
+    cluster_names: set[str] = set()
+    clusters: list[dict[str, object]] = []
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            _config_error(
+                "Invalid KAFKA_CLUSTERS entry.",
+                hint="Each cluster definition must be a JSON object.",
+            )
+
+        cluster_name = str(entry.get("name") or "").strip()
+        if not cluster_name:
+            _config_error(
+                "Invalid KAFKA_CLUSTERS entry.",
+                hint="Each cluster definition must include a unique name.",
+            )
+        if cluster_name in cluster_names:
+            _config_error(
+                f"Duplicate Kafka cluster name '{cluster_name}'.",
+                hint="Use unique names for each cluster entry.",
+            )
+        cluster_names.add(cluster_name)
+
+        topic_partitions = _normalize_topic_partitions(
+            entry.get("topic_partitions"),
+            cluster_name,
+        )
+        topics = _normalize_cluster_topics(
+            entry.get("topics"),
+            cluster_name,
+        )
+        if topic_partitions is not None:
+            partition_topics = sorted(topic_partitions.keys())
+            if (
+                entry.get("topics") is not None
+                and sorted(topics) != partition_topics
+            ):
+                _config_error(
+                    (
+                        f"Kafka cluster '{cluster_name}' topics and "
+                        "topic_partitions must describe the same topics."
+                    ),
+                    hint=(
+                        "Either omit topics and derive them from "
+                        "topic_partitions, or keep both lists aligned."
+                    ),
+                )
+            topics = partition_topics
+
+        clusters.append(
+            {
+                "name": cluster_name,
+                "bootstrap_servers": _normalize_bootstrap_servers(
+                    entry.get("bootstrap_servers"),
+                    cluster_name,
+                ),
+                "topics": topics,
+                "topic_partitions": topic_partitions,
+                "consumer_group": str(
+                    entry.get("consumer_group") or KAFKA_CONSUMER_GROUP
+                ).strip(),
+            }
+        )
+
+    return clusters
+
+
+KAFKA_CLUSTERS = _load_kafka_clusters()
 POSTGRES_URL = _get_env_or_file(
     "POSTGRES_URL",
     DEFAULT_POSTGRES_URL,
@@ -171,6 +409,17 @@ WS_BACKPLANE_CHANNEL = os.getenv(
     "WS_BACKPLANE_CHANNEL",
     "db_monitor_ws_events",
 )
+OTEL_TRACING_ENABLED = (
+    os.getenv(
+        "OTEL_TRACING_ENABLED",
+        "false",
+    ).lower()
+    == "true"
+)
+OTEL_SERVICE_NAME = os.getenv("OTEL_SERVICE_NAME", "db-monitor")
+OTEL_EXPORTER = os.getenv("OTEL_EXPORTER", "otlp").lower()
+OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+OTEL_EXPORTER_OTLP_HEADERS = os.getenv("OTEL_EXPORTER_OTLP_HEADERS")
 AUDIT_LOG_QUEUE_MAXSIZE = int(os.getenv("AUDIT_LOG_QUEUE_MAXSIZE", "10000"))
 AUDIT_LOG_BATCH_SIZE = int(os.getenv("AUDIT_LOG_BATCH_SIZE", "100"))
 AUDIT_LOG_FLUSH_INTERVAL_SECONDS = float(
@@ -224,6 +473,28 @@ if APP_ENV in {"production", "prod"}:
         )
     if JWT_SECRET_NEXT and len(JWT_SECRET_NEXT) < 32:
         _config_error(
-            "JWT_SECRET_NEXT must be at least 32 characters long in production.",
+            (
+                "JWT_SECRET_NEXT must be at least 32 characters long "
+                "in production."
+            ),
             hint="Use a 32+ character overlap secret during rotation.",
+        )
+
+if OTEL_EXPORTER not in {"otlp", "console"}:
+    _config_error(
+        f"Invalid OTEL_EXPORTER='{OTEL_EXPORTER}'.",
+        hint="Use one of: otlp, console.",
+    )
+
+if OTEL_TRACING_ENABLED and OTEL_EXPORTER == "otlp":
+    if not OTEL_EXPORTER_OTLP_ENDPOINT:
+        _config_error(
+            (
+                "OTEL_EXPORTER_OTLP_ENDPOINT is required when tracing "
+                "is enabled with the OTLP exporter."
+            ),
+            hint=(
+                "Set OTEL_EXPORTER_OTLP_ENDPOINT to your collector URL or "
+                "switch OTEL_EXPORTER=console for local debugging."
+            ),
         )

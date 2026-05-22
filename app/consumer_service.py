@@ -41,6 +41,7 @@ from schema_discovery import SchemaDiscovery, extract_operation
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
+from tracing import start_span
 from ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -54,17 +55,24 @@ MAX_CONNECTION_RETRIES = 60
 CONNECTION_RETRY_DELAY = 5.0
 CONSUMER_METRIC_NAME = "kafka_consumer"
 
-consumer_runtime: dict[str, object] = {
-    "running": False,
-    "connected": False,
-    "topics": [],
-    "last_error": None,
-    "last_message_at": None,
-    "last_commit_at": None,
-    "lag_by_partition": {},
-    "lag_total": 0,
-    "dlq_messages_total": 0,
-}
+
+def _new_consumer_runtime_state() -> dict[str, object]:
+    """Build a clean runtime state structure for a Kafka consumer."""
+    return {
+        "running": False,
+        "connected": False,
+        "topics": [],
+        "last_error": None,
+        "last_message_at": None,
+        "last_commit_at": None,
+        "lag_by_partition": {},
+        "lag_total": 0,
+        "dlq_messages_total": 0,
+    }
+
+
+consumer_runtime: dict[str, object] = _new_consumer_runtime_state()
+consumer_runtimes: dict[str, dict[str, object]] = {"default": consumer_runtime}
 
 
 class CircuitBreaker:
@@ -72,12 +80,14 @@ class CircuitBreaker:
         self,
         failure_threshold: int = 5,
         recovery_timeout: float = 30.0,
+        metric_name: str = CONSUMER_METRIC_NAME,
     ):
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
         self.failure_count = 0
         self.last_failure_time = 0.0
         self.state = "closed"
+        self.metric_name = metric_name
         self._update_metric()
 
     def record_failure(self):
@@ -112,12 +122,38 @@ class CircuitBreaker:
             "open": 1,
             "half-open": 2,
         }.get(self.state, 0)
-        circuit_breaker_state.labels(breaker=CONSUMER_METRIC_NAME).set(
+        circuit_breaker_state.labels(breaker=self.metric_name).set(
             state_value
         )
 
 
 circuit_breaker = CircuitBreaker()
+cluster_circuit_breakers: dict[str, CircuitBreaker] = {
+    "default": circuit_breaker,
+}
+
+
+def _get_consumer_runtime(cluster_name: str) -> dict[str, object]:
+    """Return the mutable runtime state for a cluster consumer."""
+    if cluster_name == "default":
+        return consumer_runtime
+
+    runtime = consumer_runtimes.get(cluster_name)
+    if runtime is None:
+        runtime = _new_consumer_runtime_state()
+        consumer_runtimes[cluster_name] = runtime
+    return runtime
+
+
+def _get_circuit_breaker(cluster_name: str) -> CircuitBreaker:
+    """Return the circuit breaker assigned to a cluster consumer."""
+    breaker = cluster_circuit_breakers.get(cluster_name)
+    if breaker is None:
+        breaker = CircuitBreaker(
+            metric_name=f"{CONSUMER_METRIC_NAME}:{cluster_name}"
+        )
+        cluster_circuit_breakers[cluster_name] = breaker
+    return breaker
 
 
 def _utc_now_iso() -> str:
@@ -135,6 +171,8 @@ def _timestamp_to_age_seconds(value: Optional[str]) -> Optional[float]:
 
 def _update_runtime_lag(
     consumer: AIOKafkaConsumer,
+    runtime: dict[str, object],
+    cluster_name: str,
     topic: str,
     partition: int,
     offset: int,
@@ -146,18 +184,22 @@ def _update_runtime_lag(
         return
 
     lag_value = max(highwater - offset - 1, 0)
-    lag_key = f"{topic}:{partition}"
-    lag_by_partition = dict(consumer_runtime.get("lag_by_partition") or {})
+    lag_key = f"{cluster_name}:{topic}:{partition}"
+    lag_by_partition = dict(runtime.get("lag_by_partition") or {})
     lag_by_partition[lag_key] = lag_value
-    consumer_runtime["lag_by_partition"] = lag_by_partition
-    consumer_runtime["lag_total"] = sum(lag_by_partition.values())
-    consumer_lag.labels(topic=topic, partition=str(partition)).set(lag_value)
+    runtime["lag_by_partition"] = lag_by_partition
+    runtime["lag_total"] = sum(lag_by_partition.values())
+    consumer_lag.labels(
+        cluster=cluster_name,
+        topic=topic,
+        partition=str(partition),
+    ).set(lag_value)
 
 
-def _record_successful_commit() -> None:
+def _record_successful_commit(runtime: dict[str, object]) -> None:
     """Record the latest successful Kafka commit time."""
     timestamp = datetime.now(timezone.utc)
-    consumer_runtime["last_commit_at"] = timestamp.isoformat()
+    runtime["last_commit_at"] = timestamp.isoformat()
     consumer_last_successful_commit_timestamp_seconds.set(
         timestamp.timestamp()
     )
@@ -177,26 +219,94 @@ def _get_canonical_service_name(
 
 
 def get_consumer_health() -> dict[str, object]:
-    status = (
-        "healthy"
-        if consumer_runtime["running"] and consumer_runtime["connected"]
-        else "unhealthy"
+    runtimes = {
+        cluster_name: runtime
+        for cluster_name, runtime in consumer_runtimes.items()
+    }
+    cluster_count = len(runtimes)
+    connected = cluster_count > 0 and all(
+        bool(runtime["connected"]) for runtime in runtimes.values()
     )
+    running = cluster_count > 0 and all(
+        bool(runtime["running"]) for runtime in runtimes.values()
+    )
+    lag_by_partition: dict[str, int] = {}
+    topics: list[str] = []
+    errors: list[str] = []
+    last_message_at_values: list[str] = []
+    last_commit_at_values: list[str] = []
+    breaker_states: list[str] = []
+    clusters_payload: dict[str, dict[str, object]] = {}
+
+    for cluster_name, runtime in runtimes.items():
+        cluster_topics = list(runtime.get("topics") or [])
+        topics.extend(cluster_topics)
+        lag_by_partition.update(dict(runtime.get("lag_by_partition") or {}))
+        if runtime.get("last_error"):
+            errors.append(f"{cluster_name}: {runtime['last_error']}")
+        if runtime.get("last_message_at"):
+            last_message_at_values.append(str(runtime["last_message_at"]))
+        if runtime.get("last_commit_at"):
+            last_commit_at_values.append(str(runtime["last_commit_at"]))
+
+        breaker_state = _get_circuit_breaker(cluster_name).state
+        breaker_states.append(breaker_state)
+        clusters_payload[cluster_name] = {
+            "running": runtime["running"],
+            "connected": runtime["connected"],
+            "topics": cluster_topics,
+            "last_error": runtime["last_error"],
+            "last_message_at": runtime["last_message_at"],
+            "last_commit_at": runtime["last_commit_at"],
+            "last_commit_age_seconds": _timestamp_to_age_seconds(
+                runtime["last_commit_at"]
+            ),
+            "lag_by_partition": dict(runtime.get("lag_by_partition") or {}),
+            "lag_total": runtime["lag_total"],
+            "dlq_messages_total": runtime["dlq_messages_total"],
+            "circuit_breaker_state": breaker_state,
+        }
+
+    if any(state == "open" for state in breaker_states):
+        aggregate_breaker_state = "open"
+    elif any(state == "half-open" for state in breaker_states):
+        aggregate_breaker_state = "half-open"
+    else:
+        aggregate_breaker_state = "closed"
+
+    status = "healthy" if running and connected else "unhealthy"
     return {
         "status": status,
-        "running": consumer_runtime["running"],
-        "connected": consumer_runtime["connected"],
-        "topics": consumer_runtime["topics"],
-        "last_error": consumer_runtime["last_error"],
-        "last_message_at": consumer_runtime["last_message_at"],
-        "last_commit_at": consumer_runtime["last_commit_at"],
-        "last_commit_age_seconds": _timestamp_to_age_seconds(
-            consumer_runtime["last_commit_at"]
+        "running": running,
+        "connected": connected,
+        "topics": sorted(dict.fromkeys(topics)),
+        "last_error": "; ".join(errors) if errors else None,
+        "last_message_at": (
+            max(last_message_at_values)
+            if last_message_at_values
+            else None
         ),
-        "lag_by_partition": consumer_runtime["lag_by_partition"],
-        "lag_total": consumer_runtime["lag_total"],
-        "dlq_messages_total": consumer_runtime["dlq_messages_total"],
-        "circuit_breaker_state": circuit_breaker.state,
+        "last_commit_at": (
+            max(last_commit_at_values)
+            if last_commit_at_values
+            else None
+        ),
+        "last_commit_age_seconds": _timestamp_to_age_seconds(
+            max(last_commit_at_values) if last_commit_at_values else None
+        ),
+        "lag_by_partition": lag_by_partition,
+        "lag_total": sum(
+            int(runtime.get("lag_total") or 0) for runtime in runtimes.values()
+        ),
+        "dlq_messages_total": max(
+            [
+                int(runtime.get("dlq_messages_total") or 0)
+                for runtime in runtimes.values()
+            ]
+            or [0]
+        ),
+        "circuit_breaker_state": aggregate_breaker_state,
+        "clusters": clusters_payload,
     }
 
 
@@ -213,7 +323,8 @@ async def refresh_dead_letter_backlog_metric(
         pending_count = int(result.scalar_one() or 0)
 
     dlq_records_pending.set(pending_count)
-    consumer_runtime["dlq_messages_total"] = pending_count
+    for runtime in consumer_runtimes.values():
+        runtime["dlq_messages_total"] = pending_count
     return pending_count
 
 
@@ -415,68 +526,133 @@ async def replay_dead_letter_event_record(
     session_factory: Callable = AsyncSessionLocal,
 ) -> dict[str, object]:
     """Replay a persisted DLQ record through the normal ingestion path."""
-    async with session_factory() as session:
-        result = await session.execute(
-            select(DeadLetterEvent).where(DeadLetterEvent.id == dlq_event_id)
-        )
-        dlq_event = result.scalar_one_or_none()
-
-    if dlq_event is None:
-        raise LookupError("DLQ event not found")
-
-    replay_event = _build_replay_event(dlq_event)
-    inserted = False
-    replay_status = "skipped"
-
-    try:
-        if event_pipeline.should_process(replay_event):
-            replay_event = event_pipeline.transform(replay_event)
-            inserted = await _store_event_graph_with_retries(
-                session_factory,
-                replay_event,
-                max_retries=5,
+    with start_span(
+        "dlq.replay.record",
+        attributes={"db_monitor.dlq_event_id": dlq_event_id},
+    ):
+        async with session_factory() as session:
+            result = await session.execute(
+                select(DeadLetterEvent).where(
+                    DeadLetterEvent.id == dlq_event_id
+                )
             )
-            replay_status = "replayed" if inserted else "duplicate"
-            if inserted:
-                await _broadcast_event(replay_event)
+            dlq_event = result.scalar_one_or_none()
 
-        async with session_factory() as session:
-            async with session.begin():
-                result = await session.execute(
-                    select(DeadLetterEvent).where(
-                        DeadLetterEvent.id == dlq_event_id
-                    )
+        if dlq_event is None:
+            raise LookupError("DLQ event not found")
+
+        replay_event = _build_replay_event(dlq_event)
+        inserted = False
+        replay_status = "skipped"
+
+        try:
+            if event_pipeline.should_process(replay_event):
+                replay_event = event_pipeline.transform(replay_event)
+                inserted = await _store_event_graph_with_retries(
+                    session_factory,
+                    replay_event,
+                    max_retries=5,
                 )
-                replay_row = result.scalar_one()
-                replay_row.is_replayed = True
-                replay_row.replayed_at = datetime.now(timezone.utc)
-                replay_row.replay_error = None
+                replay_status = "replayed" if inserted else "duplicate"
+                if inserted:
+                    await _broadcast_event(replay_event)
 
-        consumer_runtime["dlq_messages_total"] = max(
-            await refresh_dead_letter_backlog_metric(session_factory),
-            0,
+            async with session_factory() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        select(DeadLetterEvent).where(
+                            DeadLetterEvent.id == dlq_event_id
+                        )
+                    )
+                    replay_row = result.scalar_one()
+                    replay_row.is_replayed = True
+                    replay_row.replayed_at = datetime.now(timezone.utc)
+                    replay_row.replay_error = None
+
+            consumer_runtime["dlq_messages_total"] = max(
+                await refresh_dead_letter_backlog_metric(session_factory),
+                0,
+            )
+            return {
+                "dlq_event_id": dlq_event_id,
+                "status": replay_status,
+                "inserted": inserted,
+                "event_id": replay_event.id,
+                "kafka_topic": replay_event.kafka_topic,
+                "kafka_partition": replay_event.kafka_partition,
+                "kafka_offset": replay_event.kafka_offset,
+            }
+        except Exception as exc:
+            async with session_factory() as session:
+                async with session.begin():
+                    result = await session.execute(
+                        select(DeadLetterEvent).where(
+                            DeadLetterEvent.id == dlq_event_id
+                        )
+                    )
+                    replay_row = result.scalar_one_or_none()
+                    if replay_row is not None:
+                        replay_row.replay_error = str(exc)
+            raise
+
+
+async def replay_dead_letter_event_records(
+    limit: int = 100,
+    include_replayed: bool = False,
+    session_factory: Callable = AsyncSessionLocal,
+) -> dict[str, object]:
+    """Replay multiple persisted DLQ records through ingestion."""
+    async with session_factory() as session:
+        statement = select(DeadLetterEvent.id)
+        if not include_replayed:
+            statement = statement.where(DeadLetterEvent.is_replayed.is_(False))
+        statement = statement.order_by(DeadLetterEvent.failed_at.asc()).limit(
+            limit
         )
-        return {
-            "dlq_event_id": dlq_event_id,
-            "status": replay_status,
-            "inserted": inserted,
-            "event_id": replay_event.id,
-            "kafka_topic": replay_event.kafka_topic,
-            "kafka_partition": replay_event.kafka_partition,
-            "kafka_offset": replay_event.kafka_offset,
-        }
-    except Exception as exc:
-        async with session_factory() as session:
-            async with session.begin():
-                result = await session.execute(
-                    select(DeadLetterEvent).where(
-                        DeadLetterEvent.id == dlq_event_id
-                    )
-                )
-                replay_row = result.scalar_one_or_none()
-                if replay_row is not None:
-                    replay_row.replay_error = str(exc)
-        raise
+        result = await session.execute(statement)
+        dlq_event_ids = list(result.scalars().all())
+
+    results: list[dict[str, object]] = []
+    replayed_count = 0
+    duplicate_count = 0
+    skipped_count = 0
+    failed_count = 0
+
+    for dlq_event_id in dlq_event_ids:
+        try:
+            replay_result = await replay_dead_letter_event_record(
+                dlq_event_id,
+                session_factory=session_factory,
+            )
+            results.append(replay_result)
+
+            status = replay_result.get("status")
+            if status == "replayed":
+                replayed_count += 1
+            elif status == "duplicate":
+                duplicate_count += 1
+            else:
+                skipped_count += 1
+        except Exception as exc:
+            failed_count += 1
+            results.append(
+                {
+                    "dlq_event_id": dlq_event_id,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "results": results,
+        "count": len(results),
+        "requested_limit": limit,
+        "include_replayed": include_replayed,
+        "replayed_count": replayed_count,
+        "duplicate_count": duplicate_count,
+        "skipped_count": skipped_count,
+        "failed_count": failed_count,
+    }
 
 
 async def _store_event_graph_with_retries(
@@ -649,7 +825,11 @@ async def send_to_dlq(
 
 
 async def consumer_task(
-    topics: list[str] = None,
+    cluster_name: str = "default",
+    bootstrap_servers: str | list[str] | None = None,
+    consumer_group: str | None = None,
+    topics: list[str] | None = None,
+    topic_partitions: dict[str, list[int]] | None = None,
     enable_dlq: bool = True,
     enable_batch: bool = True,
     batch_size: int = 100,
@@ -664,10 +844,16 @@ async def consumer_task(
     - Circuit breaker
     - Batch processing
     """
+    runtime = _get_consumer_runtime(cluster_name)
+    breaker = _get_circuit_breaker(cluster_name)
     if topics is None:
         topics = DEFAULT_TOPICS
+    bootstrap_servers = bootstrap_servers or KAFKA_BROKER
+    consumer_group = consumer_group or KAFKA_CONSUMER_GROUP
+    if topic_partitions is not None:
+        topics = sorted(topic_partitions.keys())
 
-    consumer_runtime.update(
+    runtime.update(
         {
             "running": True,
             "connected": False,
@@ -684,24 +870,31 @@ async def consumer_task(
         await refresh_dead_letter_backlog_metric()
     except Exception as exc:
         logger.warning(
-            "Failed to refresh dead-letter backlog metric on startup: %s",
+            (
+                "Failed to refresh dead-letter backlog metric on "
+                "startup for cluster %s: %s"
+            ),
+            cluster_name,
             exc,
         )
 
-    consumer = AIOKafkaConsumer(
-        *topics,
-        bootstrap_servers=KAFKA_BROKER,
-        group_id=KAFKA_CONSUMER_GROUP,
-        auto_offset_reset="earliest",
-        enable_auto_commit=False,
-        security_protocol=KAFKA_SECURITY_PROTOCOL,
-        ssl_context=KAFKA_SSL_CONTEXT,
-    )
+    consumer_kwargs = {
+        "bootstrap_servers": bootstrap_servers,
+        "group_id": consumer_group,
+        "auto_offset_reset": "earliest",
+        "enable_auto_commit": False,
+        "security_protocol": KAFKA_SECURITY_PROTOCOL,
+        "ssl_context": KAFKA_SSL_CONTEXT,
+    }
+    if topic_partitions is None:
+        consumer = AIOKafkaConsumer(*topics, **consumer_kwargs)
+    else:
+        consumer = AIOKafkaConsumer(**consumer_kwargs)
 
     producer = None
     if enable_dlq:
         producer = AIOKafkaProducer(
-            bootstrap_servers=KAFKA_BROKER,
+            bootstrap_servers=bootstrap_servers,
             security_protocol=KAFKA_SECURITY_PROTOCOL,
             ssl_context=KAFKA_SSL_CONTEXT,
         )
@@ -716,25 +909,48 @@ async def consumer_task(
     while not connected:
         try:
             await consumer.start()
+            if topic_partitions is not None:
+                assignments = [
+                    TopicPartition(topic_name, partition)
+                    for topic_name, partitions in topic_partitions.items()
+                    for partition in partitions
+                ]
+                consumer.assign(assignments)
             connected = True
-            consumer_runtime["connected"] = True
-            consumer_runtime["last_error"] = None
-            logger.info("Kafka consumer started, subscribed to %s", topics)
+            runtime["connected"] = True
+            runtime["last_error"] = None
+            if topic_partitions is None:
+                logger.info(
+                    "Kafka consumer '%s' started, subscribed to %s",
+                    cluster_name,
+                    topics,
+                )
+            else:
+                logger.info(
+                    (
+                        "Kafka consumer '%s' started with partition "
+                        "assignments %s"
+                    ),
+                    cluster_name,
+                    topic_partitions,
+                )
         except Exception as e:
             retry_count += 1
-            consumer_runtime["last_error"] = str(e)
+            runtime["last_error"] = str(e)
             if retry_count >= MAX_CONNECTION_RETRIES:
                 logger.error(
                     (
-                        "Failed to connect to Kafka after %d attempts: %s. "
+                        "Failed to connect to Kafka cluster '%s' after "
+                        "%d attempts: %s. "
                         "Exiting consumer."
                     ),
+                    cluster_name,
                     MAX_CONNECTION_RETRIES,
                     e,
                 )
                 if producer:
                     await producer.stop()
-                consumer_runtime["running"] = False
+                runtime["running"] = False
                 return
             delay = min(
                 CONNECTION_RETRY_DELAY * (2 ** min(retry_count - 1, 5)),
@@ -742,9 +958,10 @@ async def consumer_task(
             )
             logger.warning(
                 (
-                    "Kafka connection attempt %d/%d failed: %s. "
+                    "Kafka cluster '%s' connection attempt %d/%d failed: %s. "
                     "Retrying in %.1fs..."
                 ),
+                cluster_name,
                 retry_count,
                 MAX_CONNECTION_RETRIES,
                 e,
@@ -754,9 +971,13 @@ async def consumer_task(
 
     try:
         async for msg in consumer:
-            if not circuit_breaker.can_execute():
+            if not breaker.can_execute():
                 logger.warning(
-                    "Circuit breaker open, skipping message processing"
+                    (
+                        "Circuit breaker open for cluster '%s', "
+                        "skipping message processing"
+                    ),
+                    cluster_name,
                 )
                 await asyncio.sleep(1.0)
                 continue
@@ -772,9 +993,11 @@ async def consumer_task(
 
                 parsed = parse_event_payload(data)
                 operation = extract_operation(parsed.event_data or {})
-                consumer_runtime["last_message_at"] = _utc_now_iso()
+                runtime["last_message_at"] = _utc_now_iso()
                 _update_runtime_lag(
                     consumer,
+                    runtime,
+                    cluster_name,
                     msg.topic,
                     msg.partition,
                     msg.offset,
@@ -801,58 +1024,80 @@ async def consumer_task(
                     operation=event.operation or "unknown",
                 ).inc()
 
-                if not event_pipeline.should_process(event):
-                    logger.debug(
-                        "Event %s dropped by pipeline rules.",
-                        parsed.event_type,
-                    )
-                    circuit_breaker.record_success()
-                    continue
+                with start_span(
+                    "kafka.consumer.message",
+                    attributes={
+                        "db_monitor.cluster": cluster_name,
+                        "messaging.system": "kafka",
+                        "messaging.destination.name": msg.topic,
+                        "messaging.kafka.partition": msg.partition,
+                        "messaging.kafka.offset": msg.offset,
+                    },
+                ):
+                    if not event_pipeline.should_process(event):
+                        logger.debug(
+                            "Event %s dropped by pipeline rules.",
+                            parsed.event_type,
+                        )
+                        breaker.record_success()
+                        continue
 
-                event = event_pipeline.transform(event)
+                    event = event_pipeline.transform(event)
 
-                if enable_batch:
-                    if not batch:
-                        last_batch_time = asyncio.get_event_loop().time()
-                    batch.append((event, data))
-                    batch_elapsed = (
-                        asyncio.get_event_loop().time() - last_batch_time
-                    )
-                    if (
-                        len(batch) >= batch_size
-                        or batch_elapsed >= batch_timeout
-                    ):
-                        await _process_batch(
-                            batch,
+                    if enable_batch:
+                        if not batch:
+                            last_batch_time = asyncio.get_event_loop().time()
+                        batch.append((event, data))
+                        batch_elapsed = (
+                            asyncio.get_event_loop().time() - last_batch_time
+                        )
+                        if (
+                            len(batch) >= batch_size
+                            or batch_elapsed >= batch_timeout
+                        ):
+                            await _process_batch(
+                                batch,
+                                consumer,
+                                producer,
+                                enable_dlq,
+                                runtime,
+                            )
+                            batch = []
+                    else:
+                        await _process_single_event(
+                            event,
                             consumer,
                             producer,
                             enable_dlq,
+                            data,
+                            runtime,
                         )
-                        batch = []
-                else:
-                    await _process_single_event(
-                        event, consumer, producer, enable_dlq, data
-                    )
 
-                circuit_breaker.record_success()
+                breaker.record_success()
 
             except asyncio.CancelledError:
                 logger.info("Consumer task received cancellation signal")
                 raise
             except Exception as e:
                 logger.exception("Error processing message: %s", e)
-                circuit_breaker.record_failure()
+                breaker.record_failure()
 
         if batch:
-            await _process_batch(batch, consumer, producer, enable_dlq)
+            await _process_batch(
+                batch,
+                consumer,
+                producer,
+                enable_dlq,
+                runtime,
+            )
 
     except asyncio.CancelledError:
         logger.info("Consumer task received cancellation signal (outer)")
         raise
     finally:
-        logger.info("Stopping Kafka consumer")
-        consumer_runtime["running"] = False
-        consumer_runtime["connected"] = False
+        logger.info("Stopping Kafka consumer '%s'", cluster_name)
+        runtime["running"] = False
+        runtime["connected"] = False
         await consumer.stop()
         if producer:
             await producer.stop()
@@ -863,65 +1108,74 @@ async def _process_batch(
     consumer: AIOKafkaConsumer,
     producer: Optional[AIOKafkaProducer],
     enable_dlq: bool,
+    runtime: dict[str, object],
 ):
     """Process a batch of events."""
-    for event, raw_data in batch:
-        try:
-            inserted = await _store_event_graph_with_retries(
-                AsyncSessionLocal,
-                event,
-                max_retries=5,
-            )
-            if not inserted:
-                logger.info(
-                    (
-                        "Skipping duplicate Kafka event topic=%s "
-                        "partition=%s offset=%s"
-                    ),
-                    event.kafka_topic,
-                    event.kafka_partition,
-                    event.kafka_offset,
-                )
-                continue
-
-            await _broadcast_event(event)
-
-            events_processed_total.labels(
-                service=event.service_name or "unknown",
-                operation=event.operation or "unknown",
-            ).inc()
-        except Exception as exc:
-            logger.error("Failed to process event after retries: %s", exc)
-            events_failed_total.labels(
-                service=event.service_name or "unknown",
-                error_type=type(exc).__name__,
-            ).inc()
-            if enable_dlq:
-                handled = await send_to_dlq(
-                    producer,
+    with start_span(
+        "kafka.process.batch",
+        attributes={
+            "db_monitor.batch_size": len(batch),
+            "db_monitor.dlq_enabled": enable_dlq,
+        },
+    ):
+        for event, raw_data in batch:
+            try:
+                inserted = await _store_event_graph_with_retries(
+                    AsyncSessionLocal,
                     event,
-                    str(exc),
-                    raw_data.encode(),
+                    max_retries=5,
                 )
-                if not handled:
-                    logger.error(
+                if not inserted:
+                    logger.info(
                         (
-                            "Skipping commit because DLQ persistence failed "
-                            "for %s/%s/%s"
+                            "Skipping duplicate Kafka event topic=%s "
+                            "partition=%s offset=%s"
                         ),
                         event.kafka_topic,
                         event.kafka_partition,
                         event.kafka_offset,
                     )
+                    continue
+
+                await _broadcast_event(event)
+
+                events_processed_total.labels(
+                    service=event.service_name or "unknown",
+                    operation=event.operation or "unknown",
+                ).inc()
+            except Exception as exc:
+                logger.error("Failed to process event after retries: %s", exc)
+                events_failed_total.labels(
+                    service=event.service_name or "unknown",
+                    error_type=type(exc).__name__,
+                ).inc()
+                if enable_dlq:
+                    handled = await send_to_dlq(
+                        producer,
+                        event,
+                        str(exc),
+                        raw_data.encode(),
+                    )
+                    if not handled:
+                        logger.error(
+                            (
+                                "Skipping commit because DLQ persistence "
+                                "failed "
+                                "for %s/%s/%s"
+                            ),
+                            event.kafka_topic,
+                            event.kafka_partition,
+                            event.kafka_offset,
+                        )
+                        return
+                else:
+                    logger.error(
+                        "Skipping commit because DLQ is disabled for %s/%s/%s",
+                        event.kafka_topic,
+                        event.kafka_partition,
+                        event.kafka_offset,
+                    )
                     return
-            else:
-                logger.error(
-                    "Skipping commit because DLQ is disabled for %s/%s/%s",
-                    event.kafka_topic,
-                    event.kafka_partition,
-                    event.kafka_offset,
-                )
-                return
 
     try:
         with kafka_commit_duration_seconds.time():
@@ -929,7 +1183,7 @@ async def _process_batch(
         await persist_consumer_checkpoints(
             [event for event, _raw_data in batch],
         )
-        _record_successful_commit()
+        _record_successful_commit(runtime)
     except Exception as exc:
         logger.exception("Failed to commit Kafka offsets: %s", exc)
 
@@ -952,13 +1206,21 @@ def _event_to_ws_payload(event: KafkaEvent) -> dict:
 
 async def _broadcast_event(event: KafkaEvent) -> None:
     try:
-        await ws_manager.broadcast(
-            {
-                "type": "new_event",
-                "event": _event_to_ws_payload(event),
+        with start_span(
+            "websocket.broadcast.event",
+            attributes={
+                "db_monitor.event_id": event.id,
+                "db_monitor.service": event.service_name,
+                "db_monitor.operation": event.operation,
             },
-            event_id=event.id,
-        )
+        ):
+            await ws_manager.broadcast(
+                {
+                    "type": "new_event",
+                    "event": _event_to_ws_payload(event),
+                },
+                event_id=event.id,
+            )
     except Exception as e:
         logger.warning("Failed to broadcast event via WebSocket: %s", e)
 
@@ -969,32 +1231,43 @@ async def _process_single_event(
     producer: Optional[AIOKafkaProducer],
     enable_dlq: bool,
     raw_data: str,
+    runtime: dict[str, object],
 ):
     """Process a single event."""
     try:
-        inserted = await _store_event_graph_with_retries(
-            AsyncSessionLocal,
-            event,
-            max_retries=5,
-        )
-        if not inserted:
-            logger.info(
-                (
-                    "Skipping duplicate Kafka event topic=%s "
-                    "partition=%s offset=%s"
-                ),
-                event.kafka_topic,
-                event.kafka_partition,
-                event.kafka_offset,
+        with start_span(
+            "kafka.process.event",
+            attributes={
+                "messaging.destination.name": event.kafka_topic,
+                "messaging.kafka.partition": event.kafka_partition,
+                "messaging.kafka.offset": event.kafka_offset,
+                "db_monitor.service": event.service_name,
+                "db_monitor.operation": event.operation,
+            },
+        ):
+            inserted = await _store_event_graph_with_retries(
+                AsyncSessionLocal,
+                event,
+                max_retries=5,
             )
-            return
+            if not inserted:
+                logger.info(
+                    (
+                        "Skipping duplicate Kafka event topic=%s "
+                        "partition=%s offset=%s"
+                    ),
+                    event.kafka_topic,
+                    event.kafka_partition,
+                    event.kafka_offset,
+                )
+                return
 
-        await _broadcast_event(event)
+            await _broadcast_event(event)
 
-        events_processed_total.labels(
-            service=event.service_name or "unknown",
-            operation=event.operation or "unknown",
-        ).inc()
+            events_processed_total.labels(
+                service=event.service_name or "unknown",
+                operation=event.operation or "unknown",
+            ).inc()
     except Exception as exc:
         logger.error("Failed to process event after retries: %s", exc)
         events_failed_total.labels(
@@ -1017,6 +1290,6 @@ async def _process_single_event(
         with kafka_commit_duration_seconds.time():
             await consumer.commit()
         await persist_consumer_checkpoints([event])
-        _record_successful_commit()
+        _record_successful_commit(runtime)
     except Exception as exc:
         logger.exception("Failed to commit Kafka offsets: %s", exc)

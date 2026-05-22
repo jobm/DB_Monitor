@@ -121,6 +121,140 @@ def test_config_reports_missing_secret_file_with_remediation(
 
     with pytest.raises(
         ValueError,
-        match="JWT_SECRET_FILE points to '.*missing_jwt_secret'.*set JWT_SECRET directly",
+        match=(
+            "JWT_SECRET_FILE points to '.*missing_jwt_secret'.*"
+            "set JWT_SECRET directly"
+        ),
     ):
         _load_config_module("config_missing_secret_file")
+
+
+def test_config_loads_multiple_kafka_clusters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Kafka cluster config should parse multiple cluster definitions."""
+    monkeypatch.setenv(
+        "KAFKA_CLUSTERS",
+        (
+            '[{"name":"primary","bootstrap_servers":"kafka-a:9092",'
+            '"topics":["orders.events"],"consumer_group":"group-a"},'
+            '{"name":"secondary","bootstrap_servers":["kafka-b:9092"],'
+            '"topics":"shipping.events"}]'
+        ),
+    )
+
+    config = _load_config_module("config_multiple_kafka_clusters")
+
+    assert config.KAFKA_CLUSTERS == [
+        {
+            "name": "primary",
+            "bootstrap_servers": ["kafka-a:9092"],
+            "topics": ["orders.events"],
+            "topic_partitions": None,
+            "consumer_group": "group-a",
+        },
+        {
+            "name": "secondary",
+            "bootstrap_servers": ["kafka-b:9092"],
+            "topics": ["shipping.events"],
+            "topic_partitions": None,
+            "consumer_group": config.KAFKA_CONSUMER_GROUP,
+        },
+    ]
+
+
+def test_config_rejects_duplicate_kafka_cluster_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Kafka cluster names must be unique for health and task wiring."""
+    monkeypatch.setenv(
+        "KAFKA_CLUSTERS",
+        (
+            '[{"name":"dup","bootstrap_servers":"kafka-a:9092"},'
+            '{"name":"dup","bootstrap_servers":"kafka-b:9092"}]'
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Duplicate Kafka cluster name 'dup'",
+    ):
+        _load_config_module("config_duplicate_kafka_clusters")
+
+
+def test_config_loads_topic_partition_assignments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cluster config should support explicit topic-partition placement."""
+    monkeypatch.setenv(
+        "KAFKA_CLUSTERS",
+        (
+            '[{"name":"primary","bootstrap_servers":"kafka-a:9092",'
+            '"topic_partitions":{"orders.events":[0,2],'
+            '"shipping.events":"1,3"},"consumer_group":"group-a"}]'
+        ),
+    )
+
+    config = _load_config_module("config_topic_partitions")
+
+    assert config.KAFKA_CLUSTERS == [
+        {
+            "name": "primary",
+            "bootstrap_servers": ["kafka-a:9092"],
+            "topics": ["orders.events", "shipping.events"],
+            "topic_partitions": {
+                "orders.events": [0, 2],
+                "shipping.events": [1, 3],
+            },
+            "consumer_group": "group-a",
+        }
+    ]
+
+
+def test_config_rejects_mismatched_topics_and_topic_partitions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit placement should not silently drift from the topic list."""
+    monkeypatch.setenv(
+        "KAFKA_CLUSTERS",
+        (
+            '[{"name":"primary","bootstrap_servers":"kafka-a:9092",'
+            '"topics":["orders.events"],'
+            '"topic_partitions":{"shipping.events":[0]}}]'
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="topics and topic_partitions must describe the same topics",
+    ):
+        _load_config_module("config_mismatched_topic_partitions")
+
+
+def test_config_requires_otlp_endpoint_when_tracing_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tracing config should fail fast without an OTLP collector URL."""
+    monkeypatch.setenv("OTEL_TRACING_ENABLED", "true")
+    monkeypatch.setenv("OTEL_EXPORTER", "otlp")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+    with pytest.raises(
+        ValueError,
+        match="OTEL_EXPORTER_OTLP_ENDPOINT is required",
+    ):
+        _load_config_module("config_missing_otlp_endpoint")
+
+
+def test_config_accepts_console_exporter_when_tracing_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local tracing should allow the console exporter without an endpoint."""
+    monkeypatch.setenv("OTEL_TRACING_ENABLED", "true")
+    monkeypatch.setenv("OTEL_EXPORTER", "console")
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+    config = _load_config_module("config_console_tracing")
+
+    assert config.OTEL_TRACING_ENABLED is True
+    assert config.OTEL_EXPORTER == "console"

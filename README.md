@@ -32,8 +32,15 @@ The monitor database is exposed on `5437`.
 ## Current capabilities
 
 - Multi-topic Kafka consumption with manual commits
+- Multi-cluster Kafka consumption with per-cluster consumer tasks
 - Retry, batching, DLQ forwarding, and circuit-breaker protection
-- Persistent Kafka checkpoint snapshots and DLQ replay controls for recovery
+- Optional custom event processors inside the ingestion pipeline
+- Persistent Kafka checkpoint snapshots and single/batch DLQ replay controls
+   for recovery
+- Partition-aware Kafka placement controls through explicit topic assignments
+- Dedicated Textual admin console for readiness, key management,
+  checkpoints, and DLQ replay
+- Optional OpenTelemetry tracing for HTTP, database, Kafka, and websocket paths
 - Schema discovery for monitored tables and columns
 - Column-level change history and point-in-time lookup
 - API-key lifecycle management plus short-lived bearer and WebSocket session tokens
@@ -159,10 +166,12 @@ Viewer endpoints:
 Admin endpoint:
 
 - `POST /auth/keys`
+- `GET /auth/keys`
 - `POST /auth/keys/{key_id}/rotate`
 - `POST /auth/keys/{key_id}/revoke`
 - `GET /admin/checkpoints`
 - `GET /admin/dlq`
+- `POST /admin/dlq/replay`
 - `POST /admin/dlq/{dlq_event_id}/replay`
 
 Realtime endpoint:
@@ -220,8 +229,16 @@ make monitor-up
 make monitor-test
 make monitor-test-integration
 make monitor-test-smoke
+make monitor-test-scale
 make monitor-tui
 ```
+
+The Textual dashboard now includes an admin console for admin credentials.
+After connecting with an admin API key, press `a` from the main dashboard to
+inspect readiness, API key inventory, consumer checkpoints, and DLQ entries.
+From the same console you can create viewer or admin keys, rotate or revoke a
+selected key, and replay either a single selected DLQ record or the current
+batch from inside the TUI.
 
 `monitor-test-integration` expects the stack to already be running on `localhost:8000`.
 It now validates the admin checkpoint and DLQ replay recovery endpoints in
@@ -235,6 +252,15 @@ sub-100% success rate, or a p95 above 2000 ms.
 
 `monitor-test-smoke` expects `DB_MONITOR_ADMIN_API_KEY` to be set unless the
 stack is still in first-run bootstrap mode.
+
+`monitor-test-scale` launches two local FastAPI replicas on separate ports,
+subscribes to a websocket on one replica, triggers DLQ replay on the other,
+and fails unless the event crosses replicas through the Postgres websocket
+backplane. When `DB_MONITOR_ADMIN_API_KEY` is not set, the script can mint and
+revoke a short-lived admin key directly in the local monitor database for the
+duration of the validation. Use it after infrastructure or websocket changes
+when you need to confirm that horizontal scaling still preserves live event
+delivery.
 
 Operational recovery and live-validation steps are documented in
 `docs/runbooks/recovery-and-validation.md`.

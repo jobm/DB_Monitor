@@ -27,6 +27,7 @@ from consumer_service import (
     list_consumer_checkpoints_snapshot,
     list_dead_letter_events,
     replay_dead_letter_event_record,
+    replay_dead_letter_event_records,
 )
 from extensions import AsyncSessionLocal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -118,6 +119,44 @@ def _api_key_response(api_key: ApiKey, raw_key: str, message: str) -> dict:
     }
 
 
+def _api_key_status(api_key: ApiKey) -> str:
+    """Return a stable operator-facing status for an API key."""
+    if api_key.revoked_at is not None:
+        return "revoked"
+    if api_key.expires_at is not None and api_key.expires_at <= _utc_now():
+        return "expired"
+    if not api_key.is_active:
+        return "inactive"
+    return "active"
+
+
+def _serialize_api_key_summary(
+    api_key: ApiKey,
+    current_api_key_id: int,
+) -> dict[str, object]:
+    """Serialize API key inventory rows for admin tooling."""
+    status = _api_key_status(api_key)
+    return {
+        "id": api_key.id,
+        "owner_name": api_key.owner_name,
+        "role": api_key.role,
+        "status": status,
+        "is_active": api_key.is_active,
+        "created_at": (
+            api_key.created_at.isoformat() if api_key.created_at else None
+        ),
+        "expires_at": (
+            api_key.expires_at.isoformat() if api_key.expires_at else None
+        ),
+        "revoked_at": (
+            api_key.revoked_at.isoformat() if api_key.revoked_at else None
+        ),
+        "current_authenticated": api_key.id == current_api_key_id,
+        "can_rotate": status == "active",
+        "can_revoke": status == "active" and api_key.id != current_api_key_id,
+    }
+
+
 def _readiness_payload() -> dict[str, object]:
     """Build readiness payload from current lifecycle and consumer state."""
     consumer_health = get_consumer_health()
@@ -192,7 +231,8 @@ def _resolve_table_reference(
         raise HTTPException(
             status_code=400,
             detail=(
-                "Invalid table reference. Expected '<service>.<table>', such as "
+                "Invalid table reference. Expected '<service>.<table>', "
+                "such as "
                 "'orderdb.orders'."
             ),
         )
@@ -219,7 +259,8 @@ async def get_table(service_name: str, table_name: str):
             status_code=404,
             detail=(
                 f"Table {service_name}.{table_name} was not found. "
-                "Check GET /tables to confirm discovery has completed for that table."
+                "Check GET /tables to confirm discovery has completed "
+                "for that table."
             ),
         )
     return table
@@ -237,7 +278,8 @@ async def get_table_columns(service_name: str, table_name: str):
             status_code=404,
             detail=(
                 f"Table {service_name}.{table_name} was not found. "
-                "Check GET /tables to confirm discovery has completed for that table."
+                "Check GET /tables to confirm discovery has completed "
+                "for that table."
             ),
         )
     return {"columns": table.get("columns", [])}
@@ -384,8 +426,9 @@ async def get_changes(
         raise HTTPException(
             status_code=404,
             detail=(
-                f"Table {resolved_service_name}.{resolved_table_name} was not found. "
-                "Check GET /tables to confirm the table has been discovered from live events."
+                f"Table {resolved_service_name}.{resolved_table_name} "
+                "was not found. Check GET /tables to confirm the table "
+                "has been discovered from live events."
             ),
         )
 
@@ -401,7 +444,8 @@ async def get_changes(
                 detail=(
                     f"Column {column_name} was not found on "
                     f"{resolved_service_name}.{resolved_table_name}. "
-                    "Check GET /tables/{service_name}/{table_name}/columns for valid names."
+                    "Check GET /tables/{service_name}/{table_name}/"
+                    "columns for valid names."
                 ),
             )
 
@@ -653,6 +697,32 @@ async def create_api_key(
             )
 
 
+@router.get("/auth/keys")
+async def list_api_keys(
+    include_inactive: bool = False,
+    creator_api_key: ApiKey = Depends(require_admin_role),
+):
+    """List API keys for operator inventory and lifecycle actions."""
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(ApiKey).order_by(ApiKey.created_at.desc(), ApiKey.id.desc())
+        )
+        api_keys = result.scalars().all()
+
+    serialized = [
+        _serialize_api_key_summary(api_key, creator_api_key.id)
+        for api_key in api_keys
+    ]
+    if not include_inactive:
+        serialized = [row for row in serialized if row["status"] == "active"]
+
+    return {
+        "keys": serialized,
+        "count": len(serialized),
+        "current_api_key_id": creator_api_key.id,
+    }
+
+
 @router.post("/auth/keys/{key_id}/rotate")
 async def rotate_api_key(
     key_id: int,
@@ -758,7 +828,8 @@ async def bootstrap_admin_key(
             status_code=403,
             detail=(
                 "Bootstrap endpoint is disabled in this environment. "
-                "For first-run local setup, start the app with ALLOW_BOOTSTRAP=true."
+                "For first-run local setup, start the app with "
+                "ALLOW_BOOTSTRAP=true."
             ),
         )
 
@@ -776,7 +847,8 @@ async def bootstrap_admin_key(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Cannot bootstrap because the system already has active API keys. "
+                    "Cannot bootstrap because the system already has "
+                    "active API keys. "
                     "Create or rotate keys through /auth/keys instead."
                 ),
             )
@@ -833,6 +905,20 @@ async def get_dead_letter_events(
     }
 
 
+@router.post("/admin/dlq/replay")
+async def replay_dead_letter_events(
+    limit: int = Query(100, ge=1, le=1000),
+    include_replayed: bool = False,
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Replay multiple persisted DLQ records through ingestion."""
+    del admin_api_key
+    return await replay_dead_letter_event_records(
+        limit=limit,
+        include_replayed=include_replayed,
+    )
+
+
 @router.post("/admin/dlq/{dlq_event_id}/replay")
 async def replay_dead_letter_event(
     dlq_event_id: int,
@@ -846,6 +932,7 @@ async def replay_dead_letter_event(
         raise HTTPException(
             status_code=404,
             detail=(
-                f"{exc}. Check GET /admin/dlq for currently available replay targets."
+                f"{exc}. Check GET /admin/dlq for currently available "
+                "replay targets."
             ),
         ) from exc

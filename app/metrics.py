@@ -82,7 +82,9 @@ db_pool_utilization_ratio = Gauge(
 )
 
 consumer_lag = Gauge(
-    "db_monitor_consumer_lag", "Kafka consumer lag", ["topic", "partition"]
+    "db_monitor_consumer_lag",
+    "Kafka consumer lag",
+    ["cluster", "topic", "partition"],
 )
 
 dlq_messages_total = Counter(

@@ -6,16 +6,27 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 from audit_log import AuditLogEntry, audit_log_writer
-from auth import authenticate_credentials, get_current_api_key
-from config import BATCH_ENABLED, BATCH_SIZE, DLQ_ENABLED, KAFKA_TOPICS
+from auth import authenticate_credentials
+from config import (
+    BATCH_ENABLED,
+    BATCH_SIZE,
+    DLQ_ENABLED,
+    KAFKA_CLUSTERS,
+    OTEL_EXPORTER,
+    OTEL_EXPORTER_OTLP_ENDPOINT,
+    OTEL_EXPORTER_OTLP_HEADERS,
+    OTEL_SERVICE_NAME,
+    OTEL_TRACING_ENABLED,
+)
 from consumer_service import consumer_task
-from extensions import AsyncSessionLocal
+from extensions import engine
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from lifecycle_manager import lifecycle_manager
 from metrics import api_request_duration_seconds, failed_auth_attempts_total
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from routes import router
+from tracing import current_trace_context, initialize_tracing
 from ws_manager import ws_manager
 
 
@@ -27,6 +38,7 @@ class StructuredFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
+        log_data.update(current_trace_context())
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_data)
@@ -36,6 +48,21 @@ handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(StructuredFormatter())
 logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger(__name__)
+
+
+def _configure_tracing(app: FastAPI) -> None:
+    """Initialize optional distributed tracing for the app."""
+    if not OTEL_TRACING_ENABLED:
+        return
+
+    initialize_tracing(
+        app=app,
+        engine=engine,
+        service_name=OTEL_SERVICE_NAME,
+        exporter=OTEL_EXPORTER,
+        otlp_endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+        otlp_headers=OTEL_EXPORTER_OTLP_HEADERS,
+    )
 
 
 def _credential_type(
@@ -62,7 +89,7 @@ async def lifespan_manager(app: FastAPI):
 
     await lifecycle_manager.startup()
 
-    consumer_task_instance = None
+    consumer_task_instances: list[asyncio.Task] = []
     audit_log_task = None
     ws_backplane_task = None
     try:
@@ -76,17 +103,30 @@ async def lifespan_manager(app: FastAPI):
         if ws_backplane_task is not None:
             lifecycle_manager.register_task(ws_backplane_task)
 
-        consumer_task_instance = asyncio.create_task(
-            consumer_task(
-                topics=KAFKA_TOPICS,
-                enable_dlq=DLQ_ENABLED,
-                enable_batch=BATCH_ENABLED,
-                batch_size=BATCH_SIZE,
-            ),
-            name="kafka_consumer",
+        for cluster in KAFKA_CLUSTERS:
+            cluster_name = str(cluster["name"])
+            task = asyncio.create_task(
+                consumer_task(
+                    cluster_name=cluster_name,
+                    bootstrap_servers=cluster["bootstrap_servers"],
+                    consumer_group=str(cluster["consumer_group"]),
+                    topics=list(cluster["topics"]),
+                    topic_partitions=cluster.get("topic_partitions"),
+                    enable_dlq=DLQ_ENABLED,
+                    enable_batch=BATCH_ENABLED,
+                    batch_size=BATCH_SIZE,
+                ),
+                name=f"kafka_consumer_{cluster_name}",
+            )
+            consumer_task_instances.append(task)
+            lifecycle_manager.register_task(task)
+
+        logger.info(
+            "Consumer tasks started",
+            extra={
+                "clusters": [cluster["name"] for cluster in KAFKA_CLUSTERS],
+            },
         )
-        lifecycle_manager.register_task(consumer_task_instance)
-        logger.info("Consumer task started", extra={"topics": KAFKA_TOPICS})
 
         yield
 
@@ -105,6 +145,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan_manager,
 )
+
+_configure_tracing(app)
 
 app.include_router(router)
 

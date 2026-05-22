@@ -96,7 +96,28 @@ After replay:
 - Check `/events` or `/changes` when you need to confirm the user-visible data
   result.
 
-## 4. Live Validation Order After Deploy
+## 4. Replay A Batch Of DLQ Records
+
+Replay multiple persisted DLQ rows in failed-at order.
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer $DB_MONITOR_ACCESS_TOKEN" \
+  "http://localhost:8000/admin/dlq/replay?limit=25"
+```
+
+Useful cases:
+
+- recovering a backlog after a transient downstream outage
+- replaying a small operator-reviewed batch instead of one row at a time
+
+Recommended follow-up:
+
+- review `failed_count` in the response
+- re-check `GET /admin/dlq`
+- confirm `/readyz` and `/admin/checkpoints` after the batch finishes
+
+## 5. Live Validation Order After Deploy
 
 Use this order after a production-style change:
 
@@ -128,7 +149,24 @@ uv run python ../scripts/load_test.py \
   --targets events,stats,tables,checkpoints
 ```
 
-## 5. Escalation Guide
+5. Run the horizontal-scaling validation when the websocket path,
+   backplane, or multi-replica deployment behavior changed.
+
+```bash
+make monitor-test-scale
+```
+
+Expected result:
+
+- two local replicas start on separate ports
+- one replica receives a websocket event after replay is triggered on the
+  other replica
+- the validator can self-provision a temporary admin key for local runs when
+  `DB_MONITOR_ADMIN_API_KEY` is not set
+- the script exits non-zero and prints replica log tails when cross-replica
+  delivery fails
+
+## 6. Escalation Guide
 
 Escalate before replaying repeatedly when:
 

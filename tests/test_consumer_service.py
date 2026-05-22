@@ -26,6 +26,17 @@ class FakeTransaction:
         return None
 
 
+class FakeScalarListResult:
+    def __init__(self, values=None):
+        self._values = values or []
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return list(self._values)
+
+
 class FakeSession:
     async def __aenter__(self):
         return self
@@ -35,6 +46,19 @@ class FakeSession:
 
     def begin(self):
         return FakeTransaction()
+
+    async def execute(self, statement):
+        del statement
+        return FakeScalarListResult()
+
+
+class FakeScalarIdsSession(FakeSession):
+    def __init__(self, values):
+        self._values = values
+
+    async def execute(self, statement):
+        del statement
+        return FakeScalarListResult(self._values)
 
 
 class FakeScalarOneResult:
@@ -60,6 +84,30 @@ class FakeConsumer:
 
     async def commit(self):
         self.commit_calls += 1
+
+
+class FakeAssignedConsumer:
+    def __init__(self, *topics, **kwargs):
+        self.topics = topics
+        self.kwargs = kwargs
+        self.started = False
+        self.stopped = False
+        self.assignments = []
+
+    async def start(self):
+        self.started = True
+
+    def assign(self, partitions):
+        self.assignments = list(partitions)
+
+    async def stop(self):
+        self.stopped = True
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
 
 
 @pytest.mark.anyio
@@ -183,7 +231,8 @@ async def test_store_event_graph_skips_changes_for_duplicates(monkeypatch):
     assert change_calls == 0
 
 
-def test_checkpoint_rows_for_events_keeps_highest_offset_per_partition() -> None:
+def test_checkpoint_rows_for_events_keeps_highest_offset_per_partition(
+) -> None:
     now = datetime.now(timezone.utc)
     events = [
         KafkaEvent(
@@ -265,7 +314,7 @@ async def test_process_single_event_commits_after_dlq_persist(monkeypatch):
     async def fake_persist_checkpoints(events):
         checkpoint_events.append(events)
 
-    def fake_record_successful_commit():
+    def fake_record_successful_commit(_runtime):
         commit_recorded.append(True)
 
     monkeypatch.setattr(
@@ -296,11 +345,55 @@ async def test_process_single_event_commits_after_dlq_persist(monkeypatch):
         producer=None,
         enable_dlq=True,
         raw_data=event.raw_payload,
+        runtime=consumer_service.consumer_runtime,
     )
 
     assert consumer.commit_calls == 1
     assert checkpoint_events == [[event]]
     assert commit_recorded == [True]
+
+
+@pytest.mark.anyio
+async def test_consumer_task_assigns_explicit_topic_partitions(monkeypatch):
+    fake_consumer = None
+
+    def fake_consumer_factory(*topics, **kwargs):
+        nonlocal fake_consumer
+        fake_consumer = FakeAssignedConsumer(*topics, **kwargs)
+        return fake_consumer
+
+    async def fake_refresh_dead_letter_backlog_metric(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr(
+        consumer_service,
+        "AIOKafkaConsumer",
+        fake_consumer_factory,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "refresh_dead_letter_backlog_metric",
+        fake_refresh_dead_letter_backlog_metric,
+    )
+
+    await consumer_service.consumer_task(
+        cluster_name="placement-test",
+        bootstrap_servers=["kafka-a:9092"],
+        consumer_group="group-a",
+        topic_partitions={"orders.events": [0, 2]},
+        enable_dlq=False,
+        enable_batch=False,
+    )
+
+    assert fake_consumer is not None
+    assert fake_consumer.started is True
+    assert fake_consumer.stopped is True
+    assert fake_consumer.topics == ()
+    assert fake_consumer.kwargs["group_id"] == "group-a"
+    assert [
+        (partition.topic, partition.partition)
+        for partition in fake_consumer.assignments
+    ] == [("orders.events", 0), ("orders.events", 2)]
 
 
 @pytest.mark.anyio
@@ -315,3 +408,93 @@ async def test_refresh_dead_letter_backlog_metric_updates_runtime_and_gauge():
     assert pending_count == 3
     assert consumer_service.consumer_runtime["dlq_messages_total"] == 3
     assert consumer_service.dlq_records_pending._value.get() == 3
+
+
+@pytest.mark.anyio
+async def test_replay_dead_letter_event_records_aggregates_results(
+    monkeypatch,
+):
+    async def fake_replay_dead_letter_event_record(
+        dlq_event_id: int,
+        session_factory=None,
+    ):
+        del session_factory
+        if dlq_event_id == 1:
+            return {"dlq_event_id": 1, "status": "replayed"}
+        if dlq_event_id == 2:
+            return {"dlq_event_id": 2, "status": "duplicate"}
+        raise RuntimeError("replay failed")
+
+    monkeypatch.setattr(
+        consumer_service,
+        "replay_dead_letter_event_record",
+        fake_replay_dead_letter_event_record,
+    )
+
+    result = await consumer_service.replay_dead_letter_event_records(
+        limit=3,
+        session_factory=lambda: FakeScalarIdsSession([1, 2, 3]),
+    )
+
+    assert result["count"] == 3
+    assert result["replayed_count"] == 1
+    assert result["duplicate_count"] == 1
+    assert result["failed_count"] == 1
+    assert result["results"][2]["status"] == "failed"
+
+
+def test_get_consumer_health_aggregates_multiple_cluster_runtimes() -> None:
+    consumer_service.consumer_runtime.clear()
+    consumer_service.consumer_runtime.update(
+        {
+            "running": True,
+            "connected": True,
+            "topics": ["orders.events"],
+            "last_error": None,
+            "last_message_at": "2026-05-22T10:00:00+00:00",
+            "last_commit_at": "2026-05-22T10:00:01+00:00",
+            "lag_by_partition": {"default:orders.events:0": 1},
+            "lag_total": 1,
+            "dlq_messages_total": 2,
+        }
+    )
+    consumer_service.consumer_runtimes.clear()
+    consumer_service.consumer_runtimes.update(
+        {
+            "default": consumer_service.consumer_runtime,
+            "secondary": {
+                "running": True,
+                "connected": False,
+                "topics": ["shipping.events"],
+                "last_error": "timeout",
+                "last_message_at": "2026-05-22T10:00:02+00:00",
+                "last_commit_at": None,
+                "lag_by_partition": {"secondary:shipping.events:1": 4},
+                "lag_total": 4,
+                "dlq_messages_total": 2,
+            },
+        }
+    )
+    consumer_service.cluster_circuit_breakers.clear()
+    consumer_service.cluster_circuit_breakers.update(
+        {
+            "default": consumer_service.CircuitBreaker(
+                metric_name="test_default"
+            ),
+            "secondary": consumer_service.CircuitBreaker(
+                metric_name="test_secondary"
+            ),
+        }
+    )
+    consumer_service.cluster_circuit_breakers["secondary"].state = "open"
+
+    health = consumer_service.get_consumer_health()
+
+    assert health["status"] == "unhealthy"
+    assert health["running"] is True
+    assert health["connected"] is False
+    assert health["lag_total"] == 5
+    assert health["topics"] == ["orders.events", "shipping.events"]
+    assert health["circuit_breaker_state"] == "open"
+    assert "secondary" in health["clusters"]
+    assert health["clusters"]["secondary"]["last_error"] == "timeout"

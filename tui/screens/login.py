@@ -1,7 +1,7 @@
 from textual.app import ComposeResult
-from textual.containers import Container, Vertical
-from textual.widgets import Input, Button, Static, Label, Header, Footer
+from textual.containers import Container
 from textual.screen import Screen
+from textual.widgets import Button, Input, Label
 
 from client import api_client
 
@@ -50,7 +50,11 @@ class LoginScreen(Screen):
             yield Label("FastAPI Host URL", classes="field-label")
             yield Input(value="http://localhost:8000", id="host-url")
             yield Label("API Key", classes="field-label")
-            yield Input(placeholder="e.g. 1.XyZAbCd...", password=True, id="api-key")
+            yield Input(
+                placeholder="e.g. 1.XyZAbCd...",
+                password=True,
+                id="api-key",
+            )
             yield Button("Connect", id="connect-btn", variant="success")
             yield Label("", id="status-msg")
 
@@ -74,7 +78,9 @@ class LoginScreen(Screen):
         api_client.set_credentials(host, key)
 
         if not await api_client.check_health():
-            status.update("[red]Could not reach host. Is the server running?[/red]")
+            status.update(
+                "[red]Could not reach host. Is the server running?[/red]"
+            )
             self.query_one("#connect-btn", Button).disabled = False
             return
 

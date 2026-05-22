@@ -17,6 +17,7 @@ from presentation import (
     table_display_name,
     truncate_text,
 )
+from screens.admin import AdminScreen
 from screens.event_detail import EventDetailScreen
 
 
@@ -25,6 +26,7 @@ class DashboardScreen(Screen):
 
     BINDINGS = [
         ("enter", "open_event_detail", "Open Detail"),
+        ("a", "open_admin", "Admin"),
         ("c", "clear_filters", "Clear Filters"),
     ]
 
@@ -164,6 +166,17 @@ class DashboardScreen(Screen):
             )
         )
 
+    def action_open_admin(self) -> None:
+        """Open the admin console when authenticated as an admin."""
+        if not api_client.is_admin():
+            self.notify(
+                "Admin access requires an admin API key.",
+                severity="warning",
+            )
+            return
+
+        self.app.push_screen(AdminScreen())
+
     def focus_record(self, event: dict) -> None:
         """Filter the dashboard feed down to the selected record."""
         service_name = event.get("service_name")
@@ -254,9 +267,15 @@ class DashboardScreen(Screen):
             scope_parts.append(f"record={record_label}")
 
         if not scope_parts:
+            admin_hint = ""
+            if api_client.is_admin():
+                admin_hint = (
+                    " Press [bold]a[/bold] to open the admin console."
+                )
             filter_bar.update(
                 "[bold]Scope[/bold] All events. Select a table or press "
                 "[bold]f[/bold] in the detail view to focus a record."
+                + admin_hint
             )
             return
 

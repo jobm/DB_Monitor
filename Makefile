@@ -1,4 +1,4 @@
-.PHONY: monitor-help monitor-up monitor-down monitor-logs monitor-register monitor-dev monitor-migrate monitor-test monitor-test-integration monitor-test-smoke monitor-tui monitor-tui-build
+.PHONY: monitor-help monitor-up monitor-down monitor-logs monitor-register monitor-dev monitor-migrate monitor-test monitor-test-integration monitor-test-smoke monitor-test-scale monitor-tui monitor-tui-build
 
 .DEFAULT_GOAL := monitor-help
 
@@ -44,6 +44,9 @@ monitor-test-integration: ## Run integration checks against a running stack
 
 monitor-test-smoke: ## Run the smoke load gate against a running stack
 	cd app && uv run --group dev python ../scripts/load_test.py --workers 8 --requests 10 --targets events,stats,tables,checkpoints --max-failures 0 --min-success-rate 1.0 --max-p95-ms 2000
+
+monitor-test-scale: ## Validate cross-replica websocket delivery with two local app instances
+	cd app && uv run --group dev python ../scripts/run_horizontal_scaling_validation.py
 
 monitor-tui-build: ## Build/install TUI dependencies
 	cd tui && uv sync

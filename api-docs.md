@@ -77,6 +77,41 @@ Query parameters:
 | `role` | No | `viewer` or `admin`, default `viewer` |
 | `ttl_days` | No | Expiration window in days, default server policy |
 
+### `GET /auth/keys`
+
+Lists API keys for operator inventory and lifecycle actions. Requires an admin
+key.
+
+Query parameters:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `include_inactive` | No | Include expired, revoked, or inactive keys |
+
+Response shape:
+
+```json
+{
+  "keys": [
+    {
+      "id": 7,
+      "owner_name": "ops-admin",
+      "role": "admin",
+      "status": "active",
+      "is_active": true,
+      "created_at": "2026-05-22T12:00:00+00:00",
+      "expires_at": "2026-08-20T12:00:00+00:00",
+      "revoked_at": null,
+      "current_authenticated": true,
+      "can_rotate": true,
+      "can_revoke": false
+    }
+  ],
+  "count": 1,
+  "current_api_key_id": 7
+}
+```
+
 ### `POST /auth/keys/{key_id}/rotate`
 
 Rotates an existing key and returns a replacement credential once. Requires an
@@ -315,6 +350,37 @@ Response shape:
     }
   ],
   "count": 1
+}
+```
+
+### `POST /admin/dlq/replay`
+
+Replays multiple persisted DLQ records through the normal ingestion path.
+
+Query parameters:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `limit` | No | Maximum number of records to replay, default `100` |
+| `include_replayed` | No | Include already replayed rows in the batch |
+
+Response shape:
+
+```json
+{
+  "results": [
+    {
+      "dlq_event_id": 7,
+      "status": "replayed"
+    }
+  ],
+  "count": 1,
+  "requested_limit": 100,
+  "include_replayed": false,
+  "replayed_count": 1,
+  "duplicate_count": 0,
+  "skipped_count": 0,
+  "failed_count": 0
 }
 ```
 

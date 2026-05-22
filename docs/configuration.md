@@ -39,6 +39,7 @@ KAFKA_SSL_PASSWORD_FILE=/run/secrets/kafka_ssl_password
 | `KAFKA_BROKER` | Kafka bootstrap server | `kafka:9092` |
 | `KAFKA_TOPICS` | Explicit topic list when not using manifest-derived topics | derived from `KAFKA_TOPIC` |
 | `KAFKA_CONSUMER_GROUP` | Consumer group ID | `fastapi-consumer-group` |
+| `KAFKA_CLUSTERS` | JSON array of per-cluster config entries | unset |
 
 ## Kafka TLS Settings
 
@@ -49,6 +50,40 @@ KAFKA_SSL_PASSWORD_FILE=/run/secrets/kafka_ssl_password
 | `KAFKA_SSL_CERTFILE` | Client certificate path |
 | `KAFKA_SSL_KEYFILE` | Client key path |
 | `KAFKA_SSL_PASSWORD` / `KAFKA_SSL_PASSWORD_FILE` | Private key password |
+
+## Multiple Kafka Clusters
+
+When `KAFKA_CLUSTERS` is set, DB Monitor starts one consumer task per cluster.
+Each cluster entry must include a unique `name` and `bootstrap_servers`.
+`topics` and `consumer_group` are optional and fall back to the single-cluster
+defaults. When you need stable partition placement for horizontally scaled
+replicas, set `topic_partitions` to pin one cluster entry to specific
+partitions instead of using normal consumer-group subscription.
+
+Example:
+
+```env
+KAFKA_CLUSTERS=[
+  {"name":"primary","bootstrap_servers":"kafka-a:9092","topics":["orderdb.public.orders"]},
+  {"name":"secondary","bootstrap_servers":["kafka-b:9092"],"topics":["shippingdb.public.shipments"],"consumer_group":"shipping-group"}
+]
+```
+
+Partition-aware placement example:
+
+```env
+KAFKA_CLUSTERS=[
+  {"name":"orders-a","bootstrap_servers":"kafka-a:9092","topic_partitions":{"orderdb.public.orders":[0,1]},"consumer_group":"orders-placement"},
+  {"name":"orders-b","bootstrap_servers":"kafka-a:9092","topic_partitions":{"orderdb.public.orders":[2,3]},"consumer_group":"orders-placement"}
+]
+```
+
+In this mode DB Monitor uses explicit Kafka partition assignment for the listed
+topic partitions instead of consumer-group subscription, which lets operators
+place work deterministically across replicas.
+
+Current limitation: all configured clusters share the same security protocol
+and TLS settings from the `KAFKA_SECURITY_PROTOCOL` and `KAFKA_SSL_*` values.
 
 ## Database Pool Tuning
 
@@ -78,10 +113,27 @@ KAFKA_SSL_PASSWORD_FILE=/run/secrets/kafka_ssl_password
 | --- | --- | --- |
 | `BATCH_ENABLED` | Enables batch processing | `true` |
 | `BATCH_SIZE` | Batch size for consumer writes | `100` |
+| `CUSTOM_EVENT_PROCESSORS` | Comma-separated processor import paths | unset |
 | `DLQ_ENABLED` | Persists failures to the DLQ table | `true` |
 | `READINESS_MAX_COMMIT_AGE_SECONDS` | Readiness threshold for stale commits | `300` |
 | `READINESS_MAX_CONSUMER_LAG` | Readiness threshold for lag backlog | `1000` |
 | `READINESS_MAX_DLQ_MESSAGES` | Readiness threshold for pending DLQ rows | `0` |
+
+## Custom Event Processors
+
+Use `CUSTOM_EVENT_PROCESSORS` when you need project-specific event mutations
+that should run inside the normal ingestion pipeline before masking and
+persistence.
+
+Example:
+
+```env
+CUSTOM_EVENT_PROCESSORS=my_project.processors:add_summary
+```
+
+Each processor should be importable as either `module:function` or
+`module.function` and accept a single `KafkaEvent`. It may mutate the event in
+place or return a replacement `KafkaEvent`.
 
 ## WebSocket Backplane Settings
 
@@ -89,6 +141,37 @@ KAFKA_SSL_PASSWORD_FILE=/run/secrets/kafka_ssl_password
 | --- | --- | --- |
 | `WS_BACKPLANE_ENABLED` | Enable Postgres-backed cross-replica fanout | `true` |
 | `WS_BACKPLANE_CHANNEL` | Postgres notification channel name | `db_monitor_ws_events` |
+
+## Distributed Tracing Settings
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `OTEL_TRACING_ENABLED` | Enable OpenTelemetry tracing | `false` |
+| `OTEL_SERVICE_NAME` | Service name attached to exported spans | `db-monitor` |
+| `OTEL_EXPORTER` | Trace exporter mode: `otlp` or `console` | `otlp` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint when using `otlp` | unset |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Comma-separated OTLP headers as `k=v` pairs | unset |
+
+Local console example:
+
+```env
+OTEL_TRACING_ENABLED=true
+OTEL_EXPORTER=console
+OTEL_SERVICE_NAME=db-monitor-dev
+```
+
+Collector example:
+
+```env
+OTEL_TRACING_ENABLED=true
+OTEL_EXPORTER=otlp
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318/v1/traces
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20token
+```
+
+Current tracing coverage includes FastAPI requests, SQLAlchemy queries, and
+manual spans around Kafka consumption, DLQ replay, and websocket backplane
+fanout.
 
 ## Audit And Shutdown Settings
 

@@ -9,6 +9,7 @@ from extensions import AsyncSessionLocal, engine
 from fastapi import WebSocket
 from models import KafkaEvent
 from sqlalchemy import select, text
+from tracing import start_span
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +52,17 @@ class WebSocketManager:
         message: dict,
         event_id: int | None = None,
     ) -> None:
-        await self._broadcast_local(message)
-        if WS_BACKPLANE_ENABLED and event_id is not None:
-            await self._publish_event(event_id)
+        with start_span(
+            "websocket.broadcast",
+            attributes={
+                "db_monitor.event_id": event_id,
+                "db_monitor.backplane_enabled": WS_BACKPLANE_ENABLED,
+                "db_monitor.connection_count": len(self._connections),
+            },
+        ):
+            await self._broadcast_local(message)
+            if WS_BACKPLANE_ENABLED and event_id is not None:
+                await self._publish_event(event_id)
 
     async def _broadcast_local(self, message: dict) -> None:
         payload = json.dumps(message)
@@ -157,52 +166,53 @@ class WebSocketManager:
 
     async def _deliver_backplane_notification(self, payload: str) -> None:
         """Fetch the event referenced by a backplane payload and fan it out."""
-        try:
-            envelope = json.loads(payload)
-        except json.JSONDecodeError:
-            logger.warning("Ignoring invalid websocket backplane payload")
-            return
+        with start_span("websocket.backplane.deliver"):
+            try:
+                envelope = json.loads(payload)
+            except json.JSONDecodeError:
+                logger.warning("Ignoring invalid websocket backplane payload")
+                return
 
-        if envelope.get("origin_instance_id") == self._instance_id:
-            return
+            if envelope.get("origin_instance_id") == self._instance_id:
+                return
 
-        event_id = envelope.get("event_id")
-        if event_id is None:
-            return
+            event_id = envelope.get("event_id")
+            if event_id is None:
+                return
 
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(KafkaEvent).where(KafkaEvent.id == event_id)
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(KafkaEvent).where(KafkaEvent.id == event_id)
+                )
+                event = result.scalar_one_or_none()
+
+            if event is None:
+                logger.warning(
+                    "Could not load event %s from websocket backplane payload",
+                    event_id,
+                )
+                return
+
+            await self._broadcast_local(
+                {
+                    "type": "new_event",
+                    "event": {
+                        "id": event.id,
+                        "event_type": event.event_type,
+                        "event_time": (
+                            event.event_time.isoformat()
+                            if event.event_time
+                            else None
+                        ),
+                        "user_id": event.user_id,
+                        "service_name": event.service_name,
+                        "operation": event.operation,
+                        "source_table_id": event.source_table_id,
+                        "row_identity": event.row_identity,
+                        "event_data": event.event_data,
+                    },
+                }
             )
-            event = result.scalar_one_or_none()
-
-        if event is None:
-            logger.warning(
-                "Could not load event %s from websocket backplane payload",
-                event_id,
-            )
-            return
-
-        await self._broadcast_local(
-            {
-                "type": "new_event",
-                "event": {
-                    "id": event.id,
-                    "event_type": event.event_type,
-                    "event_time": (
-                        event.event_time.isoformat()
-                        if event.event_time
-                        else None
-                    ),
-                    "user_id": event.user_id,
-                    "service_name": event.service_name,
-                    "operation": event.operation,
-                    "source_table_id": event.source_table_id,
-                    "row_identity": event.row_identity,
-                    "event_data": event.event_data,
-                },
-            }
-        )
 
     @property
     def connection_count(self) -> int:

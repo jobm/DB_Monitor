@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
 
 import routes
-from models import KafkaEvent
+from models import ApiKey, KafkaEvent
 
 
 class FakeSession:
@@ -61,6 +61,22 @@ class FakeEventsSession:
         return FakeExecuteResult(scalars=self._events)
 
 
+class FakeApiKeysSession:
+    def __init__(self, api_keys):
+        self._api_keys = api_keys
+        self.statements = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        return FakeExecuteResult(scalars=self._api_keys)
+
+
 @pytest.mark.anyio
 async def test_get_changes_parses_service_and_timestamps(monkeypatch):
     captured: dict[str, object] = {}
@@ -77,8 +93,16 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
         captured.update(kwargs)
         return [{"id": 10, "event_id": 77, "column_name": "status"}]
 
-    monkeypatch.setattr(routes.schema_discovery, "get_table_by_name", fake_get_table_by_name)
-    monkeypatch.setattr(routes.change_processor, "get_changes", fake_get_changes)
+    monkeypatch.setattr(
+        routes.schema_discovery,
+        "get_table_by_name",
+        fake_get_table_by_name,
+    )
+    monkeypatch.setattr(
+        routes.change_processor,
+        "get_changes",
+        fake_get_changes,
+    )
 
     response = await routes.get_changes(
         table_name="orders",
@@ -101,8 +125,22 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
     assert captured["row_identity"] == {"id": 7}
     assert captured["limit"] == 25
     assert captured["offset"] == 5
-    assert captured["from_time"] == datetime(2024, 1, 1, 10, 0, tzinfo=timezone.utc)
-    assert captured["to_time"] == datetime(2024, 1, 2, 11, 0, tzinfo=timezone.utc)
+    assert captured["from_time"] == datetime(
+        2024,
+        1,
+        1,
+        10,
+        0,
+        tzinfo=timezone.utc,
+    )
+    assert captured["to_time"] == datetime(
+        2024,
+        1,
+        2,
+        11,
+        0,
+        tzinfo=timezone.utc,
+    )
 
 
 @pytest.mark.anyio
@@ -119,7 +157,9 @@ async def test_get_changes_rejects_invalid_timestamp():
 
 
 @pytest.mark.anyio
-async def test_get_value_at_time_legacy_resolves_service_from_table_name(monkeypatch):
+async def test_get_value_at_time_legacy_resolves_service_from_table_name(
+    monkeypatch,
+):
     captured: dict[str, object] = {}
 
     async def fake_get_value_at_time(
@@ -136,7 +176,11 @@ async def test_get_value_at_time_legacy_resolves_service_from_table_name(monkeyp
         )
         return "shipped"
 
-    monkeypatch.setattr(routes.change_processor, "get_value_at_time", fake_get_value_at_time)
+    monkeypatch.setattr(
+        routes.change_processor,
+        "get_value_at_time",
+        fake_get_value_at_time,
+    )
 
     response = await routes.get_value_at_time_legacy(
         table_name="orderdb.orders",
@@ -150,7 +194,14 @@ async def test_get_value_at_time_legacy_resolves_service_from_table_name(monkeyp
     assert captured["service_name"] == "orderdb"
     assert captured["table_name"] == "orders"
     assert captured["column_name"] == "status"
-    assert captured["timestamp"] == datetime(2024, 1, 3, 12, 30, tzinfo=timezone.utc)
+    assert captured["timestamp"] == datetime(
+        2024,
+        1,
+        3,
+        12,
+        30,
+        tzinfo=timezone.utc,
+    )
 
 
 @pytest.mark.anyio
@@ -174,7 +225,11 @@ async def test_health_check_reports_database_and_consumer_state(monkeypatch):
         },
     )
     monkeypatch.setattr(routes.lifecycle_manager, "_startup_complete", True)
-    monkeypatch.setattr(routes.lifecycle_manager.shutdown_manager, "_shutdown_in_progress", False)
+    monkeypatch.setattr(
+        routes.lifecycle_manager.shutdown_manager,
+        "_shutdown_in_progress",
+        False,
+    )
 
     response = await routes.health_check()
 
@@ -185,7 +240,9 @@ async def test_health_check_reports_database_and_consumer_state(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_readiness_check_returns_503_when_consumer_signals_degrade(monkeypatch):
+async def test_readiness_check_returns_503_when_consumer_signals_degrade(
+    monkeypatch,
+):
     monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: FakeSession())
     monkeypatch.setattr(
         routes,
@@ -205,7 +262,11 @@ async def test_readiness_check_returns_503_when_consumer_signals_degrade(monkeyp
         },
     )
     monkeypatch.setattr(routes.lifecycle_manager, "_startup_complete", True)
-    monkeypatch.setattr(routes.lifecycle_manager.shutdown_manager, "_shutdown_in_progress", False)
+    monkeypatch.setattr(
+        routes.lifecycle_manager.shutdown_manager,
+        "_shutdown_in_progress",
+        False,
+    )
 
     response = await routes.readiness_check()
     payload = json.loads(response.body)
@@ -354,7 +415,11 @@ async def test_get_changes_reports_table_discovery_hint(monkeypatch):
         del service_name, table_name
         return None
 
-    monkeypatch.setattr(routes.schema_discovery, "get_table_by_name", fake_get_table_by_name)
+    monkeypatch.setattr(
+        routes.schema_discovery,
+        "get_table_by_name",
+        fake_get_table_by_name,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await routes.get_changes(table_name="orderdb.orders")
@@ -390,6 +455,86 @@ async def test_get_consumer_checkpoints_returns_snapshot(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_list_api_keys_filters_inactive_by_default(monkeypatch):
+    now = datetime.now(timezone.utc)
+    api_keys = [
+        ApiKey(
+            id=10,
+            owner_name="active-admin",
+            role="admin",
+            is_active=True,
+            expires_at=now + timedelta(days=10),
+            created_at=now,
+        ),
+        ApiKey(
+            id=11,
+            owner_name="expired-viewer",
+            role="viewer",
+            is_active=True,
+            expires_at=now - timedelta(days=1),
+            created_at=now - timedelta(days=1),
+        ),
+        ApiKey(
+            id=12,
+            owner_name="revoked-admin",
+            role="admin",
+            is_active=False,
+            revoked_at=now - timedelta(hours=1),
+            created_at=now - timedelta(days=2),
+        ),
+    ]
+    fake_session = FakeApiKeysSession(api_keys)
+    monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: fake_session)
+
+    response = await routes.list_api_keys(
+        include_inactive=False,
+        creator_api_key=ApiKey(id=10, owner_name="active-admin", role="admin"),
+    )
+
+    assert response["count"] == 1
+    assert response["current_api_key_id"] == 10
+    assert response["keys"][0]["id"] == 10
+    assert response["keys"][0]["status"] == "active"
+    assert response["keys"][0]["current_authenticated"] is True
+    assert response["keys"][0]["can_revoke"] is False
+
+
+@pytest.mark.anyio
+async def test_list_api_keys_can_include_inactive(monkeypatch):
+    now = datetime.now(timezone.utc)
+    api_keys = [
+        ApiKey(
+            id=20,
+            owner_name="revoked-admin",
+            role="admin",
+            is_active=False,
+            revoked_at=now - timedelta(hours=1),
+            created_at=now,
+        ),
+        ApiKey(
+            id=21,
+            owner_name="expired-viewer",
+            role="viewer",
+            is_active=True,
+            expires_at=now - timedelta(days=1),
+            created_at=now - timedelta(days=1),
+        ),
+    ]
+    fake_session = FakeApiKeysSession(api_keys)
+    monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: fake_session)
+
+    response = await routes.list_api_keys(
+        include_inactive=True,
+        creator_api_key=ApiKey(id=99, owner_name="ops", role="admin"),
+    )
+
+    assert response["count"] == 2
+    assert response["keys"][0]["status"] == "revoked"
+    assert response["keys"][1]["status"] == "expired"
+    assert response["keys"][0]["can_rotate"] is False
+
+
+@pytest.mark.anyio
 async def test_get_dead_letter_events_returns_pending_records(monkeypatch):
     async def fake_list_dead_letters(limit: int, include_replayed: bool):
         assert limit == 25
@@ -404,7 +549,11 @@ async def test_get_dead_letter_events_returns_pending_records(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(routes, "list_dead_letter_events", fake_list_dead_letters)
+    monkeypatch.setattr(
+        routes,
+        "list_dead_letter_events",
+        fake_list_dead_letters,
+    )
 
     response = await routes.get_dead_letter_events(
         limit=25,
@@ -414,6 +563,39 @@ async def test_get_dead_letter_events_returns_pending_records(monkeypatch):
 
     assert response["count"] == 1
     assert response["events"][0]["id"] == 4
+
+
+@pytest.mark.anyio
+async def test_replay_dead_letter_events_returns_batch_summary(monkeypatch):
+    async def fake_replay_many(limit: int, include_replayed: bool):
+        assert limit == 10
+        assert include_replayed is True
+        return {
+            "results": [{"dlq_event_id": 1, "status": "replayed"}],
+            "count": 1,
+            "replayed_count": 1,
+            "duplicate_count": 0,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "requested_limit": 10,
+            "include_replayed": True,
+        }
+
+    monkeypatch.setattr(
+        routes,
+        "replay_dead_letter_event_records",
+        fake_replay_many,
+    )
+
+    response = await routes.replay_dead_letter_events(
+        limit=10,
+        include_replayed=True,
+        admin_api_key=None,
+    )
+
+    assert response["count"] == 1
+    assert response["replayed_count"] == 1
+    assert response["results"][0]["status"] == "replayed"
 
 
 @pytest.mark.anyio

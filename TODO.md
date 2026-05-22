@@ -35,16 +35,19 @@ These are not committed backlog items yet.
 
 ### Advanced Features
 
-- [ ] Add support for custom event processors
-- [ ] Expand replay beyond current DLQ replay into full event replay workflows
-- [ ] Add support for multiple Kafka clusters
-- [ ] Create a dedicated admin interface
+- [x] Create a dedicated admin interface
+
+### Recently Closed Future-Idea Work
+
+- [x] Add support for custom event processors
+- [x] Expand replay beyond current DLQ replay into fuller replay workflows
+- [x] Add support for multiple Kafka clusters
 
 ### Scalability And Observability
 
-- [ ] Validate horizontal scaling under automated tests
-- [ ] Add distributed tracing
-- [ ] Add partition-aware scaling and placement controls
+- [x] Validate horizontal scaling under automated tests
+- [x] Add distributed tracing
+- [x] Add partition-aware scaling and placement controls
 - [ ] Add clustering support for more stateful components
 
 ### Integration Surface
