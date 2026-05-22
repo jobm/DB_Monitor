@@ -15,29 +15,17 @@ from __future__ import annotations
 import json
 import os
 import sys
-import urllib.parse
-import urllib.request
+from pathlib import Path
 
+
+SDK_ROOT = Path(__file__).resolve().parents[1] / "sdk" / "python"
+if str(SDK_ROOT) not in sys.path:
+    sys.path.insert(0, str(SDK_ROOT))
 
 BASE_URL = os.getenv("DB_MONITOR_BASE_URL", "http://localhost:8000")
 API_KEY = os.getenv("DB_MONITOR_API_KEY")
 TABLE_NAME = os.getenv("DB_MONITOR_TABLE", "orderdb.orders")
 ROW_IDENTITY = os.getenv("DB_MONITOR_ROW_IDENTITY")
-
-
-def _request(
-    path: str,
-    *,
-    method: str = "GET",
-    headers: dict[str, str] | None = None,
-) -> dict:
-    request = urllib.request.Request(
-        f"{BASE_URL}{path}",
-        method=method,
-        headers=headers or {},
-    )
-    with urllib.request.urlopen(request) as response:
-        return json.loads(response.read().decode("utf-8"))
 
 
 def _require_api_key() -> str:
@@ -50,33 +38,40 @@ def _require_api_key() -> str:
 
 
 def _exchange_access_token(api_key: str) -> str:
-    payload = _request(
-        "/auth/token",
-        method="POST",
-        headers={"X-API-Key": api_key},
+    from db_monitor_sdk import DBMonitorClient
+
+    client = DBMonitorClient(
+        BASE_URL,
+        api_key=api_key,
     )
-    return payload["access_token"]
+    return client.exchange_access_token()
 
 
 def main() -> int:
+    from db_monitor_sdk import DBMonitorClient
+
     api_key = _require_api_key()
     access_token = _exchange_access_token(api_key)
-    auth_headers = {"Authorization": f"Bearer {access_token}"}
+    client = DBMonitorClient(
+        BASE_URL,
+        api_key=api_key,
+        access_token=access_token,
+    )
 
-    tables = _request("/tables", headers=auth_headers)
-    events = _request("/events?limit=5", headers=auth_headers)
+    tables = client.get_tables()
+    events = client.get_events(limit=5)
 
     print("Tables:")
     print(json.dumps(tables, indent=2))
     print("\nRecent events:")
     print(json.dumps(events, indent=2))
 
-    query = {"table_name": TABLE_NAME, "limit": 5}
-    if ROW_IDENTITY:
-        query["row_identity"] = ROW_IDENTITY
-
-    encoded_query = urllib.parse.urlencode(query)
-    changes = _request(f"/changes?{encoded_query}", headers=auth_headers)
+    parsed_row_identity = json.loads(ROW_IDENTITY) if ROW_IDENTITY else None
+    changes = client.get_changes(
+        table_name=TABLE_NAME,
+        row_identity=parsed_row_identity,
+        limit=5,
+    )
 
     print("\nRecent changes:")
     print(json.dumps(changes, indent=2))

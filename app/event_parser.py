@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from source_metadata import extract_source_service_name
+
 
 @dataclass(frozen=True)
 class ParsedEvent:
@@ -121,11 +123,7 @@ def parse_event_payload(raw_payload: str) -> ParsedEvent:
 
     service_name_value = data.get("service_name") or data.get("service")
     if service_name_value is None:
-        source = data.get("source")
-        if not isinstance(source, dict):
-            source = data.get("payload", {}).get("source")
-        if isinstance(source, dict):
-            service_name_value = source.get("name")
+        service_name_value = extract_source_service_name(data)
     service_name = (
         str(service_name_value) if service_name_value is not None else None
     )

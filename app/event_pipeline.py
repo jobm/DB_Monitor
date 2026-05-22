@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from models import KafkaEvent
+from source_metadata import extract_source_coordinates
 
 logger = logging.getLogger(__name__)
 
@@ -137,27 +138,22 @@ class EventPipeline:
 
         # 2. Table Filtering
         if event.event_data and isinstance(event.event_data, dict):
-            source = event.event_data.get("source")
-            if not isinstance(source, dict):
-                source = event.event_data.get("payload", {}).get("source")
-            if isinstance(source, dict):
-                db = source.get("db", "")
-                table = source.get("table", "")
-                if table:
-                    full_table = f"{db}.{table}" if db else table
+            source_coordinates = extract_source_coordinates(event.event_data)
+            if source_coordinates is not None:
+                candidate_tables = source_coordinates.table_filter_names()
 
-                    if self.config.allowed_tables:
-                        if (
-                            table not in self.config.allowed_tables
-                            and full_table not in self.config.allowed_tables
-                        ):
-                            return False
-
-                    if (
-                        table in self.config.ignored_tables
-                        or full_table in self.config.ignored_tables
+                if self.config.allowed_tables:
+                    if not any(
+                        candidate in self.config.allowed_tables
+                        for candidate in candidate_tables
                     ):
                         return False
+
+                if any(
+                    candidate in self.config.ignored_tables
+                    for candidate in candidate_tables
+                ):
+                    return False
 
         # 3. Schema-based Validation (Required Fields)
         if self.config.required_fields:

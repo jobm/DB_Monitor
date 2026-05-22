@@ -10,8 +10,8 @@ from auth import authenticate_credentials
 from config import (
     BATCH_ENABLED,
     BATCH_SIZE,
+    BROKER_CLUSTERS,
     DLQ_ENABLED,
-    KAFKA_CLUSTERS,
     OTEL_EXPORTER,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_OTLP_HEADERS,
@@ -111,15 +111,22 @@ async def lifespan_manager(app: FastAPI):
         if ws_backplane_task is not None:
             lifecycle_manager.register_task(ws_backplane_task)
 
-        for cluster in KAFKA_CLUSTERS:
+        for cluster in BROKER_CLUSTERS:
             cluster_name = str(cluster["name"])
             task = asyncio.create_task(
                 consumer_task(
                     cluster_name=cluster_name,
+                    broker_kind=str(cluster["broker_kind"]),
                     bootstrap_servers=cluster["bootstrap_servers"],
                     consumer_group=str(cluster["consumer_group"]),
                     topics=list(cluster["topics"]),
                     topic_partitions=cluster.get("topic_partitions"),
+                    connection_url=cluster.get("connection_url"),
+                    queue_names=cluster.get("queue_names"),
+                    prefetch_count=int(cluster.get("prefetch_count") or 100),
+                    dlq_destination=str(
+                        cluster.get("dlq_destination") or "db-monitor-dlq"
+                    ),
                     enable_dlq=DLQ_ENABLED,
                     enable_batch=BATCH_ENABLED,
                     batch_size=BATCH_SIZE,
@@ -132,7 +139,7 @@ async def lifespan_manager(app: FastAPI):
         logger.info(
             "Consumer tasks started",
             extra={
-                "clusters": [cluster["name"] for cluster in KAFKA_CLUSTERS],
+                "clusters": [cluster["name"] for cluster in BROKER_CLUSTERS],
             },
         )
 

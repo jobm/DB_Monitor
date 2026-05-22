@@ -19,6 +19,7 @@ from config import POSTGRES_URL, WS_BACKPLANE_CHANNEL, WS_BACKPLANE_ENABLED
 from extensions import engine
 from metrics import columns_discovered_total, tables_discovered_total
 from models import KafkaEvent, MonitoredColumn, MonitoredTable
+from source_metadata import extract_source_coordinates, extract_source_record
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy import text
@@ -192,16 +193,17 @@ class SchemaDiscovery:
             return None
 
         payload = event.event_data
-        source = self._extract_source(payload)
-        if not isinstance(source, dict):
+        source = extract_source_record(payload)
+        source_coordinates = extract_source_coordinates(payload)
+        if not source or source_coordinates is None:
             return None
 
-        table_identifier = source.get("table")
+        table_identifier = source_coordinates.table_name
         if not table_identifier:
             return None
 
-        db_name = source.get("db", "unknown")
-        service_name = source.get("name", source.get("server", "unknown"))
+        db_name = source_coordinates.database_name or "unknown"
+        service_name = source_coordinates.service_name or "unknown"
 
         topic_parts = event.service_name.split(".")
         if len(topic_parts) >= 2:
@@ -281,21 +283,6 @@ class SchemaDiscovery:
             )
             await session.execute(stmt)
             await self._refresh_schema_metrics(session)
-
-    def _extract_source(
-        self, payload: dict[str, Any]
-    ) -> Optional[dict[str, Any]]:
-        source = payload.get("source")
-        if isinstance(source, dict):
-            return source
-
-        nested_payload = payload.get("payload")
-        if isinstance(nested_payload, dict):
-            nested_source = nested_payload.get("source")
-            if isinstance(nested_source, dict):
-                return nested_source
-
-        return None
 
     def _extract_column_definitions(
         self, payload: dict[str, Any]

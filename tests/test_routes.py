@@ -434,6 +434,10 @@ async def test_get_consumer_checkpoints_returns_snapshot(monkeypatch):
         return [
             {
                 "consumer_group": "fastapi-consumer-group",
+                "broker_kind": "kafka",
+                "broker_destination": "orderdb.public.orders",
+                "broker_substream": "0",
+                "broker_position": "22",
                 "kafka_topic": "orderdb.public.orders",
                 "kafka_partition": 0,
                 "kafka_offset": 22,
@@ -452,6 +456,7 @@ async def test_get_consumer_checkpoints_returns_snapshot(monkeypatch):
 
     assert response["count"] == 1
     assert response["checkpoints"][0]["kafka_offset"] == 22
+    assert response["checkpoints"][0]["broker_position"] == "22"
 
 
 @pytest.mark.anyio
@@ -542,6 +547,10 @@ async def test_get_dead_letter_events_returns_pending_records(monkeypatch):
         return [
             {
                 "id": 4,
+                "broker_kind": "rabbitmq",
+                "broker_destination": "cdc.orders",
+                "broker_substream": None,
+                "broker_position": "77",
                 "kafka_topic": "orderdb.public.orders",
                 "kafka_partition": 0,
                 "kafka_offset": 77,
@@ -563,6 +572,7 @@ async def test_get_dead_letter_events_returns_pending_records(monkeypatch):
 
     assert response["count"] == 1
     assert response["events"][0]["id"] == 4
+    assert response["events"][0]["broker_kind"] == "rabbitmq"
 
 
 @pytest.mark.anyio

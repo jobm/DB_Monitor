@@ -2,20 +2,31 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
 import consumer_service
+import message_brokers
 from models import KafkaEvent
 
 
 class FakeTimerMetric:
+    def __init__(self) -> None:
+        self.value = 0
+
     def labels(self, **_kwargs):
         return self
 
     @contextmanager
     def time(self):
         yield
+
+    def inc(self, amount: int = 1) -> None:
+        self.value += amount
+
+    def set(self, value: int) -> None:
+        self.value = value
 
 
 class FakeTransaction:
@@ -108,6 +119,69 @@ class FakeAssignedConsumer:
 
     async def __anext__(self):
         raise StopAsyncIteration
+
+
+class FakeBrokerMessage:
+    def __init__(
+        self,
+        destination: str,
+        value: str,
+        *,
+        partition: int = 0,
+        offset: int = 0,
+        lag: int | None = None,
+    ) -> None:
+        self.destination = destination
+        self.partition = partition
+        self.offset = offset
+        self.value = value.encode("utf-8")
+        self.lag = lag
+        self.acked = 0
+
+    async def ack_callback(self):
+        self.acked += 1
+
+
+class FakeBrokerConsumerAdapter:
+    def __init__(self, messages=None):
+        self.messages = messages or []
+        self.started = False
+        self.stopped = False
+        self.ack_batches = []
+
+    async def start(self):
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+    async def ack_batch(self, messages):
+        self.ack_batches.append(list(messages))
+        for message in messages:
+            await message.ack_callback()
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        for message in self.messages:
+            yield message
+
+
+class FakeDeadLetterPublisher:
+    def __init__(self):
+        self.started = False
+        self.stopped = False
+        self.published = []
+
+    async def start(self):
+        self.started = True
+
+    async def stop(self):
+        self.stopped = True
+
+    async def publish_dead_letter(self, **kwargs):
+        self.published.append(kwargs)
 
 
 @pytest.mark.anyio
@@ -272,6 +346,10 @@ def test_checkpoint_rows_for_events_keeps_highest_offset_per_partition(
     assert checkpoints == [
         {
             "consumer_group": consumer_service.KAFKA_CONSUMER_GROUP,
+            "broker_kind": "kafka",
+            "broker_destination": "orderdb.public.orders",
+            "broker_substream": "0",
+            "broker_position": "12",
             "kafka_topic": "orderdb.public.orders",
             "kafka_partition": 0,
             "kafka_offset": 12,
@@ -279,11 +357,61 @@ def test_checkpoint_rows_for_events_keeps_highest_offset_per_partition(
         },
         {
             "consumer_group": consumer_service.KAFKA_CONSUMER_GROUP,
+            "broker_kind": "kafka",
+            "broker_destination": "orderdb.public.orders",
+            "broker_substream": "1",
+            "broker_position": "5",
             "kafka_topic": "orderdb.public.orders",
             "kafka_partition": 1,
             "kafka_offset": 5,
             "last_event_time": now,
         },
+    ]
+
+
+def test_checkpoint_rows_for_rabbitmq_use_broker_metadata() -> None:
+    now = datetime.now(timezone.utc)
+    events = [
+        KafkaEvent(
+            event_type="u",
+            event_time=now,
+            service_name="orderdb",
+            kafka_topic="cdc.orders",
+            kafka_partition=0,
+            kafka_offset=44,
+            raw_payload="{}",
+            operation="UPDATE",
+        ),
+        KafkaEvent(
+            event_type="u",
+            event_time=now,
+            service_name="orderdb",
+            kafka_topic="cdc.orders",
+            kafka_partition=0,
+            kafka_offset=45,
+            raw_payload="{}",
+            operation="UPDATE",
+        ),
+    ]
+
+    checkpoints = consumer_service._checkpoint_rows_for_events(
+        events,
+        consumer_group="rabbit-group",
+        broker_kind="rabbitmq",
+    )
+
+    assert checkpoints == [
+        {
+            "consumer_group": "rabbit-group",
+            "broker_kind": "rabbitmq",
+            "broker_destination": "cdc.orders",
+            "broker_substream": "",
+            "broker_position": "45",
+            "kafka_topic": None,
+            "kafka_partition": None,
+            "kafka_offset": None,
+            "last_event_time": now,
+        }
     ]
 
 
@@ -311,7 +439,13 @@ async def test_process_single_event_commits_after_dlq_persist(monkeypatch):
     async def fake_send_to_dlq(*_args, **_kwargs):
         return True
 
-    async def fake_persist_checkpoints(events):
+    async def fake_persist_checkpoints(
+        events,
+        consumer_group=None,
+        broker_kind="kafka",
+    ):
+        del consumer_group
+        del broker_kind
         checkpoint_events.append(events)
 
     def fake_record_successful_commit(_runtime):
@@ -427,7 +561,7 @@ async def test_consumer_task_assigns_explicit_topic_partitions(monkeypatch):
         return 0
 
     monkeypatch.setattr(
-        consumer_service,
+        message_brokers,
         "AIOKafkaConsumer",
         fake_consumer_factory,
     )
@@ -455,6 +589,120 @@ async def test_consumer_task_assigns_explicit_topic_partitions(monkeypatch):
         (partition.topic, partition.partition)
         for partition in fake_consumer.assignments
     ] == [("orders.events", 0), ("orders.events", 2)]
+
+
+@pytest.mark.anyio
+async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
+    runtime = consumer_service._get_consumer_runtime("rabbit-cluster")
+    broker_message = FakeBrokerMessage(
+        "cdc.orders",
+        '{"event_type": "u", "after": {"id": 7}}',
+        offset=44,
+    )
+    consumer_adapter = FakeBrokerConsumerAdapter([broker_message])
+    dlq_publisher = FakeDeadLetterPublisher()
+    persisted_checkpoints: list[tuple[list[KafkaEvent], str]] = []
+
+    async def fake_refresh_dead_letter_backlog_metric(*_args, **_kwargs):
+        return 0
+
+    async def fake_store_event_graph_with_retries(*_args, **_kwargs):
+        event = _args[1]
+        event.id = 101
+        return True
+
+    async def fake_persist_consumer_checkpoints(
+        events,
+        consumer_group,
+        broker_kind="kafka",
+        session_factory=None,
+    ):
+        del broker_kind
+        del session_factory
+        persisted_checkpoints.append((list(events), consumer_group))
+
+    def fake_build_message_consumer(**kwargs):
+        assert kwargs["broker_kind"] == "rabbitmq"
+        assert kwargs["connection_url"] == "amqp://rabbit/"
+        assert kwargs["queue_names"] == ["cdc.orders"]
+        return consumer_adapter
+
+    def fake_build_dead_letter_publisher(**kwargs):
+        assert kwargs["broker_kind"] == "rabbitmq"
+        assert kwargs["connection_url"] == "amqp://rabbit/"
+        assert kwargs["dlq_destination"] == "rabbit-dlq"
+        return dlq_publisher
+
+    monkeypatch.setattr(
+        consumer_service,
+        "refresh_dead_letter_backlog_metric",
+        fake_refresh_dead_letter_backlog_metric,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_event_graph_with_retries",
+        fake_store_event_graph_with_retries,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "persist_consumer_checkpoints",
+        fake_persist_consumer_checkpoints,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "build_message_consumer",
+        fake_build_message_consumer,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "build_dead_letter_publisher",
+        fake_build_dead_letter_publisher,
+    )
+
+    async def fake_broadcast_event(_event):
+        return None
+
+    monkeypatch.setattr(
+        consumer_service,
+        "_broadcast_event",
+        fake_broadcast_event,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "events_consumed_total",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "events_processed_total",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "kafka_commit_duration_seconds",
+        FakeTimerMetric(),
+    )
+
+    await consumer_service.consumer_task(
+        cluster_name="rabbit-cluster",
+        broker_kind="rabbitmq",
+        consumer_group="rabbit-group",
+        topics=["cdc.orders"],
+        connection_url="amqp://rabbit/",
+        queue_names=["cdc.orders"],
+        prefetch_count=25,
+        dlq_destination="rabbit-dlq",
+        enable_dlq=True,
+        enable_batch=False,
+    )
+
+    assert consumer_adapter.started is True
+    assert consumer_adapter.stopped is True
+    assert dlq_publisher.started is True
+    assert dlq_publisher.stopped is True
+    assert broker_message.acked == 1
+    assert persisted_checkpoints[0][1] == "rabbit-group"
+    assert runtime["broker_kind"] == "rabbitmq"
 
 
 @pytest.mark.anyio
@@ -502,6 +750,41 @@ async def test_replay_dead_letter_event_records_aggregates_results(
     assert result["duplicate_count"] == 1
     assert result["failed_count"] == 1
     assert result["results"][2]["status"] == "failed"
+
+
+def test_build_replay_event_restores_rabbitmq_location(monkeypatch) -> None:
+    parsed_event = SimpleNamespace(
+        event_type="u",
+        event_time=datetime.now(timezone.utc),
+        user_id=None,
+        service_name="orderdb",
+        event_data={"payload": {"op": "u"}},
+        raw_payload="{}",
+    )
+
+    monkeypatch.setattr(
+        consumer_service,
+        "parse_event_payload",
+        lambda _raw_payload: parsed_event,
+    )
+
+    replay_event = consumer_service._build_replay_event(
+        consumer_service.DeadLetterEvent(
+            broker_kind="rabbitmq",
+            broker_destination="cdc.orders",
+            broker_substream="",
+            broker_position="44",
+            kafka_topic=None,
+            kafka_partition=None,
+            kafka_offset=None,
+            raw_payload="{}",
+            service_name="orderdb",
+        )
+    )
+
+    assert replay_event.kafka_topic == "cdc.orders"
+    assert replay_event.kafka_partition == 0
+    assert replay_event.kafka_offset == 44
 
 
 def test_get_consumer_health_aggregates_multiple_cluster_runtimes() -> None:

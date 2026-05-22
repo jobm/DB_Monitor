@@ -112,6 +112,19 @@ KAFKA_CONSUMER_GROUP = os.getenv(
     "KAFKA_CONSUMER_GROUP",
     "fastapi-consumer-group",
 )
+MESSAGE_BROKER = os.getenv("MESSAGE_BROKER", "kafka").lower()
+RABBITMQ_URL = _get_env_or_file(
+    "RABBITMQ_URL",
+    "amqp://guest:guest@localhost/",
+)
+RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE", "db-monitor-events")
+RABBITMQ_QUEUES = _parse_csv_list(os.getenv("RABBITMQ_QUEUES")) or [
+    RABBITMQ_QUEUE
+]
+RABBITMQ_PREFETCH_COUNT = int(
+    os.getenv("RABBITMQ_PREFETCH_COUNT", "100")
+)
+RABBITMQ_DLQ_QUEUE = os.getenv("RABBITMQ_DLQ_QUEUE", "db-monitor-dlq")
 
 
 def _default_kafka_cluster() -> dict[str, object]:
@@ -121,6 +134,23 @@ def _default_kafka_cluster() -> dict[str, object]:
         "bootstrap_servers": [KAFKA_BROKER],
         "topics": list(KAFKA_TOPICS),
         "consumer_group": KAFKA_CONSUMER_GROUP,
+        "topic_partitions": None,
+    }
+
+
+def _default_rabbitmq_cluster() -> dict[str, object]:
+    """Build the single-cluster compatibility config for RabbitMQ."""
+    return {
+        "name": "default",
+        "broker_kind": "rabbitmq",
+        "bootstrap_servers": None,
+        "topics": list(RABBITMQ_QUEUES),
+        "consumer_group": KAFKA_CONSUMER_GROUP,
+        "topic_partitions": None,
+        "connection_url": RABBITMQ_URL,
+        "queue_names": list(RABBITMQ_QUEUES),
+        "prefetch_count": RABBITMQ_PREFETCH_COUNT,
+        "dlq_destination": RABBITMQ_DLQ_QUEUE,
     }
 
 
@@ -338,7 +368,200 @@ def _load_kafka_clusters() -> list[dict[str, object]]:
     return clusters
 
 
+def _normalize_rabbitmq_queue_names(
+    value: object,
+    cluster_name: str,
+) -> list[str]:
+    """Normalize per-cluster RabbitMQ queue configuration."""
+    if value is None:
+        queue_names = list(RABBITMQ_QUEUES)
+    elif isinstance(value, str):
+        queue_names = _parse_csv_list(value)
+    elif isinstance(value, list):
+        queue_names = [
+            str(queue_name).strip()
+            for queue_name in value
+            if str(queue_name).strip()
+        ]
+    else:
+        queue_names = []
+
+    if not queue_names:
+        _config_error(
+            f"RabbitMQ cluster '{cluster_name}' must define queue_names.",
+            hint="Set queue_names as a list or comma-separated string.",
+        )
+
+    return queue_names
+
+
+def _normalize_broker_kind(value: object, cluster_name: str) -> str:
+    """Normalize one broker kind string."""
+    broker_kind = str(value or MESSAGE_BROKER).strip().lower()
+    if broker_kind not in {"kafka", "rabbitmq"}:
+        _config_error(
+            (
+                f"Broker cluster '{cluster_name}' has unsupported "
+                f"broker_kind '{broker_kind}'."
+            ),
+            hint="Use one of: kafka, rabbitmq.",
+        )
+    return broker_kind
+
+
+def _load_broker_clusters() -> list[dict[str, object]]:
+    """Load generic broker cluster configuration."""
+    raw_clusters = os.getenv("BROKER_CLUSTERS")
+    if not raw_clusters:
+        if MESSAGE_BROKER == "rabbitmq":
+            return [_default_rabbitmq_cluster()]
+        return [
+            {
+                "name": str(cluster["name"]),
+                "broker_kind": "kafka",
+                "bootstrap_servers": list(cluster["bootstrap_servers"]),
+                "topics": list(cluster["topics"]),
+                "topic_partitions": cluster.get("topic_partitions"),
+                "consumer_group": str(cluster["consumer_group"]),
+                "connection_url": None,
+                "queue_names": None,
+                "prefetch_count": None,
+                "dlq_destination": "db-monitor-dlq",
+            }
+            for cluster in KAFKA_CLUSTERS
+        ]
+
+    try:
+        parsed = json.loads(raw_clusters)
+    except json.JSONDecodeError as exc:
+        _config_error(
+            "Invalid BROKER_CLUSTERS format.",
+            hint=(
+                "Provide a JSON array of broker definitions. "
+                f"Original error: {exc}"
+            ),
+        )
+
+    if not isinstance(parsed, list) or not parsed:
+        _config_error(
+            "Invalid BROKER_CLUSTERS format.",
+            hint="Provide a non-empty JSON array of broker definitions.",
+        )
+
+    cluster_names: set[str] = set()
+    clusters: list[dict[str, object]] = []
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            _config_error(
+                "Invalid BROKER_CLUSTERS entry.",
+                hint="Each broker definition must be a JSON object.",
+            )
+
+        cluster_name = str(entry.get("name") or "").strip()
+        if not cluster_name:
+            _config_error(
+                "Invalid BROKER_CLUSTERS entry.",
+                hint="Each broker definition must include a unique name.",
+            )
+        if cluster_name in cluster_names:
+            _config_error(
+                f"Duplicate broker cluster name '{cluster_name}'.",
+                hint="Use unique names for each broker cluster entry.",
+            )
+        cluster_names.add(cluster_name)
+
+        broker_kind = _normalize_broker_kind(
+            entry.get("broker_kind"),
+            cluster_name,
+        )
+        if broker_kind == "rabbitmq":
+            if entry.get("topic_partitions") is not None:
+                _config_error(
+                    (
+                        f"RabbitMQ cluster '{cluster_name}' does not support "
+                        "topic_partitions."
+                    ),
+                    hint="Remove topic_partitions for rabbitmq clusters.",
+                )
+            queue_names = _normalize_rabbitmq_queue_names(
+                entry.get("queue_names") or entry.get("topics"),
+                cluster_name,
+            )
+            clusters.append(
+                {
+                    "name": cluster_name,
+                    "broker_kind": broker_kind,
+                    "bootstrap_servers": None,
+                    "topics": list(queue_names),
+                    "topic_partitions": None,
+                    "consumer_group": str(
+                        entry.get("consumer_group") or KAFKA_CONSUMER_GROUP
+                    ).strip(),
+                    "connection_url": str(
+                        entry.get("connection_url") or RABBITMQ_URL
+                    ).strip(),
+                    "queue_names": queue_names,
+                    "prefetch_count": int(
+                        entry.get("prefetch_count")
+                        or RABBITMQ_PREFETCH_COUNT
+                    ),
+                    "dlq_destination": str(
+                        entry.get("dlq_destination") or RABBITMQ_DLQ_QUEUE
+                    ).strip(),
+                }
+            )
+            continue
+
+        topic_partitions = _normalize_topic_partitions(
+            entry.get("topic_partitions"),
+            cluster_name,
+        )
+        topics = _normalize_cluster_topics(entry.get("topics"), cluster_name)
+        if topic_partitions is not None:
+            partition_topics = sorted(topic_partitions.keys())
+            if (
+                entry.get("topics") is not None
+                and sorted(topics) != partition_topics
+            ):
+                _config_error(
+                    (
+                        f"Kafka cluster '{cluster_name}' topics and "
+                        "topic_partitions must describe the same topics."
+                    ),
+                    hint=(
+                        "Either omit topics and derive them from "
+                        "topic_partitions, or keep both lists aligned."
+                    ),
+                )
+            topics = partition_topics
+
+        clusters.append(
+            {
+                "name": cluster_name,
+                "broker_kind": broker_kind,
+                "bootstrap_servers": _normalize_bootstrap_servers(
+                    entry.get("bootstrap_servers"),
+                    cluster_name,
+                ),
+                "topics": topics,
+                "topic_partitions": topic_partitions,
+                "consumer_group": str(
+                    entry.get("consumer_group") or KAFKA_CONSUMER_GROUP
+                ).strip(),
+                "connection_url": None,
+                "queue_names": None,
+                "prefetch_count": None,
+                "dlq_destination": str(
+                    entry.get("dlq_destination") or "db-monitor-dlq"
+                ).strip(),
+            }
+        )
+
+    return clusters
+
+
 KAFKA_CLUSTERS = _load_kafka_clusters()
+BROKER_CLUSTERS = _load_broker_clusters()
 POSTGRES_URL = _get_env_or_file(
     "POSTGRES_URL",
     DEFAULT_POSTGRES_URL,
@@ -516,3 +739,15 @@ for webhook_url in WEBHOOK_URLS:
             f"Invalid WEBHOOK_URLS entry '{webhook_url}'.",
             hint="Use comma-separated http:// or https:// URLs.",
         )
+
+if MESSAGE_BROKER not in {"kafka", "rabbitmq"}:
+    _config_error(
+        f"Invalid MESSAGE_BROKER='{MESSAGE_BROKER}'.",
+        hint="Use one of: kafka, rabbitmq.",
+    )
+
+if RABBITMQ_PREFETCH_COUNT <= 0:
+    _config_error(
+        "RABBITMQ_PREFETCH_COUNT must be greater than zero.",
+        hint="Set a positive prefetch value such as 100.",
+    )

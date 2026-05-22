@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "aiokafka>=0.13.0",
+    "aio-pika>=9.5.7",
     "argon2-cffi>=25.1.0",
     "asyncpg==0.29.0",
     "confluent-kafka>=2.13.2",

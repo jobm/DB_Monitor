@@ -1,6 +1,6 @@
 # DB Monitor
 
-DB Monitor is a FastAPI-based CDC monitoring service that consumes Debezium events from Kafka, stores them in PostgreSQL, and exposes raw events, discovered table metadata, column-level changes, metrics, and realtime notifications.
+DB Monitor is a FastAPI-based CDC monitoring service that consumes Debezium events from Kafka or RabbitMQ, stores them in PostgreSQL, and exposes raw events, discovered table metadata, column-level changes, metrics, and realtime notifications.
 
 ## Documentation
 
@@ -12,11 +12,12 @@ DB Monitor is a FastAPI-based CDC monitoring service that consumes Debezium even
 - Recovery runbook: `docs/runbooks/recovery-and-validation.md`
 - Alerts runbook: `docs/runbooks/alerts-and-thresholds.md`
 - Example client: `examples/python_api_client.py`
+- SDKs: `sdk/README.md`
 
 ## Architecture
 
 ```text
-Source Postgres DBs -> Debezium -> Kafka -> FastAPI consumer -> Monitor Postgres -> API / WebSocket / Metrics
+Source Postgres DBs -> Debezium -> Kafka or RabbitMQ -> FastAPI consumer -> Monitor Postgres -> API / WebSocket / Metrics
 ```
 
 The default stack monitors three source databases:
@@ -31,19 +32,22 @@ The monitor database is exposed on `5437`.
 
 ## Current capabilities
 
-- Multi-topic Kafka consumption with manual commits
-- Multi-cluster Kafka consumption with per-cluster consumer tasks
+- Multi-broker consumption with Kafka and RabbitMQ adapters
+- Multi-cluster broker consumption with per-cluster consumer tasks
 - Retry, batching, DLQ forwarding, and circuit-breaker protection
 - Optional custom event processors inside the ingestion pipeline
 - Persistent Kafka checkpoint snapshots and single/batch DLQ replay controls
    for recovery
+- Schema-qualified and collection-backed Debezium source normalization for
+  additional database types
 - Partition-aware Kafka placement controls through explicit topic assignments
 - Cross-replica schema cache invalidation for fresher table metadata on
    horizontally scaled replicas
 - Optional outbound webhooks for persisted CDC events
+- Lightweight Python and JavaScript SDKs for common API workflows
 - Dedicated Textual admin console for readiness, key management,
   checkpoints, and DLQ replay
-- Optional OpenTelemetry tracing for HTTP, database, Kafka, and websocket paths
+- Optional OpenTelemetry tracing for HTTP, database, broker, and websocket paths
 - Schema discovery for monitored tables and columns
 - Column-level change history and point-in-time lookup
 - API-key lifecycle management plus short-lived bearer and WebSocket session tokens

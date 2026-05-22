@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 
 import pytest
 
 import schema_discovery as schema_discovery_module
+from models import KafkaEvent
 from schema_discovery import SchemaDiscovery
 
 
@@ -180,3 +182,58 @@ async def test_schema_cache_backplane_ignores_local_origin() -> None:
     )
 
     assert cache_key in discovery._table_cache
+
+
+@pytest.mark.anyio
+async def test_process_event_uses_schema_qualified_table_name(monkeypatch):
+    discovery = SchemaDiscovery(lambda: None)
+    captured: dict[str, object] = {}
+
+    async def fake_upsert_table(**kwargs):
+        captured.update(kwargs)
+        return 7
+
+    async def fake_upsert_columns(session, table_id, column_definitions):
+        del session, column_definitions
+        assert table_id == 7
+
+    async def fake_invalidate(service_name: str, table_name: str) -> None:
+        captured["invalidated"] = (service_name, table_name)
+
+    monkeypatch.setattr(discovery, "_upsert_table", fake_upsert_table)
+    monkeypatch.setattr(discovery, "_upsert_columns", fake_upsert_columns)
+    monkeypatch.setattr(
+        discovery,
+        "_invalidate_cluster_cache",
+        fake_invalidate,
+    )
+
+    event = KafkaEvent(
+        event_type="UPDATE",
+        event_time=datetime.now(timezone.utc),
+        user_id=None,
+        service_name="sqlserver.inventory.orders",
+        kafka_topic="sqlserver.inventory.orders",
+        kafka_partition=0,
+        kafka_offset=1,
+        event_data={
+            "source": {
+                "name": "connector-a",
+                "db": "inventory",
+                "schema": "sales",
+                "table": "orders",
+            },
+            "after": {"id": 1},
+        },
+        raw_payload="{}",
+        operation="UPDATE",
+    )
+
+    result = await discovery.process_event(event, session=object())
+
+    assert result == 7
+    assert captured["service_name"] == "sqlserver"
+    assert captured["database_name"] == "inventory"
+    assert captured["table_name"] == "sales.orders"
+    assert captured["topic_name"] == "sqlserver.inventory.orders"
+    assert captured["invalidated"] == ("sqlserver", "sales.orders")

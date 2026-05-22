@@ -28,7 +28,7 @@ def _make_event(event_data: dict) -> KafkaEvent:
 def test_transform_runs_custom_processors_before_masking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Derived fields from a custom processor should persist through masking."""
+    """Derived fields from a processor should persist through masking."""
     processor_module = ModuleType("test_custom_event_processors")
 
     def derive_summary(event: KafkaEvent) -> KafkaEvent:
@@ -59,7 +59,10 @@ def test_transform_runs_custom_processors_before_masking(
     transformed = pipeline.transform(event)
 
     assert transformed.event_data["payload"]["after"]["summary"] == "order-42"
-    assert transformed.event_data["payload"]["after"]["password"] == "***MASKED***"
+    assert (
+        transformed.event_data["payload"]["after"]["password"]
+        == "***MASKED***"
+    )
 
 
 def test_config_rejects_invalid_custom_processor_reference(
@@ -73,3 +76,38 @@ def test_config_rejects_invalid_custom_processor_reference(
         match="CUSTOM_EVENT_PROCESSORS.*module:function.*module.function",
     ):
         event_pipeline_module.EventPipelineConfig()
+
+
+def test_should_process_matches_schema_qualified_tables() -> None:
+    config = event_pipeline_module.EventPipelineConfig()
+    config.allowed_tables = ["inventory.sales.orders"]
+    pipeline = event_pipeline_module.EventPipeline(config)
+    event = _make_event(
+        {
+            "source": {
+                "db": "inventory",
+                "schema": "sales",
+                "table": "orders",
+            },
+            "after": {"id": 42},
+        }
+    )
+
+    assert pipeline.should_process(event) is True
+
+
+def test_should_process_matches_collection_sources() -> None:
+    config = event_pipeline_module.EventPipelineConfig()
+    config.allowed_tables = ["inventory.orders"]
+    pipeline = event_pipeline_module.EventPipeline(config)
+    event = _make_event(
+        {
+            "source": {
+                "db": "inventory",
+                "collection": "orders",
+            },
+            "after": {"_id": 42},
+        }
+    )
+
+    assert pipeline.should_process(event) is True

@@ -279,3 +279,75 @@ def test_config_loads_webhook_settings(
     ]
     assert config.WEBHOOK_TIMEOUT_SECONDS == 9.5
     assert config.WEBHOOK_SHARED_SECRET == "shared-secret"
+
+
+def test_config_loads_rabbitmq_broker_clusters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Broker config should parse RabbitMQ clusters alongside Kafka ones."""
+    monkeypatch.setenv(
+        "BROKER_CLUSTERS",
+        (
+            '[{"name":"rabbit-primary","broker_kind":"rabbitmq",'
+            '"connection_url":"amqp://rabbit/","queue_names":'
+            '["cdc.orders","cdc.shipments"],"prefetch_count":25},'
+            '{"name":"kafka-secondary","broker_kind":"kafka",'
+            '"bootstrap_servers":"kafka-a:9092","topics":'
+            '["orders.events"]}]'
+        ),
+    )
+
+    config = _load_config_module("config_broker_clusters")
+
+    assert config.BROKER_CLUSTERS == [
+        {
+            "name": "rabbit-primary",
+            "broker_kind": "rabbitmq",
+            "bootstrap_servers": None,
+            "topics": ["cdc.orders", "cdc.shipments"],
+            "topic_partitions": None,
+            "consumer_group": config.KAFKA_CONSUMER_GROUP,
+            "connection_url": "amqp://rabbit/",
+            "queue_names": ["cdc.orders", "cdc.shipments"],
+            "prefetch_count": 25,
+            "dlq_destination": config.RABBITMQ_DLQ_QUEUE,
+        },
+        {
+            "name": "kafka-secondary",
+            "broker_kind": "kafka",
+            "bootstrap_servers": ["kafka-a:9092"],
+            "topics": ["orders.events"],
+            "topic_partitions": None,
+            "consumer_group": config.KAFKA_CONSUMER_GROUP,
+            "connection_url": None,
+            "queue_names": None,
+            "prefetch_count": None,
+            "dlq_destination": "db-monitor-dlq",
+        },
+    ]
+
+
+def test_config_defaults_to_rabbitmq_cluster_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RabbitMQ mode should expose one default broker cluster."""
+    monkeypatch.setenv("MESSAGE_BROKER", "rabbitmq")
+    monkeypatch.setenv("RABBITMQ_URL", "amqp://rabbitmq/")
+    monkeypatch.setenv("RABBITMQ_QUEUES", "cdc.orders,cdc.shipments")
+
+    config = _load_config_module("config_default_rabbitmq_cluster")
+
+    assert config.BROKER_CLUSTERS == [
+        {
+            "name": "default",
+            "broker_kind": "rabbitmq",
+            "bootstrap_servers": None,
+            "topics": ["cdc.orders", "cdc.shipments"],
+            "topic_partitions": None,
+            "consumer_group": config.KAFKA_CONSUMER_GROUP,
+            "connection_url": "amqp://rabbitmq/",
+            "queue_names": ["cdc.orders", "cdc.shipments"],
+            "prefetch_count": config.RABBITMQ_PREFETCH_COUNT,
+            "dlq_destination": config.RABBITMQ_DLQ_QUEUE,
+        }
+    ]

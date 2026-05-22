@@ -52,7 +52,9 @@ These are not committed backlog items yet.
 
 ### Integration Surface
 
-- [ ] Add support for additional databases
+- [x] Add support for additional databases
 - [x] Implement webhook notifications
-- [ ] Create SDKs for common languages
-- [ ] Add support for different message brokers
+- [x] Create SDKs for common languages
+- [x] Add support for different message brokers
+- [x] Replace Kafka-style checkpoint semantics with broker-native progress tracking for RabbitMQ and other non-Kafka backends
+- [x] Package the Python SDK for normal package imports and add package-level import coverage

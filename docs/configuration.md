@@ -36,10 +36,16 @@ KAFKA_SSL_PASSWORD_FILE=/run/secrets/kafka_ssl_password
 | `APP_ENV` | Environment mode used for safety defaults | `development` |
 | `DB_SCHEMA_MODE` | Schema handling policy: `apply`, `validate`, or `skip` | `apply` in dev, `validate` in prod |
 | `POSTGRES_URL` | Async SQLAlchemy connection string | local monitor DB |
+| `MESSAGE_BROKER` | Active single-broker mode: `kafka` or `rabbitmq` | `kafka` |
 | `KAFKA_BROKER` | Kafka bootstrap server | `kafka:9092` |
 | `KAFKA_TOPICS` | Explicit topic list when not using manifest-derived topics | derived from `KAFKA_TOPIC` |
 | `KAFKA_CONSUMER_GROUP` | Consumer group ID | `fastapi-consumer-group` |
 | `KAFKA_CLUSTERS` | JSON array of per-cluster config entries | unset |
+| `BROKER_CLUSTERS` | JSON array of mixed Kafka and RabbitMQ cluster entries | unset |
+| `RABBITMQ_URL` | RabbitMQ connection URL | `amqp://guest:guest@localhost/` |
+| `RABBITMQ_QUEUES` | Queue list for single-broker RabbitMQ mode | derived from `RABBITMQ_QUEUE` |
+| `RABBITMQ_PREFETCH_COUNT` | Prefetch window for RabbitMQ consumers | `100` |
+| `RABBITMQ_DLQ_QUEUE` | RabbitMQ dead-letter queue name | `db-monitor-dlq` |
 
 ## Kafka TLS Settings
 
@@ -84,6 +90,31 @@ place work deterministically across replicas.
 
 Current limitation: all configured clusters share the same security protocol
 and TLS settings from the `KAFKA_SECURITY_PROTOCOL` and `KAFKA_SSL_*` values.
+
+## Multiple Broker Clusters
+
+Use `BROKER_CLUSTERS` when you need a single deployment to consume from a mix
+of Kafka topics and RabbitMQ queues. Each cluster entry must include a unique
+`name` and a `broker_kind` of `kafka` or `rabbitmq`.
+
+- Kafka entries accept `bootstrap_servers`, `topics`, optional
+  `consumer_group`, and optional `topic_partitions`.
+- RabbitMQ entries accept `connection_url`, `queue_names`, optional
+  `consumer_group`, optional `prefetch_count`, and optional
+  `dlq_destination`.
+
+Example mixed-broker configuration:
+
+```env
+BROKER_CLUSTERS=[
+  {"name":"orders-kafka","broker_kind":"kafka","bootstrap_servers":"kafka-a:9092","topics":["orderdb.public.orders"]},
+  {"name":"shipping-rabbit","broker_kind":"rabbitmq","connection_url":"amqp://guest:guest@rabbitmq/","queue_names":["shipping.events"],"prefetch_count":50,"dlq_destination":"shipping.events.dlq"}
+]
+```
+
+When `BROKER_CLUSTERS` is unset, DB Monitor keeps the existing Kafka behavior
+through `KAFKA_CLUSTERS`, or uses the single-cluster RabbitMQ defaults when
+`MESSAGE_BROKER=rabbitmq`.
 
 ## Database Pool Tuning
 

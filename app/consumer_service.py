@@ -1,23 +1,26 @@
-# Kafka consumer logic for DB Monitor Server
+# Broker consumer logic for DB Monitor Server
 import asyncio
 import logging
 import random
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Optional
 
-from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
 from change_processor import ChangeProcessor
 from config import (
     KAFKA_BROKER,
     KAFKA_CONSUMER_GROUP,
-    KAFKA_SECURITY_PROTOCOL,
-    KAFKA_SSL_CONTEXT,
     KAFKA_TOPIC,
 )
 from event_parser import parse_event_payload
 from event_pipeline import event_pipeline
 from extensions import AsyncSessionLocal
+from message_brokers import (
+    BrokerMessage,
+    DeadLetterPublisher,
+    build_dead_letter_publisher,
+    build_message_consumer,
+)
 from metrics import (
     circuit_breaker_state,
     consumer_lag,
@@ -54,7 +57,7 @@ DLQ_TOPIC = "db-monitor-dlq"
 DEFAULT_TOPICS = [KAFKA_TOPIC]
 MAX_CONNECTION_RETRIES = 60
 CONNECTION_RETRY_DELAY = 5.0
-CONSUMER_METRIC_NAME = "kafka_consumer"
+CONSUMER_METRIC_NAME = "broker_consumer"
 
 
 def _new_consumer_runtime_state() -> dict[str, object]:
@@ -63,6 +66,7 @@ def _new_consumer_runtime_state() -> dict[str, object]:
         "running": False,
         "connected": False,
         "topics": [],
+        "broker_kind": "kafka",
         "last_error": None,
         "last_message_at": None,
         "last_commit_at": None,
@@ -171,28 +175,24 @@ def _timestamp_to_age_seconds(value: Optional[str]) -> Optional[float]:
 
 
 def _update_runtime_lag(
-    consumer: AIOKafkaConsumer,
     runtime: dict[str, object],
     cluster_name: str,
-    topic: str,
+    destination: str,
     partition: int,
-    offset: int,
+    lag_value: int | None,
 ) -> None:
     """Update current lag snapshots for readiness and metrics."""
-    topic_partition = TopicPartition(topic, partition)
-    highwater = consumer.highwater(topic_partition)
-    if highwater is None:
+    if lag_value is None:
         return
 
-    lag_value = max(highwater - offset - 1, 0)
-    lag_key = f"{cluster_name}:{topic}:{partition}"
+    lag_key = f"{cluster_name}:{destination}:{partition}"
     lag_by_partition = dict(runtime.get("lag_by_partition") or {})
     lag_by_partition[lag_key] = lag_value
     runtime["lag_by_partition"] = lag_by_partition
     runtime["lag_total"] = sum(lag_by_partition.values())
     consumer_lag.labels(
         cluster=cluster_name,
-        topic=topic,
+        topic=destination,
         partition=str(partition),
     ).set(lag_value)
 
@@ -255,6 +255,7 @@ def get_consumer_health() -> dict[str, object]:
         clusters_payload[cluster_name] = {
             "running": runtime["running"],
             "connected": runtime["connected"],
+            "broker_kind": runtime.get("broker_kind", "kafka"),
             "topics": cluster_topics,
             "last_error": runtime["last_error"],
             "last_message_at": runtime["last_message_at"],
@@ -331,39 +332,129 @@ async def refresh_dead_letter_backlog_metric(
 
 def _checkpoint_rows_for_events(
     events: list[KafkaEvent],
+    consumer_group: str = KAFKA_CONSUMER_GROUP,
+    broker_kind: str = "kafka",
 ) -> list[dict[str, object]]:
-    """Return highest committed offsets per topic partition for a batch."""
-    checkpoints: dict[tuple[str, int], dict[str, object]] = {}
+    """Return highest committed broker positions for a processed batch."""
+    checkpoints: dict[tuple[str, str, str], dict[str, object]] = {}
     for event in events:
-        if (
-            event.kafka_topic is None
-            or event.kafka_partition is None
-            or event.kafka_offset is None
-        ):
+        location = _build_broker_location(event, broker_kind)
+        if location is None:
             continue
 
-        key = (event.kafka_topic, event.kafka_partition)
+        key = (
+            str(location["broker_destination"]),
+            str(location["broker_substream"]),
+            str(location["broker_kind"]),
+        )
         existing = checkpoints.get(key)
-        if existing is None or event.kafka_offset > int(
-            existing["kafka_offset"]
+        if existing is None or int(location["broker_position"]) > int(
+            existing["broker_position"]
         ):
             checkpoints[key] = {
-                "consumer_group": KAFKA_CONSUMER_GROUP,
-                "kafka_topic": event.kafka_topic,
-                "kafka_partition": event.kafka_partition,
-                "kafka_offset": event.kafka_offset,
+                "consumer_group": consumer_group,
+                **location,
                 "last_event_time": event.event_time,
             }
 
     return list(checkpoints.values())
 
 
+def _build_broker_location(
+    event: KafkaEvent,
+    broker_kind: str,
+) -> dict[str, object] | None:
+    """Build broker-neutral recovery metadata for one consumed event."""
+    if event.kafka_topic is None or event.kafka_offset is None:
+        return None
+
+    if broker_kind == "kafka":
+        if event.kafka_partition is None:
+            return None
+        broker_substream = str(event.kafka_partition)
+        kafka_topic = event.kafka_topic
+        kafka_partition = event.kafka_partition
+        kafka_offset = event.kafka_offset
+    else:
+        broker_substream = ""
+        kafka_topic = None
+        kafka_partition = None
+        kafka_offset = None
+
+    return {
+        "broker_kind": broker_kind,
+        "broker_destination": event.kafka_topic,
+        "broker_substream": broker_substream,
+        "broker_position": str(event.kafka_offset),
+        "kafka_topic": kafka_topic,
+        "kafka_partition": kafka_partition,
+        "kafka_offset": kafka_offset,
+    }
+
+
+def _legacy_event_location(
+    broker_kind: str,
+    broker_destination: str,
+    broker_substream: str,
+    broker_position: str,
+    kafka_topic: str | None,
+    kafka_partition: int | None,
+    kafka_offset: int | None,
+) -> tuple[str, int | None, int | None]:
+    """Build the legacy event location fields used by the event table."""
+    if kafka_topic is not None:
+        return kafka_topic, kafka_partition, kafka_offset
+
+    try:
+        position = int(broker_position)
+    except (TypeError, ValueError):
+        position = None
+
+    if broker_kind == "kafka":
+        try:
+            partition = int(broker_substream)
+        except (TypeError, ValueError):
+            partition = None
+    else:
+        partition = 0
+
+    return broker_destination, partition, position
+
+
+def _serialize_broker_fields(
+    *,
+    broker_kind: str,
+    broker_destination: str,
+    broker_substream: str,
+    broker_position: str,
+    kafka_topic: str | None,
+    kafka_partition: int | None,
+    kafka_offset: int | None,
+) -> dict[str, object]:
+    """Render broker metadata alongside Kafka compatibility aliases."""
+    return {
+        "broker_kind": broker_kind,
+        "broker_destination": broker_destination,
+        "broker_substream": broker_substream or None,
+        "broker_position": broker_position,
+        "kafka_topic": kafka_topic,
+        "kafka_partition": kafka_partition,
+        "kafka_offset": kafka_offset,
+    }
+
+
 async def persist_consumer_checkpoints(
     events: list[KafkaEvent],
+    consumer_group: str = KAFKA_CONSUMER_GROUP,
+    broker_kind: str = "kafka",
     session_factory: Callable = AsyncSessionLocal,
 ) -> None:
-    """Persist the latest committed Kafka offsets for each topic partition."""
-    checkpoint_rows = _checkpoint_rows_for_events(events)
+    """Persist the latest committed broker positions per stream."""
+    checkpoint_rows = _checkpoint_rows_for_events(
+        events,
+        consumer_group,
+        broker_kind,
+    )
     if not checkpoint_rows:
         return
 
@@ -373,10 +464,14 @@ async def persist_consumer_checkpoints(
             upsert_stmt = insert_stmt.on_conflict_do_update(
                 index_elements=[
                     "consumer_group",
-                    "kafka_topic",
-                    "kafka_partition",
+                    "broker_kind",
+                    "broker_destination",
+                    "broker_substream",
                 ],
                 set_={
+                    "broker_position": insert_stmt.excluded.broker_position,
+                    "kafka_topic": insert_stmt.excluded.kafka_topic,
+                    "kafka_partition": insert_stmt.excluded.kafka_partition,
                     "kafka_offset": insert_stmt.excluded.kafka_offset,
                     "last_event_time": insert_stmt.excluded.last_event_time,
                     "updated_at": func.now(),
@@ -393,8 +488,9 @@ async def list_consumer_checkpoints_snapshot(
         result = await session.execute(
             select(ConsumerCheckpoint).order_by(
                 ConsumerCheckpoint.consumer_group.asc(),
-                ConsumerCheckpoint.kafka_topic.asc(),
-                ConsumerCheckpoint.kafka_partition.asc(),
+                ConsumerCheckpoint.broker_kind.asc(),
+                ConsumerCheckpoint.broker_destination.asc(),
+                ConsumerCheckpoint.broker_substream.asc(),
             )
         )
         checkpoints = result.scalars().all()
@@ -402,9 +498,15 @@ async def list_consumer_checkpoints_snapshot(
     return [
         {
             "consumer_group": checkpoint.consumer_group,
-            "kafka_topic": checkpoint.kafka_topic,
-            "kafka_partition": checkpoint.kafka_partition,
-            "kafka_offset": checkpoint.kafka_offset,
+            **_serialize_broker_fields(
+                broker_kind=checkpoint.broker_kind,
+                broker_destination=checkpoint.broker_destination,
+                broker_substream=checkpoint.broker_substream,
+                broker_position=checkpoint.broker_position,
+                kafka_topic=checkpoint.kafka_topic,
+                kafka_partition=checkpoint.kafka_partition,
+                kafka_offset=checkpoint.kafka_offset,
+            ),
             "last_event_time": (
                 checkpoint.last_event_time.isoformat()
                 if checkpoint.last_event_time
@@ -424,16 +526,19 @@ async def _persist_dead_letter_event(
     event: KafkaEvent,
     raw_payload: str,
     error: str,
+    broker_kind: str = "kafka",
     session_factory: Callable = AsyncSessionLocal,
 ) -> int:
     """Store the failed message in the persistent DLQ table."""
+    location = _build_broker_location(event, broker_kind)
+    if location is None:
+        raise ValueError("Dead-letter event is missing broker location.")
+
     async with session_factory() as session:
         async with session.begin():
             insert_stmt = pg_insert(DeadLetterEvent).values(
                 service_name=event.service_name,
-                kafka_topic=event.kafka_topic,
-                kafka_partition=event.kafka_partition,
-                kafka_offset=event.kafka_offset,
+                **location,
                 operation=event.operation,
                 raw_payload=raw_payload,
                 error_message=error,
@@ -443,12 +548,16 @@ async def _persist_dead_letter_event(
             )
             upsert_stmt = insert_stmt.on_conflict_do_update(
                 index_elements=[
-                    "kafka_topic",
-                    "kafka_partition",
-                    "kafka_offset",
+                    "broker_kind",
+                    "broker_destination",
+                    "broker_substream",
+                    "broker_position",
                 ],
                 set_={
                     "service_name": insert_stmt.excluded.service_name,
+                    "kafka_topic": insert_stmt.excluded.kafka_topic,
+                    "kafka_partition": insert_stmt.excluded.kafka_partition,
+                    "kafka_offset": insert_stmt.excluded.kafka_offset,
                     "operation": insert_stmt.excluded.operation,
                     "raw_payload": insert_stmt.excluded.raw_payload,
                     "error_message": insert_stmt.excluded.error_message,
@@ -482,9 +591,15 @@ async def list_dead_letter_events(
         {
             "id": event.id,
             "service_name": event.service_name,
-            "kafka_topic": event.kafka_topic,
-            "kafka_partition": event.kafka_partition,
-            "kafka_offset": event.kafka_offset,
+            **_serialize_broker_fields(
+                broker_kind=event.broker_kind,
+                broker_destination=event.broker_destination,
+                broker_substream=event.broker_substream,
+                broker_position=event.broker_position,
+                kafka_topic=event.kafka_topic,
+                kafka_partition=event.kafka_partition,
+                kafka_offset=event.kafka_offset,
+            ),
             "operation": event.operation,
             "error_message": event.error_message,
             "failed_at": (
@@ -505,17 +620,26 @@ def _build_replay_event(dlq_event: DeadLetterEvent) -> KafkaEvent:
     """Reconstruct a KafkaEvent from a persisted DLQ record."""
     parsed = parse_event_payload(dlq_event.raw_payload)
     operation = extract_operation(parsed.event_data or {})
+    destination, partition, offset = _legacy_event_location(
+        dlq_event.broker_kind,
+        dlq_event.broker_destination,
+        dlq_event.broker_substream,
+        dlq_event.broker_position,
+        dlq_event.kafka_topic,
+        dlq_event.kafka_partition,
+        dlq_event.kafka_offset,
+    )
     return KafkaEvent(
         event_type=parsed.event_type,
         event_time=parsed.event_time,
         user_id=parsed.user_id,
         service_name=_get_canonical_service_name(
-            dlq_event.kafka_topic,
+            destination,
             dlq_event.service_name,
         ),
-        kafka_topic=dlq_event.kafka_topic,
-        kafka_partition=dlq_event.kafka_partition,
-        kafka_offset=dlq_event.kafka_offset,
+        kafka_topic=destination,
+        kafka_partition=partition,
+        kafka_offset=offset,
         event_data=parsed.event_data,
         raw_payload=parsed.raw_payload,
         operation=operation,
@@ -579,6 +703,12 @@ async def replay_dead_letter_event_record(
                 "status": replay_status,
                 "inserted": inserted,
                 "event_id": replay_event.id,
+                "broker_kind": dlq_event.broker_kind,
+                "broker_destination": dlq_event.broker_destination,
+                "broker_substream": (
+                    dlq_event.broker_substream or None
+                ),
+                "broker_position": dlq_event.broker_position,
                 "kafka_topic": replay_event.kafka_topic,
                 "kafka_partition": replay_event.kafka_partition,
                 "kafka_offset": replay_event.kafka_offset,
@@ -769,10 +899,12 @@ async def _populate_row_identity(session, event_obj: KafkaEvent) -> None:
 
 
 async def send_to_dlq(
-    producer: Optional[AIOKafkaProducer],
+    dlq_publisher: Optional[DeadLetterPublisher],
     event: KafkaEvent,
     error: str,
     raw_message: bytes | None = None,
+    dlq_destination: str = DLQ_TOPIC,
+    broker_kind: str = "kafka",
 ) -> bool:
     """Persist and optionally forward a failed message to the DLQ topic."""
     raw_payload = (
@@ -785,36 +917,34 @@ async def send_to_dlq(
             event,
             raw_payload,
             error,
+            broker_kind=broker_kind,
         )
     except Exception as exc:
         logger.exception("Failed to persist dead-letter event: %s", exc)
         return False
 
-    if producer:
+    if dlq_publisher:
         try:
-            await producer.send_and_wait(
-                DLQ_TOPIC,
-                value=raw_payload.encode(),
-                key=None,
-                headers=[
-                    ("error", error.encode()),
-                    ("source-topic", (event.kafka_topic or "").encode()),
-                    (
-                        "source-partition",
-                        str(event.kafka_partition).encode(),
-                    ),
-                    ("source-offset", str(event.kafka_offset).encode()),
-                    ("dlq-record-id", str(dlq_record_id).encode()),
-                ],
+            await dlq_publisher.publish_dead_letter(
+                raw_payload=raw_payload,
+                source_destination=event.kafka_topic,
+                source_partition=event.kafka_partition,
+                source_offset=event.kafka_offset,
+                error=error,
+                dlq_record_id=dlq_record_id,
             )
         except Exception as exc:
-            logger.error("Failed to forward message to DLQ topic: %s", exc)
+            logger.error(
+                "Failed to forward message to DLQ destination %s: %s",
+                dlq_destination,
+                exc,
+            )
 
     dlq_messages_total.inc()
     await refresh_dead_letter_backlog_metric()
     logger.info(
         (
-            "Message persisted to DLQ record %s for topic=%s "
+            "Message persisted to DLQ record %s for destination=%s "
             "partition=%s offset=%s"
         ),
         dlq_record_id,
@@ -827,19 +957,24 @@ async def send_to_dlq(
 
 async def consumer_task(
     cluster_name: str = "default",
+    broker_kind: str = "kafka",
     bootstrap_servers: str | list[str] | None = None,
     consumer_group: str | None = None,
     topics: list[str] | None = None,
     topic_partitions: dict[str, list[int]] | None = None,
+    connection_url: str | None = None,
+    queue_names: list[str] | None = None,
+    prefetch_count: int = 100,
+    dlq_destination: str = DLQ_TOPIC,
     enable_dlq: bool = True,
     enable_batch: bool = True,
     batch_size: int = 100,
 ):
-    """Consume messages from Kafka with resilience features.
+    """Consume messages from the configured broker with resilience features.
 
     Features:
-    - Multi-topic subscription
-    - Manual offset commit
+    - Multi-destination subscription
+    - Manual ack/commit
     - Exponential backoff retry
     - Dead-letter queue
     - Circuit breaker
@@ -849,16 +984,23 @@ async def consumer_task(
     breaker = _get_circuit_breaker(cluster_name)
     if topics is None:
         topics = DEFAULT_TOPICS
+    if queue_names is None:
+        queue_names = []
     bootstrap_servers = bootstrap_servers or KAFKA_BROKER
     consumer_group = consumer_group or KAFKA_CONSUMER_GROUP
     if topic_partitions is not None:
         topics = sorted(topic_partitions.keys())
+    if broker_kind == "rabbitmq":
+        destinations = list(queue_names)
+    else:
+        destinations = list(topics)
 
     runtime.update(
         {
             "running": True,
             "connected": False,
-            "topics": list(topics),
+            "topics": destinations,
+            "broker_kind": broker_kind,
             "last_error": None,
             "last_message_at": None,
             "last_commit_at": None,
@@ -879,29 +1021,28 @@ async def consumer_task(
             exc,
         )
 
-    consumer_kwargs = {
-        "bootstrap_servers": bootstrap_servers,
-        "group_id": consumer_group,
-        "auto_offset_reset": "earliest",
-        "enable_auto_commit": False,
-        "security_protocol": KAFKA_SECURITY_PROTOCOL,
-        "ssl_context": KAFKA_SSL_CONTEXT,
-    }
-    if topic_partitions is None:
-        consumer = AIOKafkaConsumer(*topics, **consumer_kwargs)
-    else:
-        consumer = AIOKafkaConsumer(**consumer_kwargs)
+    consumer = build_message_consumer(
+        broker_kind=broker_kind,
+        bootstrap_servers=bootstrap_servers,
+        consumer_group=consumer_group,
+        topics=topics,
+        topic_partitions=topic_partitions,
+        connection_url=connection_url,
+        queue_names=queue_names,
+        prefetch_count=prefetch_count,
+    )
 
-    producer = None
+    dlq_publisher = None
     if enable_dlq:
-        producer = AIOKafkaProducer(
+        dlq_publisher = build_dead_letter_publisher(
+            broker_kind=broker_kind,
             bootstrap_servers=bootstrap_servers,
-            security_protocol=KAFKA_SECURITY_PROTOCOL,
-            ssl_context=KAFKA_SSL_CONTEXT,
+            connection_url=connection_url,
+            dlq_destination=dlq_destination,
         )
-        await producer.start()
+        await dlq_publisher.start()
 
-    batch: list[tuple] = []
+    batch: list[tuple[KafkaEvent, str, BrokerMessage]] = []
     batch_timeout = 5.0
     last_batch_time: float = 0
 
@@ -911,16 +1052,21 @@ async def consumer_task(
         try:
             await consumer.start()
             if topic_partitions is not None:
-                assignments = [
-                    TopicPartition(topic_name, partition)
-                    for topic_name, partitions in topic_partitions.items()
-                    for partition in partitions
-                ]
-                consumer.assign(assignments)
+                logger.info(
+                    "Broker consumer '%s' using explicit topic assignments %s",
+                    cluster_name,
+                    topic_partitions,
+                )
             connected = True
             runtime["connected"] = True
             runtime["last_error"] = None
-            if topic_partitions is None:
+            if broker_kind == "rabbitmq":
+                logger.info(
+                    "RabbitMQ consumer '%s' started, subscribed to %s",
+                    cluster_name,
+                    queue_names,
+                )
+            elif topic_partitions is None:
                 logger.info(
                     "Kafka consumer '%s' started, subscribed to %s",
                     cluster_name,
@@ -949,8 +1095,8 @@ async def consumer_task(
                     MAX_CONNECTION_RETRIES,
                     e,
                 )
-                if producer:
-                    await producer.stop()
+                if dlq_publisher:
+                    await dlq_publisher.stop()
                 runtime["running"] = False
                 return
             delay = min(
@@ -986,8 +1132,8 @@ async def consumer_task(
             try:
                 data = msg.value.decode("utf-8")
                 logger.debug(
-                    "Received message topic=%s partition=%d offset=%d",
-                    msg.topic,
+                    "Received message destination=%s partition=%d offset=%d",
+                    msg.destination,
                     msg.partition,
                     msg.offset,
                 )
@@ -996,12 +1142,11 @@ async def consumer_task(
                 operation = extract_operation(parsed.event_data or {})
                 runtime["last_message_at"] = _utc_now_iso()
                 _update_runtime_lag(
-                    consumer,
                     runtime,
                     cluster_name,
-                    msg.topic,
+                    msg.destination,
                     msg.partition,
-                    msg.offset,
+                    msg.lag,
                 )
 
                 event = KafkaEvent(
@@ -1009,10 +1154,10 @@ async def consumer_task(
                     event_time=parsed.event_time,
                     user_id=parsed.user_id,
                     service_name=_get_canonical_service_name(
-                        msg.topic,
+                        msg.destination,
                         parsed.service_name,
                     ),
-                    kafka_topic=msg.topic,
+                    kafka_topic=msg.destination,
                     kafka_partition=msg.partition,
                     kafka_offset=msg.offset,
                     event_data=parsed.event_data,
@@ -1029,10 +1174,10 @@ async def consumer_task(
                     "kafka.consumer.message",
                     attributes={
                         "db_monitor.cluster": cluster_name,
-                        "messaging.system": "kafka",
-                        "messaging.destination.name": msg.topic,
-                        "messaging.kafka.partition": msg.partition,
-                        "messaging.kafka.offset": msg.offset,
+                        "messaging.system": broker_kind,
+                        "messaging.destination.name": msg.destination,
+                        "messaging.destination.partition.id": msg.partition,
+                        "messaging.message.id": msg.offset,
                     },
                 ):
                     if not event_pipeline.should_process(event):
@@ -1048,7 +1193,7 @@ async def consumer_task(
                     if enable_batch:
                         if not batch:
                             last_batch_time = asyncio.get_event_loop().time()
-                        batch.append((event, data))
+                        batch.append((event, data, msg))
                         batch_elapsed = (
                             asyncio.get_event_loop().time() - last_batch_time
                         )
@@ -1058,20 +1203,26 @@ async def consumer_task(
                         ):
                             await _process_batch(
                                 batch,
-                                consumer,
-                                producer,
+                                consumer.ack_batch,
+                                dlq_publisher,
+                                dlq_destination,
                                 enable_dlq,
                                 runtime,
+                                consumer_group,
+                                broker_kind,
                             )
                             batch = []
                     else:
                         await _process_single_event(
                             event,
-                            consumer,
-                            producer,
-                            enable_dlq,
-                            data,
-                            runtime,
+                            lambda: msg.ack_callback(),
+                            dlq_publisher=dlq_publisher,
+                            dlq_destination=dlq_destination,
+                            enable_dlq=enable_dlq,
+                            raw_data=data,
+                            runtime=runtime,
+                            consumer_group=consumer_group,
+                            broker_kind=broker_kind,
                         )
 
                 breaker.record_success()
@@ -1086,30 +1237,36 @@ async def consumer_task(
         if batch:
             await _process_batch(
                 batch,
-                consumer,
-                producer,
+                consumer.ack_batch,
+                dlq_publisher,
+                dlq_destination,
                 enable_dlq,
                 runtime,
+                consumer_group,
+                broker_kind,
             )
 
     except asyncio.CancelledError:
         logger.info("Consumer task received cancellation signal (outer)")
         raise
     finally:
-        logger.info("Stopping Kafka consumer '%s'", cluster_name)
+        logger.info("Stopping %s consumer '%s'", broker_kind, cluster_name)
         runtime["running"] = False
         runtime["connected"] = False
         await consumer.stop()
-        if producer:
-            await producer.stop()
+        if dlq_publisher:
+            await dlq_publisher.stop()
 
 
 async def _process_batch(
-    batch: list[tuple],
-    consumer: AIOKafkaConsumer,
-    producer: Optional[AIOKafkaProducer],
+    batch: list[tuple[KafkaEvent, str, BrokerMessage]],
+    ack_callback: Callable[[list[BrokerMessage]], Awaitable[None]],
+    dlq_publisher: Optional[DeadLetterPublisher],
+    dlq_destination: str,
     enable_dlq: bool,
     runtime: dict[str, object],
+    consumer_group: str,
+    broker_kind: str,
 ):
     """Process a batch of events."""
     with start_span(
@@ -1119,7 +1276,7 @@ async def _process_batch(
             "db_monitor.dlq_enabled": enable_dlq,
         },
     ):
-        for event, raw_data in batch:
+        for event, raw_data, _message in batch:
             try:
                 inserted = await _store_event_graph_with_retries(
                     AsyncSessionLocal,
@@ -1152,10 +1309,12 @@ async def _process_batch(
                 ).inc()
                 if enable_dlq:
                     handled = await send_to_dlq(
-                        producer,
+                        dlq_publisher,
                         event,
                         str(exc),
                         raw_data.encode(),
+                        dlq_destination=dlq_destination,
+                        broker_kind=broker_kind,
                     )
                     if not handled:
                         logger.error(
@@ -1180,13 +1339,18 @@ async def _process_batch(
 
     try:
         with kafka_commit_duration_seconds.time():
-            await consumer.commit()
+            batch_messages = [
+                message for _event, _raw_data, message in batch
+            ]
+            await ack_callback(batch_messages)
         await persist_consumer_checkpoints(
-            [event for event, _raw_data in batch],
+            [event for event, _raw_data, _message in batch],
+            consumer_group=consumer_group,
+            broker_kind=broker_kind,
         )
         _record_successful_commit(runtime)
     except Exception as exc:
-        logger.exception("Failed to commit Kafka offsets: %s", exc)
+        logger.exception("Failed to acknowledge broker messages: %s", exc)
 
 
 def _event_to_ws_payload(event: KafkaEvent) -> dict:
@@ -1231,13 +1395,30 @@ async def _broadcast_event(event: KafkaEvent) -> None:
 
 async def _process_single_event(
     event: KafkaEvent,
-    consumer: AIOKafkaConsumer,
-    producer: Optional[AIOKafkaProducer],
-    enable_dlq: bool,
-    raw_data: str,
-    runtime: dict[str, object],
+    ack_target: Callable[[], Awaitable[None]] | object,
+    producer: Optional[DeadLetterPublisher] = None,
+    dlq_publisher: Optional[DeadLetterPublisher] = None,
+    dlq_destination: str = DLQ_TOPIC,
+    enable_dlq: bool = True,
+    raw_data: str = "",
+    runtime: Optional[dict[str, object]] = None,
+    consumer_group: str = KAFKA_CONSUMER_GROUP,
+    broker_kind: str = "kafka",
 ):
     """Process a single event."""
+    if runtime is None:
+        runtime = consumer_runtime
+
+    if dlq_publisher is None:
+        dlq_publisher = producer
+
+    if callable(ack_target):
+        ack_callback = ack_target
+    elif hasattr(ack_target, "commit") and callable(ack_target.commit):
+        ack_callback = ack_target.commit
+    else:
+        raise TypeError("ack_target must be callable or expose commit().")
+
     try:
         with start_span(
             "kafka.process.event",
@@ -1280,10 +1461,12 @@ async def _process_single_event(
         ).inc()
         if enable_dlq:
             handled = await send_to_dlq(
-                producer,
+                dlq_publisher,
                 event,
                 str(exc),
                 raw_data.encode(),
+                dlq_destination=dlq_destination,
+                broker_kind=broker_kind,
             )
             if not handled:
                 return
@@ -1292,8 +1475,12 @@ async def _process_single_event(
 
     try:
         with kafka_commit_duration_seconds.time():
-            await consumer.commit()
-        await persist_consumer_checkpoints([event])
+            await ack_callback()
+        await persist_consumer_checkpoints(
+            [event],
+            consumer_group=consumer_group,
+            broker_kind=broker_kind,
+        )
         _record_successful_commit(runtime)
     except Exception as exc:
-        logger.exception("Failed to commit Kafka offsets: %s", exc)
+        logger.exception("Failed to acknowledge broker message: %s", exc)
