@@ -66,10 +66,11 @@ jobs:
       - name: Wait for infrastructure readiness
         run: |
           python - <<'PY'
+          import socket
           import time
           import urllib.request
 
-          def wait_for(url: str, timeout: int = 180) -> None:
+          def wait_for_http(url: str, timeout: int = 180) -> None:
               deadline = time.time() + timeout
               while time.time() < deadline:
                   try:
@@ -79,7 +80,25 @@ jobs:
                       time.sleep(2)
               raise SystemExit(f"Timed out waiting for {url}")
 
-          wait_for("http://localhost:8083/connectors")
+          def wait_for_port(
+            host: str,
+            port: int,
+            timeout: int = 180,
+          ) -> None:
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+              try:
+                with socket.create_connection((host, port), timeout=5):
+                  return
+              except OSError:
+                time.sleep(2)
+            raise SystemExit(
+              f"Timed out waiting for {host}:{port}"
+            )
+
+          wait_for_port("localhost", 5437)
+          wait_for_port("localhost", 9093)
+          wait_for_http("http://localhost:8083/connectors")
           PY
           docker compose ps
 
