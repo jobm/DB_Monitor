@@ -354,6 +354,67 @@ async def test_process_single_event_commits_after_dlq_persist(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_broadcast_event_delivers_webhooks(monkeypatch):
+    event = KafkaEvent(
+        id=77,
+        event_type="UPDATE",
+        event_time=datetime.now(timezone.utc),
+        user_id="user-1",
+        service_name="orderdb",
+        kafka_topic="orders.events",
+        kafka_partition=0,
+        kafka_offset=10,
+        source_table_id=4,
+        row_identity={"id": 5},
+        event_data={"payload": {"after": {"id": 5}}},
+        raw_payload="{}",
+        operation="UPDATE",
+    )
+    websocket_messages = []
+    webhook_messages = []
+
+    async def fake_broadcast(message, event_id=None):
+        websocket_messages.append((message, event_id))
+
+    async def fake_send_message(message):
+        webhook_messages.append(message)
+
+    monkeypatch.setattr(
+        consumer_service.ws_manager,
+        "broadcast",
+        fake_broadcast,
+    )
+    monkeypatch.setattr(
+        consumer_service.webhook_notifier,
+        "send_message",
+        fake_send_message,
+    )
+
+    await consumer_service._broadcast_event(event)
+
+    assert websocket_messages == [
+        (
+            {
+                "type": "new_event",
+                "event": {
+                    "id": 77,
+                    "event_type": "UPDATE",
+                    "event_time": event.event_time.isoformat(),
+                    "user_id": "user-1",
+                    "service_name": "orderdb",
+                    "operation": "UPDATE",
+                    "source_table_id": 4,
+                    "row_identity": {"id": 5},
+                    "event_data": {"payload": {"after": {"id": 5}}},
+                },
+            },
+            77,
+        )
+    ]
+    assert webhook_messages == [websocket_messages[0][0]]
+
+
+@pytest.mark.anyio
 async def test_consumer_task_assigns_explicit_topic_partitions(monkeypatch):
     fake_consumer = None
 

@@ -258,3 +258,24 @@ def test_config_accepts_console_exporter_when_tracing_enabled(
 
     assert config.OTEL_TRACING_ENABLED is True
     assert config.OTEL_EXPORTER == "console"
+
+
+def test_config_loads_webhook_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Webhook URLs and timeout should parse from environment variables."""
+    monkeypatch.setenv(
+        "WEBHOOK_URLS",
+        "https://hooks.example/a,https://hooks.example/b",
+    )
+    monkeypatch.setenv("WEBHOOK_TIMEOUT_SECONDS", "9.5")
+    monkeypatch.setenv("WEBHOOK_SHARED_SECRET", "shared-secret")
+
+    config = _load_config_module("config_webhooks")
+
+    assert config.WEBHOOK_URLS == [
+        "https://hooks.example/a",
+        "https://hooks.example/b",
+    ]
+    assert config.WEBHOOK_TIMEOUT_SECONDS == 9.5
+    assert config.WEBHOOK_SHARED_SECRET == "shared-secret"

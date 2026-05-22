@@ -142,6 +142,26 @@ place or return a replacement `KafkaEvent`.
 | `WS_BACKPLANE_ENABLED` | Enable Postgres-backed cross-replica fanout | `true` |
 | `WS_BACKPLANE_CHANNEL` | Postgres notification channel name | `db_monitor_ws_events` |
 
+## Webhook Notifications
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `WEBHOOK_URLS` | Comma-separated outbound webhook targets | unset |
+| `WEBHOOK_TIMEOUT_SECONDS` | Per-request webhook timeout | `5.0` |
+| `WEBHOOK_SHARED_SECRET` / `WEBHOOK_SHARED_SECRET_FILE` | Optional HMAC signing secret | unset |
+
+Example:
+
+```env
+WEBHOOK_URLS=https://ops.example/hooks/db-monitor,https://backup.example/hooks/cdc
+WEBHOOK_TIMEOUT_SECONDS=5.0
+WEBHOOK_SHARED_SECRET=replace-me
+```
+
+When configured, DB Monitor sends a `POST` request for each persisted event
+with the same payload shape used by the websocket feed. If a shared secret is
+set, deliveries include `X-DB-Monitor-Signature` using `sha256=<hex>` HMAC.
+
 ## Distributed Tracing Settings
 
 | Variable | Purpose | Default |

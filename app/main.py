@@ -26,6 +26,7 @@ from lifecycle_manager import lifecycle_manager
 from metrics import api_request_duration_seconds, failed_auth_attempts_total
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from routes import router
+from schema_discovery import schema_cache_backplane
 from tracing import current_trace_context, initialize_tracing
 from ws_manager import ws_manager
 
@@ -91,6 +92,7 @@ async def lifespan_manager(app: FastAPI):
 
     consumer_task_instances: list[asyncio.Task] = []
     audit_log_task = None
+    schema_cache_backplane_task = None
     ws_backplane_task = None
     try:
         audit_log_task = asyncio.create_task(
@@ -98,6 +100,12 @@ async def lifespan_manager(app: FastAPI):
             name="audit_log_writer",
         )
         lifecycle_manager.register_task(audit_log_task)
+
+        schema_cache_backplane_task = (
+            await schema_cache_backplane.start_listener()
+        )
+        if schema_cache_backplane_task is not None:
+            lifecycle_manager.register_task(schema_cache_backplane_task)
 
         ws_backplane_task = await ws_manager.start_backplane_listener()
         if ws_backplane_task is not None:

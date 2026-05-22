@@ -42,6 +42,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
 from tracing import start_span
+from webhooks import webhook_notifier
 from ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
@@ -1205,6 +1206,10 @@ def _event_to_ws_payload(event: KafkaEvent) -> dict:
 
 
 async def _broadcast_event(event: KafkaEvent) -> None:
+    payload = {
+        "type": "new_event",
+        "event": _event_to_ws_payload(event),
+    }
     try:
         with start_span(
             "websocket.broadcast.event",
@@ -1214,15 +1219,14 @@ async def _broadcast_event(event: KafkaEvent) -> None:
                 "db_monitor.operation": event.operation,
             },
         ):
-            await ws_manager.broadcast(
-                {
-                    "type": "new_event",
-                    "event": _event_to_ws_payload(event),
-                },
-                event_id=event.id,
-            )
+            await ws_manager.broadcast(payload, event_id=event.id)
     except Exception as e:
         logger.warning("Failed to broadcast event via WebSocket: %s", e)
+
+    try:
+        await webhook_notifier.send_message(payload)
+    except Exception as exc:
+        logger.warning("Failed to deliver event via webhook: %s", exc)
 
 
 async def _process_single_event(

@@ -409,6 +409,11 @@ WS_BACKPLANE_CHANNEL = os.getenv(
     "WS_BACKPLANE_CHANNEL",
     "db_monitor_ws_events",
 )
+WEBHOOK_URLS = _parse_csv_list(os.getenv("WEBHOOK_URLS"))
+WEBHOOK_TIMEOUT_SECONDS = float(
+    os.getenv("WEBHOOK_TIMEOUT_SECONDS", "5.0")
+)
+WEBHOOK_SHARED_SECRET = _get_env_or_file("WEBHOOK_SHARED_SECRET")
 OTEL_TRACING_ENABLED = (
     os.getenv(
         "OTEL_TRACING_ENABLED",
@@ -497,4 +502,17 @@ if OTEL_TRACING_ENABLED and OTEL_EXPORTER == "otlp":
                 "Set OTEL_EXPORTER_OTLP_ENDPOINT to your collector URL or "
                 "switch OTEL_EXPORTER=console for local debugging."
             ),
+        )
+
+if WEBHOOK_TIMEOUT_SECONDS <= 0:
+    _config_error(
+        "WEBHOOK_TIMEOUT_SECONDS must be greater than zero.",
+        hint="Set a positive timeout value such as 5.0.",
+    )
+
+for webhook_url in WEBHOOK_URLS:
+    if not webhook_url.startswith(("http://", "https://")):
+        _config_error(
+            f"Invalid WEBHOOK_URLS entry '{webhook_url}'.",
+            hint="Use comma-separated http:// or https:// URLs.",
         )

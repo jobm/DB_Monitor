@@ -38,6 +38,9 @@ The monitor database is exposed on `5437`.
 - Persistent Kafka checkpoint snapshots and single/batch DLQ replay controls
    for recovery
 - Partition-aware Kafka placement controls through explicit topic assignments
+- Cross-replica schema cache invalidation for fresher table metadata on
+   horizontally scaled replicas
+- Optional outbound webhooks for persisted CDC events
 - Dedicated Textual admin console for readiness, key management,
   checkpoints, and DLQ replay
 - Optional OpenTelemetry tracing for HTTP, database, Kafka, and websocket paths

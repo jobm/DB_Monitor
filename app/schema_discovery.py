@@ -5,17 +5,156 @@ Extracts and registers table and column schemas from Debezium messages.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import time
+import weakref
 from collections.abc import Callable
 from typing import Any, Optional
+from uuid import uuid4
 
+import asyncpg
+from config import POSTGRES_URL, WS_BACKPLANE_CHANNEL, WS_BACKPLANE_ENABLED
+from extensions import engine
 from metrics import columns_discovered_total, tables_discovered_total
 from models import KafkaEvent, MonitoredColumn, MonitoredTable
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+
+SCHEMA_CACHE_BACKPLANE_CHANNEL = f"{WS_BACKPLANE_CHANNEL}_schema"
+SCHEMA_CACHE_BACKPLANE_DSN = POSTGRES_URL.replace(
+    "postgresql+asyncpg://",
+    "postgresql://",
+    1,
+)
+_registered_schema_discoveries: weakref.WeakSet[SchemaDiscovery] = (
+    weakref.WeakSet()
+)
+
+
+def _invalidate_registered_schema_caches(
+    service_name: str,
+    table_name: str,
+) -> None:
+    """Invalidate one table cache across all live discovery instances."""
+    for discovery in list(_registered_schema_discoveries):
+        discovery._invalidate_table_cache(service_name, table_name)
+
+
+class SchemaCacheBackplane:
+    """Propagate schema-cache invalidations across clustered replicas."""
+
+    def __init__(self) -> None:
+        self._instance_id = uuid4().hex
+        self._listener_task: asyncio.Task | None = None
+        self._stop_event = asyncio.Event()
+
+    async def publish_invalidation(
+        self,
+        service_name: str,
+        table_name: str,
+    ) -> None:
+        """Publish a schema-cache invalidation to other replicas."""
+        if not WS_BACKPLANE_ENABLED:
+            return
+
+        payload = json.dumps(
+            {
+                "origin_instance_id": self._instance_id,
+                "service_name": service_name,
+                "table_name": table_name,
+            }
+        )
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT pg_notify(:channel, :payload)"),
+                {
+                    "channel": SCHEMA_CACHE_BACKPLANE_CHANNEL,
+                    "payload": payload,
+                },
+            )
+
+    async def start_listener(self) -> asyncio.Task | None:
+        """Start the schema-cache backplane listener if clustering is on."""
+        if not WS_BACKPLANE_ENABLED:
+            return None
+        if self._listener_task and not self._listener_task.done():
+            return self._listener_task
+
+        self._stop_event = asyncio.Event()
+        self._listener_task = asyncio.create_task(
+            self._run_listener(),
+            name="schema_cache_backplane_listener",
+        )
+        return self._listener_task
+
+    async def _run_listener(self) -> None:
+        while not self._stop_event.is_set():
+            connection: asyncpg.Connection | None = None
+            try:
+                connection = await asyncpg.connect(
+                    SCHEMA_CACHE_BACKPLANE_DSN
+                )
+                await connection.add_listener(
+                    SCHEMA_CACHE_BACKPLANE_CHANNEL,
+                    self._handle_notification,
+                )
+                logger.info(
+                    "Schema cache backplane listener subscribed to %s",
+                    SCHEMA_CACHE_BACKPLANE_CHANNEL,
+                )
+                await self._stop_event.wait()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning(
+                    "Schema cache backplane listener error: %s",
+                    exc,
+                )
+                await asyncio.sleep(5.0)
+            finally:
+                if connection is not None:
+                    try:
+                        await connection.remove_listener(
+                            SCHEMA_CACHE_BACKPLANE_CHANNEL,
+                            self._handle_notification,
+                        )
+                    except Exception:
+                        pass
+                    await connection.close()
+
+    def _handle_notification(
+        self,
+        _connection: asyncpg.Connection,
+        _pid: int,
+        _channel: str,
+        payload: str,
+    ) -> None:
+        asyncio.create_task(self._deliver_notification(payload))
+
+    async def _deliver_notification(self, payload: str) -> None:
+        try:
+            envelope = json.loads(payload)
+        except json.JSONDecodeError:
+            logger.warning("Ignoring invalid schema-cache backplane payload")
+            return
+
+        if envelope.get("origin_instance_id") == self._instance_id:
+            return
+
+        service_name = str(envelope.get("service_name") or "").strip()
+        table_name = str(envelope.get("table_name") or "").strip()
+        if not service_name or not table_name:
+            return
+
+        _invalidate_registered_schema_caches(service_name, table_name)
+
+
+schema_cache_backplane = SchemaCacheBackplane()
 
 
 class SchemaDiscovery:
@@ -27,6 +166,7 @@ class SchemaDiscovery:
         self.session_factory = session_factory
         self._cache_ttl_seconds = cache_ttl_seconds
         self._table_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        _registered_schema_discoveries.add(self)
 
     async def process_event(
         self,
@@ -81,7 +221,7 @@ class SchemaDiscovery:
         if table_id and column_definitions:
             await self._upsert_columns(session, table_id, column_definitions)
 
-        self._invalidate_table_cache(service_name, table_identifier)
+        await self._invalidate_cluster_cache(service_name, table_identifier)
 
         return table_id
 
@@ -335,6 +475,18 @@ class SchemaDiscovery:
         self, service_name: str, table_name: str
     ) -> None:
         self._table_cache.pop(self._cache_key(service_name, table_name), None)
+
+    async def _invalidate_cluster_cache(
+        self,
+        service_name: str,
+        table_name: str,
+    ) -> None:
+        """Invalidate this table cache locally and across replicas."""
+        _invalidate_registered_schema_caches(service_name, table_name)
+        await schema_cache_backplane.publish_invalidation(
+            service_name,
+            table_name,
+        )
 
     def _cache_key(self, service_name: str, table_name: str) -> str:
         return f"{service_name}:{table_name}"

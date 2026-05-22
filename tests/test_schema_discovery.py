@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import json
+import time
+
+import pytest
+
+import schema_discovery as schema_discovery_module
 from schema_discovery import SchemaDiscovery
 
 
@@ -37,16 +43,36 @@ def test_extract_column_definitions_reads_debezium_schema_envelope():
                     {
                         "field": "before",
                         "fields": [
-                            {"field": "id", "type": "int32", "optional": False},
-                            {"field": "status", "type": "string", "optional": True},
+                            {
+                                "field": "id",
+                                "type": "int32",
+                                "optional": False,
+                            },
+                            {
+                                "field": "status",
+                                "type": "string",
+                                "optional": True,
+                            },
                         ],
                     },
                     {
                         "field": "after",
                         "fields": [
-                            {"field": "id", "type": "int32", "optional": False},
-                            {"field": "status", "type": "string", "optional": True},
-                            {"field": "__deleted", "type": "string", "optional": True},
+                            {
+                                "field": "id",
+                                "type": "int32",
+                                "optional": False,
+                            },
+                            {
+                                "field": "status",
+                                "type": "string",
+                                "optional": True,
+                            },
+                            {
+                                "field": "__deleted",
+                                "type": "string",
+                                "optional": True,
+                            },
                         ],
                     },
                 ]
@@ -70,3 +96,87 @@ def test_extract_column_definitions_reads_debezium_schema_envelope():
             "audit_enabled": True,
         },
     ]
+
+
+@pytest.mark.anyio
+async def test_cluster_invalidation_clears_sibling_instance_cache(
+) -> None:
+    reader = SchemaDiscovery(lambda: None)
+    writer = SchemaDiscovery(lambda: None)
+    cache_key = reader._cache_key("orderdb", "orders")
+    reader._table_cache[cache_key] = (
+        time.monotonic(),
+        {"id": 1, "table_name": "orders"},
+    )
+
+    async def fake_publish_invalidation(
+        service_name: str,
+        table_name: str,
+    ) -> None:
+        del service_name, table_name
+
+    original_publish = (
+        schema_discovery_module.schema_cache_backplane.publish_invalidation
+    )
+    schema_discovery_module.schema_cache_backplane.publish_invalidation = (
+        fake_publish_invalidation
+    )
+    try:
+        await writer._invalidate_cluster_cache("orderdb", "orders")
+    finally:
+        schema_discovery_module.schema_cache_backplane.publish_invalidation = (
+            original_publish
+        )
+
+    assert cache_key not in reader._table_cache
+
+
+@pytest.mark.anyio
+async def test_schema_cache_backplane_notification_invalidates_cache(
+) -> None:
+    discovery = SchemaDiscovery(lambda: None)
+    cache_key = discovery._cache_key("orderdb", "orders")
+    discovery._table_cache[cache_key] = (
+        time.monotonic(),
+        {"id": 1, "table_name": "orders"},
+    )
+
+    payload = json.dumps(
+        {
+            "origin_instance_id": "remote-replica",
+            "service_name": "orderdb",
+            "table_name": "orders",
+        }
+    )
+
+    await schema_discovery_module.schema_cache_backplane._deliver_notification(
+        payload
+    )
+
+    assert cache_key not in discovery._table_cache
+
+
+@pytest.mark.anyio
+async def test_schema_cache_backplane_ignores_local_origin() -> None:
+    discovery = SchemaDiscovery(lambda: None)
+    cache_key = discovery._cache_key("orderdb", "orders")
+    discovery._table_cache[cache_key] = (
+        time.monotonic(),
+        {"id": 1, "table_name": "orders"},
+    )
+
+    payload = json.dumps(
+        {
+            "origin_instance_id": (
+                schema_discovery_module.schema_cache_backplane._instance_id
+            ),
+            "service_name": "orderdb",
+            "table_name": "orders",
+        }
+    )
+
+    await schema_discovery_module.schema_cache_backplane._deliver_notification(
+        payload
+    )
+
+    assert cache_key in discovery._table_cache

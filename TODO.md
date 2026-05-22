@@ -48,11 +48,11 @@ These are not committed backlog items yet.
 - [x] Validate horizontal scaling under automated tests
 - [x] Add distributed tracing
 - [x] Add partition-aware scaling and placement controls
-- [ ] Add clustering support for more stateful components
+- [x] Add clustering support for more stateful components
 
 ### Integration Surface
 
 - [ ] Add support for additional databases
-- [ ] Implement webhook notifications
+- [x] Implement webhook notifications
 - [ ] Create SDKs for common languages
 - [ ] Add support for different message brokers

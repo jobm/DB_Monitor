@@ -159,6 +159,9 @@ async def test_lifespan_manager_starts_one_consumer_per_cluster(
     async def fake_audit_log_run() -> None:
         return None
 
+    async def fake_start_schema_cache_listener():
+        return None
+
     async def fake_consumer_task(**kwargs):
         started_clusters.append(
             (kwargs["cluster_name"], list(kwargs["topics"]))
@@ -181,6 +184,11 @@ async def test_lifespan_manager_starts_one_consumer_per_cluster(
     )
     monkeypatch.setattr(main, "consumer_task", fake_consumer_task)
     monkeypatch.setattr(main.audit_log_writer, "run", fake_audit_log_run)
+    monkeypatch.setattr(
+        main.schema_cache_backplane,
+        "start_listener",
+        fake_start_schema_cache_listener,
+    )
     monkeypatch.setattr(
         main.ws_manager,
         "start_backplane_listener",
@@ -236,6 +244,9 @@ async def test_lifespan_manager_passes_topic_partitions_to_consumer(
     async def fake_audit_log_run() -> None:
         return None
 
+    async def fake_start_schema_cache_listener():
+        return None
+
     async def fake_consumer_task(**kwargs):
         captured_assignments.append(kwargs.get("topic_partitions"))
 
@@ -256,6 +267,11 @@ async def test_lifespan_manager_passes_topic_partitions_to_consumer(
     )
     monkeypatch.setattr(main, "consumer_task", fake_consumer_task)
     monkeypatch.setattr(main.audit_log_writer, "run", fake_audit_log_run)
+    monkeypatch.setattr(
+        main.schema_cache_backplane,
+        "start_listener",
+        fake_start_schema_cache_listener,
+    )
     monkeypatch.setattr(
         main.ws_manager,
         "start_backplane_listener",
