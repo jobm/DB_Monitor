@@ -4,12 +4,11 @@ import logging
 from uuid import uuid4
 
 import asyncpg
-from fastapi import WebSocket
-from sqlalchemy import select, text
-
 from config import POSTGRES_URL, WS_BACKPLANE_CHANNEL, WS_BACKPLANE_ENABLED
 from extensions import AsyncSessionLocal, engine
+from fastapi import WebSocket
 from models import KafkaEvent
+from sqlalchemy import select, text
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,7 @@ class WebSocketManager:
         async with self._lock:
             self._connections[client_id] = websocket
         logger.info(
-            f"WebSocket client %d connected (%d total)",
+            "WebSocket client %d connected (%d total)",
             client_id,
             len(self._connections),
         )
@@ -42,7 +41,7 @@ class WebSocketManager:
         async with self._lock:
             self._connections.pop(client_id, None)
         logger.info(
-            f"WebSocket client %d disconnected (%d total)",
+            "WebSocket client %d disconnected (%d total)",
             client_id,
             len(self._connections),
         )
@@ -191,12 +190,15 @@ class WebSocketManager:
                     "id": event.id,
                     "event_type": event.event_type,
                     "event_time": (
-                        event.event_time.isoformat() if event.event_time else None
+                        event.event_time.isoformat()
+                        if event.event_time
+                        else None
                     ),
                     "user_id": event.user_id,
                     "service_name": event.service_name,
                     "operation": event.operation,
                     "source_table_id": event.source_table_id,
+                    "row_identity": event.row_identity,
                     "event_data": event.event_data,
                 },
             }

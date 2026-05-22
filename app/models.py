@@ -115,6 +115,7 @@ class KafkaEvent(Base):
         nullable=True,
     )
     operation = Column(String(16), nullable=True)  # INSERT, UPDATE, DELETE
+    row_identity = Column(JSONB, nullable=True)
 
     event_data = Column(JSONB, nullable=True)
     raw_payload = Column(Text, nullable=False)
@@ -123,6 +124,11 @@ class KafkaEvent(Base):
     __table_args__ = (
         Index("ix_events_type_time", "event_type", "event_time"),
         Index("ix_events_source_table_time", "source_table_id", "event_time"),
+        Index(
+            "ix_events_row_identity",
+            "row_identity",
+            postgresql_using="gin",
+        ),
         Index(
             "ux_events_kafka_position",
             "kafka_topic",
@@ -212,6 +218,7 @@ class ColumnChange(Base):
     )
 
     operation = Column(String(16), nullable=False)
+    row_identity = Column(JSONB, nullable=True)
     old_value = Column(JSONB, nullable=True)
     new_value = Column(JSONB, nullable=True)
 
@@ -223,6 +230,11 @@ class ColumnChange(Base):
             "table_id",
             "column_id",
             "changed_at",
+        ),
+        Index(
+            "ix_changes_row_identity",
+            "row_identity",
+            postgresql_using="gin",
         ),
     )
 

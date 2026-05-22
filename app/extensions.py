@@ -1,17 +1,5 @@
 """Database engine, session, and DB initialization for DB Monitor Server."""
 
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
-
-from metrics import (
-    active_connections,
-    db_pool_checked_in_connections,
-    db_pool_overflow_connections,
-    db_pool_size,
-    db_pool_utilization_ratio,
-)
-
 from config import (
     DB_MAX_OVERFLOW,
     DB_POOL_PRE_PING,
@@ -22,6 +10,16 @@ from config import (
     POSTGRES_URL,
     SQLALCHEMY_ECHO,
 )
+from metrics import (
+    active_connections,
+    db_pool_checked_in_connections,
+    db_pool_overflow_connections,
+    db_pool_size,
+    db_pool_utilization_ratio,
+)
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
 
 
 def _pool_metric_value(pool, attribute_name: str) -> int:
@@ -47,9 +45,7 @@ def _update_pool_metrics(pool) -> None:
     db_pool_checked_in_connections.set(checked_in_value)
     db_pool_overflow_connections.set(overflow_value)
     if pool_capacity > 0:
-        db_pool_utilization_ratio.set(
-            checked_out_value / pool_capacity
-        )
+        db_pool_utilization_ratio.set(checked_out_value / pool_capacity)
     else:
         db_pool_utilization_ratio.set(0)
 

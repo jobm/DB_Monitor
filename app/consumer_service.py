@@ -7,8 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
-from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from change_processor import ChangeProcessor
 from config import (
     KAFKA_BROKER,
     KAFKA_CONSUMER_GROUP,
@@ -16,26 +15,33 @@ from config import (
     KAFKA_SSL_CONTEXT,
     KAFKA_TOPIC,
 )
-from ws_manager import ws_manager
 from event_parser import parse_event_payload
 from event_pipeline import event_pipeline
 from extensions import AsyncSessionLocal
 from metrics import (
-    consumer_last_successful_commit_timestamp_seconds,
-    consumer_lag,
     circuit_breaker_state,
+    consumer_lag,
+    consumer_last_successful_commit_timestamp_seconds,
     db_write_duration_seconds,
-    dlq_records_pending,
     dlq_messages_total,
+    dlq_records_pending,
     events_consumed_total,
     events_failed_total,
     events_processed_total,
     kafka_commit_duration_seconds,
 )
-from models import ConsumerCheckpoint, DeadLetterEvent, KafkaEvent
+from models import (
+    ConsumerCheckpoint,
+    DeadLetterEvent,
+    KafkaEvent,
+    MonitoredColumn,
+)
+from row_identity import extract_row_identity
 from schema_discovery import SchemaDiscovery, extract_operation
-from change_processor import ChangeProcessor
-from sqlalchemy.exc import OperationalError, DBAPIError, SQLAlchemyError
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
+from ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +112,9 @@ class CircuitBreaker:
             "open": 1,
             "half-open": 2,
         }.get(self.state, 0)
-        circuit_breaker_state.labels(
-            breaker=CONSUMER_METRIC_NAME
-        ).set(state_value)
+        circuit_breaker_state.labels(breaker=CONSUMER_METRIC_NAME).set(
+            state_value
+        )
 
 
 circuit_breaker = CircuitBreaker()
@@ -226,9 +232,8 @@ def _checkpoint_rows_for_events(
 
         key = (event.kafka_topic, event.kafka_partition)
         existing = checkpoints.get(key)
-        if (
-            existing is None
-            or event.kafka_offset > int(existing["kafka_offset"])
+        if existing is None or event.kafka_offset > int(
+            existing["kafka_offset"]
         ):
             checkpoints[key] = {
                 "consumer_group": KAFKA_CONSUMER_GROUP,
@@ -355,9 +360,9 @@ async def list_dead_letter_events(
         statement = select(DeadLetterEvent)
         if not include_replayed:
             statement = statement.where(DeadLetterEvent.is_replayed.is_(False))
-        statement = statement.order_by(
-            DeadLetterEvent.failed_at.desc()
-        ).limit(limit)
+        statement = statement.order_by(DeadLetterEvent.failed_at.desc()).limit(
+            limit
+        )
         result = await session.execute(statement)
         events = result.scalars().all()
 
@@ -496,6 +501,8 @@ async def _store_event_graph_with_retries(
                         if table_id:
                             event_obj.source_table_id = table_id
 
+                        await _populate_row_identity(session, event_obj)
+
                         inserted = await _insert_event_record(
                             session,
                             event_obj,
@@ -544,6 +551,7 @@ async def _insert_event_record(session, event_obj: KafkaEvent) -> bool:
             kafka_offset=event_obj.kafka_offset,
             source_table_id=event_obj.source_table_id,
             operation=event_obj.operation,
+            row_identity=event_obj.row_identity,
             event_data=event_obj.event_data,
             raw_payload=event_obj.raw_payload,
         )
@@ -559,6 +567,28 @@ async def _insert_event_record(session, event_obj: KafkaEvent) -> bool:
 
     event_obj.id = inserted_id
     return True
+
+
+async def _populate_row_identity(session, event_obj: KafkaEvent) -> None:
+    """Populate row identity on an event before it is inserted."""
+    primary_key_columns: list[str] = []
+    if event_obj.source_table_id is not None:
+        result = await session.execute(
+            select(MonitoredColumn.column_name).where(
+                MonitoredColumn.table_id == event_obj.source_table_id,
+                MonitoredColumn.is_primary_key.is_(True),
+            )
+        )
+        primary_key_columns = [
+            column_name
+            for column_name in result.scalars().all()
+            if column_name
+        ]
+
+    event_obj.row_identity = extract_row_identity(
+        event_obj.event_data,
+        primary_key_columns=primary_key_columns,
+    )
 
 
 async def send_to_dlq(
@@ -915,6 +945,7 @@ def _event_to_ws_payload(event: KafkaEvent) -> dict:
         "service_name": event.service_name,
         "operation": event.operation,
         "source_table_id": event.source_table_id,
+        "row_identity": event.row_identity,
         "event_data": event.event_data,
     }
 

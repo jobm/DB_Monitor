@@ -48,7 +48,9 @@ class AuditLogWriter:
             audit_log_queue_size.set(self._queue.qsize())
         except asyncio.QueueFull:
             audit_log_records_dropped_total.inc()
-            logger.warning("Audit log queue full; dropping request audit entry")
+            logger.warning(
+                "Audit log queue full; dropping request audit entry"
+            )
 
     async def run(self) -> None:
         """Flush queued audit logs to the database in small batches."""

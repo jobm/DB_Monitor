@@ -1,7 +1,9 @@
 import asyncio
+import json
+from typing import Any, Dict, List, Optional
+
 import httpx
 import websockets
-from typing import Optional, Dict, List, Any, AsyncIterator
 
 
 class DBMonitorClient:
@@ -69,7 +71,9 @@ class DBMonitorClient:
         await self._exchange_access_token()
         if self._client is None:
             self._client = httpx.AsyncClient(
-                base_url=self.base_url, headers=self._get_headers(), timeout=10.0
+                base_url=self.base_url,
+                headers=self._get_headers(),
+                timeout=10.0,
             )
         return self._client
 
@@ -98,8 +102,6 @@ class DBMonitorClient:
     async def _ws_listener(self):
         try:
             async for msg in self._ws:
-                import json
-
                 data = json.loads(msg)
                 if data.get("type") == "new_event":
                     await self._event_queue.put(data.get("event"))
@@ -114,17 +116,26 @@ class DBMonitorClient:
             return
         self._clear_event_queue()
         await self._exchange_ws_session_token()
-        ws_url = self.base_url.replace("http://", "ws://").replace("https://", "wss://")
+        ws_url = self.base_url.replace(
+            "http://",
+            "ws://",
+        ).replace("https://", "wss://")
         self._ws = await websockets.connect(
             f"{ws_url}/ws/events?session_token={self._ws_session_token}",
         )
         self._ws_running = True
         self._ws_task = asyncio.create_task(self._ws_listener())
 
-    async def next_event(self, timeout: float = 5.0) -> Optional[Dict[str, Any]]:
+    async def next_event(
+        self,
+        timeout: float = 5.0,
+    ) -> Optional[Dict[str, Any]]:
         """Wait for the next real-time event. Returns None on timeout."""
         try:
-            return await asyncio.wait_for(self._event_queue.get(), timeout=timeout)
+            return await asyncio.wait_for(
+                self._event_queue.get(),
+                timeout=timeout,
+            )
         except asyncio.TimeoutError:
             return None
 
@@ -158,16 +169,64 @@ class DBMonitorClient:
         resp.raise_for_status()
         return resp.json().get("tables", [])
 
+    async def get_table(
+        self,
+        service_name: str,
+        table_name: str,
+    ) -> Dict[str, Any]:
+        client = await self.get_client()
+        resp = await client.get(f"/tables/{service_name}/{table_name}")
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_events(
-        self, limit: int = 50, service_name: Optional[str] = None
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        service_name: Optional[str] = None,
+        source_table_id: Optional[int] = None,
+        row_identity: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         client = await self.get_client()
-        params = {"limit": limit}
+        params = {"limit": limit, "offset": offset}
         if service_name:
             params["service_name"] = service_name
+        if source_table_id is not None:
+            params["source_table_id"] = source_table_id
+        if row_identity is not None:
+            params["row_identity"] = json.dumps(
+                row_identity,
+                sort_keys=True,
+            )
         resp = await client.get("/events", params=params)
         resp.raise_for_status()
         return resp.json().get("events", [])
+
+    async def get_changes(
+        self,
+        table_name: str,
+        service_name: Optional[str] = None,
+        column_name: Optional[str] = None,
+        row_identity: Optional[Dict[str, Any]] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        client = await self.get_client()
+        params: Dict[str, Any] = {
+            "table_name": table_name,
+            "limit": limit,
+            "offset": offset,
+        }
+        if service_name:
+            params["service_name"] = service_name
+        if column_name:
+            params["column_name"] = column_name
+        if row_identity is not None:
+            params["row_identity"] = json.dumps(row_identity, sort_keys=True)
+
+        resp = await client.get("/changes", params=params)
+        resp.raise_for_status()
+        return resp.json().get("changes", [])
 
 
 api_client = DBMonitorClient()

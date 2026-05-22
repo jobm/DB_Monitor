@@ -2,6 +2,17 @@
 
 DB Monitor is a FastAPI-based CDC monitoring service that consumes Debezium events from Kafka, stores them in PostgreSQL, and exposes raw events, discovered table metadata, column-level changes, metrics, and realtime notifications.
 
+## Documentation
+
+- API reference: `api-docs.md`
+- Architecture: `docs/architecture.md`
+- Configuration: `docs/configuration.md`
+- Deployment: `docs/deployment.md`
+- Troubleshooting: `docs/troubleshooting.md`
+- Recovery runbook: `docs/runbooks/recovery-and-validation.md`
+- Alerts runbook: `docs/runbooks/alerts-and-thresholds.md`
+- Example client: `examples/python_api_client.py`
+
 ## Architecture
 
 ```text
@@ -229,6 +240,8 @@ Operational recovery and live-validation steps are documented in
 `docs/runbooks/recovery-and-validation.md`.
 Alert thresholds and first-response guidance are documented in
 `docs/runbooks/alerts-and-thresholds.md`.
+Architecture, deployment, troubleshooting, and configuration references now
+live under `docs/`.
 
 ## Data model summary
 

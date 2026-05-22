@@ -1,5 +1,5 @@
 #!/bin/sh
 set -eu
 
-uv run python migrate.py apply
-exec uv run python start_monitor.py
+/app/.venv/bin/python migrate.py apply
+exec /app/.venv/bin/python start_monitor.py

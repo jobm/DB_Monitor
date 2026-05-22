@@ -1,24 +1,23 @@
 """Tracked schema and data migrations for DB Monitor.
 
-The app no longer mutates schema implicitly on every startup. Instead, startup
-either applies tracked migrations in development-style environments or validates
-that all known migrations have already been applied in production-style
+The app no longer mutates schema implicitly on every startup.
+Instead, startup either applies tracked migrations in
+development-style environments or validates that all known
+migrations have already been applied in production-style
 environments.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
-
-from sqlalchemy import select, text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from event_parser import parse_event_payload
 from models import Base, KafkaEvent, KafkaEventLegacy
-
+from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 SCHEMA_MIGRATIONS_TABLE = "schema_migrations"
 
@@ -50,9 +49,7 @@ async def _ensure_migration_table(connection: AsyncConnection) -> None:
 async def _get_applied_versions(connection: AsyncConnection) -> set[str]:
     """Return the set of tracked migration versions already applied."""
     result = await connection.execute(
-        text(
-            f"SELECT version FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY version"
-        )
+        text(f"SELECT version FROM {SCHEMA_MIGRATIONS_TABLE} ORDER BY version")
     )
     return {row[0] for row in result.fetchall()}
 
@@ -223,6 +220,31 @@ async def _apply_bigint_kafka_offsets(
         await connection.execute(text(statement))
 
 
+async def _apply_row_identity_columns(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Persist row identity on events and column changes for record history."""
+    del session_factory
+    statements = [
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS row_identity JSONB",
+        (
+            "CREATE INDEX IF NOT EXISTS ix_events_row_identity "
+            "ON events USING GIN (row_identity)"
+        ),
+        (
+            "ALTER TABLE column_changes ADD COLUMN IF NOT EXISTS "
+            "row_identity JSONB"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS ix_changes_row_identity "
+            "ON column_changes USING GIN (row_identity)"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version="0001_base_schema",
@@ -253,6 +275,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version="0006_bigint_kafka_offsets",
         description="Widen Kafka offset columns to bigint",
         apply=_apply_bigint_kafka_offsets,
+    ),
+    Migration(
+        version="0007_row_identity_columns",
+        description="Persist row identity for row-scoped audit history",
+        apply=_apply_row_identity_columns,
     ),
 )
 

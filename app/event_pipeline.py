@@ -17,7 +17,8 @@ class EventPipelineConfig:
     - FILTER_IGNORED_EVENT_TYPES (comma-separated, defaults to "unparsed")
     - FILTER_ALLOWED_TABLES (comma-separated, e.g. "public.orders")
     - FILTER_IGNORED_TABLES (comma-separated)
-    - VALIDATION_REQUIRED_FIELDS (comma-separated keys that must exist in event_data)
+        - VALIDATION_REQUIRED_FIELDS
+            (comma-separated keys that must exist in event_data)
     - TRANSFORM_MASK_FIELDS (comma-separated, fields to mask with ***MASKED***)
     """
 
@@ -28,15 +29,25 @@ class EventPipelineConfig:
         self.ignored_event_types = self._parse_list(
             os.getenv("FILTER_IGNORED_EVENT_TYPES", "unparsed")
         )
-        self.allowed_tables = self._parse_list(os.getenv("FILTER_ALLOWED_TABLES"))
-        self.ignored_tables = self._parse_list(os.getenv("FILTER_IGNORED_TABLES"))
-
-        self.required_fields = self._parse_list(os.getenv("VALIDATION_REQUIRED_FIELDS"))
-        self.mask_fields = self._parse_list(
-            os.getenv("TRANSFORM_MASK_FIELDS", "password,secret,token,credit_card")
+        self.allowed_tables = self._parse_list(
+            os.getenv("FILTER_ALLOWED_TABLES")
+        )
+        self.ignored_tables = self._parse_list(
+            os.getenv("FILTER_IGNORED_TABLES")
         )
 
-    def _parse_list(self, val: Optional[str], default: list[str] = None) -> list[str]:
+        self.required_fields = self._parse_list(
+            os.getenv("VALIDATION_REQUIRED_FIELDS")
+        )
+        self.mask_fields = self._parse_list(
+            os.getenv(
+                "TRANSFORM_MASK_FIELDS", "password,secret,token,credit_card"
+            )
+        )
+
+    def _parse_list(
+        self, val: Optional[str], default: list[str] = None
+    ) -> list[str]:
         if not val:
             return default or []
         return [v.strip() for v in val.split(",") if v.strip()]
@@ -99,7 +110,10 @@ class EventPipeline:
         return True
 
     def transform(self, event: KafkaEvent) -> KafkaEvent:
-        """Applies transformation rules like data masking. Modifies inplace (mostly)."""
+        """Apply transformation rules like data masking.
+
+        This mutates the event in place in most cases.
+        """
         if (
             not self.config.mask_fields
             or not event.event_data

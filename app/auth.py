@@ -7,12 +7,6 @@ from typing import Optional
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from fastapi import Depends, HTTPException, Security
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi.security.api_key import APIKeyHeader
-from jwt import InvalidTokenError
-from sqlalchemy import select
-
 from config import (
     ACCESS_TOKEN_TTL_MINUTES,
     API_KEY_DEFAULT_TTL_DAYS,
@@ -22,7 +16,12 @@ from config import (
     WS_SESSION_TOKEN_TTL_SECONDS,
 )
 from extensions import AsyncSessionLocal
+from fastapi import Depends, HTTPException, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security.api_key import APIKeyHeader
+from jwt import InvalidTokenError
 from models import ApiKey
+from sqlalchemy import select
 
 password_hasher = PasswordHasher()
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -159,7 +158,9 @@ def is_api_key_usable(
 async def _get_api_key_by_id(key_id: int) -> Optional[ApiKey]:
     """Fetch an API key by primary key and enforce lifecycle checks."""
     async with AsyncSessionLocal() as session:
-        result = await session.execute(select(ApiKey).where(ApiKey.id == key_id))
+        result = await session.execute(
+            select(ApiKey).where(ApiKey.id == key_id)
+        )
         api_key_record = result.scalar_one_or_none()
         if is_api_key_usable(api_key_record):
             return api_key_record
@@ -190,40 +191,44 @@ async def _authenticate_bearer_token(
     return await _get_api_key_by_id(key_id)
 
 
-async def get_current_api_key(api_key_header_value: str = Security(api_key_header)) -> Optional[ApiKey]:
+async def get_current_api_key(
+    api_key_header_value: str = Security(api_key_header),
+) -> Optional[ApiKey]:
     """Retrieve the ApiKey record if the provided key is valid."""
     if not api_key_header_value:
         return None
-        
+
     async with AsyncSessionLocal() as session:
         # Since we hash keys, we normally couldn't look them up by hash easily
-        # For API keys, a common pattern to allow lookup is prefix.key 
-        # But for absolute security, if we only have the raw key, we must check against active keys
+        # For API keys, a common pattern to allow lookup is prefix.key
+        # But for absolute security, if we only have the raw key,
+        # we must check against active keys.
         # Optimization: storing an unhashed prefix or ID to lookup the row.
         # For simplicity here, we assume the client passes `{id}.{raw_key}`
-        
+
         try:
             key_id_str, raw_key = api_key_header_value.split(".", 1)
             key_id = int(key_id_str)
         except ValueError:
             # Invalid format
             return None
-            
+
         stmt = select(ApiKey).where(ApiKey.id == key_id)
         result = await session.execute(stmt)
         api_key_record = result.scalar_one_or_none()
-        
-        if (
-            is_api_key_usable(api_key_record)
-            and verify_api_key_hash(raw_key, api_key_record.key_hash)
+
+        if is_api_key_usable(api_key_record) and verify_api_key_hash(
+            raw_key, api_key_record.key_hash
         ):
             return api_key_record
-            
+
     return None
 
 
 async def get_current_bearer_api_key(
-    credentials: Optional[HTTPAuthorizationCredentials] = Security(bearer_scheme),
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(
+        bearer_scheme
+    ),
 ) -> Optional[ApiKey]:
     """Resolve a bearer token into an ApiKey record."""
     if credentials is None or credentials.scheme.lower() != "bearer":
@@ -265,35 +270,57 @@ async def get_current_authenticated_api_key(
     bearer_api_key: Optional[ApiKey] = Depends(get_current_bearer_api_key),
     api_key_record: Optional[ApiKey] = Depends(get_current_api_key),
 ) -> Optional[ApiKey]:
-    """Resolve either bearer-token or API-key authentication for HTTP routes."""
+    """Resolve bearer-token or API-key authentication for HTTP routes."""
     return bearer_api_key or api_key_record
 
+
 async def require_valid_api_key(
-    api_key_record: Optional[ApiKey] = Depends(get_current_authenticated_api_key)
+    api_key_record: Optional[ApiKey] = Depends(
+        get_current_authenticated_api_key
+    ),
 ) -> ApiKey:
     """Dependency that requires any valid API Key."""
     if not api_key_record:
         raise HTTPException(
-            status_code=401, 
+            status_code=401,
             detail=(
-                "Invalid or missing credentials. Use Authorization: Bearer <token> "
-                "or X-API-Key: <id>.<raw_secret>."
-            )
+                "Invalid or missing credentials. "
+                "Use Authorization: Bearer <token> "
+                "or X-API-Key: <id>.<raw_secret>. "
+                "If you only have an API key, first exchange it at POST /auth/token."
+            ),
         )
     return api_key_record
 
+
 async def require_admin_role(
-    api_key_record: ApiKey = Depends(require_valid_api_key)
+    api_key_record: ApiKey = Depends(require_valid_api_key),
 ) -> ApiKey:
     """Dependency that requires an Admin API Key."""
     if api_key_record.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin role required")
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Admin role required. Use an admin API key or a bearer token "
+                "derived from one."
+            ),
+        )
     return api_key_record
 
+
 async def require_viewer_role(
-    api_key_record: ApiKey = Depends(require_valid_api_key)
+    api_key_record: ApiKey = Depends(require_valid_api_key),
 ) -> ApiKey:
-    """Dependency that requires at least a Viewer API Key (Admins also pass)."""
+    """Require at least a Viewer API key.
+
+    Admin credentials also satisfy this dependency.
+    """
     if api_key_record.role not in ("admin", "viewer"):
-        raise HTTPException(status_code=403, detail="Viewer role required")
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Viewer role required. Use a viewer or admin credential to "
+                "access this endpoint."
+            ),
+        )
     return api_key_record

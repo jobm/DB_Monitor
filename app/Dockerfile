@@ -31,5 +31,7 @@ RUN groupadd --gid 1001 appuser && \
 
 USER appuser
 
+ENV UV_CACHE_DIR=/tmp/uv
+
 EXPOSE 8000
 CMD ["sh", "/app/container-entrypoint.sh"]

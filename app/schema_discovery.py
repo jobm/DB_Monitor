@@ -1,4 +1,7 @@
-"""Schema discovery service - extracts and registers table/column schemas from Debezium messages."""
+"""Schema discovery service.
+
+Extracts and registers table and column schemas from Debezium messages.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +10,10 @@ import time
 from collections.abc import Callable
 from typing import Any, Optional
 
-from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-
 from metrics import columns_discovered_total, tables_discovered_total
 from models import KafkaEvent, MonitoredColumn, MonitoredTable
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +21,9 @@ logger = logging.getLogger(__name__)
 class SchemaDiscovery:
     """Discovers and maintains schema catalog from Debezium CDC events."""
 
-    def __init__(self, session_factory: Callable, cache_ttl_seconds: float = 60.0):
+    def __init__(
+        self, session_factory: Callable, cache_ttl_seconds: float = 60.0
+    ):
         self.session_factory = session_factory
         self._cache_ttl_seconds = cache_ttl_seconds
         self._table_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -29,7 +33,10 @@ class SchemaDiscovery:
         event: KafkaEvent,
         session=None,
     ) -> Optional[int]:
-        """Process an event to discover/update schema. Returns source_table_id."""
+        """Process an event to discover or update schema.
+
+        Returns the resolved source table ID.
+        """
         if session is None:
             async with self.session_factory() as owned_session:
                 async with owned_session.begin():
@@ -37,7 +44,9 @@ class SchemaDiscovery:
 
         return await self._process_event(event, session)
 
-    async def _process_event(self, event: KafkaEvent, session) -> Optional[int]:
+    async def _process_event(
+        self, event: KafkaEvent, session
+    ) -> Optional[int]:
         """Process an event within an existing database session."""
         if not event.event_data:
             return None
@@ -117,7 +126,10 @@ class SchemaDiscovery:
         """Upsert columns from Debezium schema or inferred row payloads."""
         if column_definitions:
             insert_stmt = pg_insert(MonitoredColumn).values(
-                [{**column, "table_id": table_id} for column in column_definitions]
+                [
+                    {**column, "table_id": table_id}
+                    for column in column_definitions
+                ]
             )
             stmt = insert_stmt.on_conflict_do_update(
                 index_elements=["table_id", "column_name"],
@@ -130,7 +142,9 @@ class SchemaDiscovery:
             await session.execute(stmt)
             await self._refresh_schema_metrics(session)
 
-    def _extract_source(self, payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def _extract_source(
+        self, payload: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
         source = payload.get("source")
         if isinstance(source, dict):
             return source
@@ -155,7 +169,9 @@ class SchemaDiscovery:
                     schema = nested_schema
 
         column_definitions = (
-            self._extract_columns_from_schema(schema) if isinstance(schema, dict) else []
+            self._extract_columns_from_schema(schema)
+            if isinstance(schema, dict)
+            else []
         )
         if column_definitions:
             return column_definitions
@@ -178,7 +194,9 @@ class SchemaDiscovery:
             if not field_name or str(field_name).startswith("__"):
                 continue
 
-            field_type = field_def.get("type") or field_def.get("name") or "unknown"
+            field_type = (
+                field_def.get("type") or field_def.get("name") or "unknown"
+            )
             columns.append(
                 {
                     "column_name": str(field_name),
@@ -197,14 +215,24 @@ class SchemaDiscovery:
             if isinstance(row_container, dict) and isinstance(
                 row_container.get("fields"), list
             ):
-                return [field for field in row_container["fields"] if isinstance(field, dict)]
+                return [
+                    field
+                    for field in row_container["fields"]
+                    if isinstance(field, dict)
+                ]
             return [field for field in fields if isinstance(field, dict)]
 
         if isinstance(fields, dict):
             for candidate_name in ("after", "before"):
                 candidate = fields.get(candidate_name)
-                if isinstance(candidate, dict) and isinstance(candidate.get("fields"), list):
-                    return [field for field in candidate["fields"] if isinstance(field, dict)]
+                if isinstance(candidate, dict) and isinstance(
+                    candidate.get("fields"), list
+                ):
+                    return [
+                        field
+                        for field in candidate["fields"]
+                        if isinstance(field, dict)
+                    ]
 
             extracted_fields: list[dict[str, Any]] = []
             for field_name, field_def in fields.items():
@@ -214,10 +242,14 @@ class SchemaDiscovery:
 
         return []
 
-    def _find_row_schema(self, fields: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    def _find_row_schema(
+        self, fields: list[dict[str, Any]]
+    ) -> Optional[dict[str, Any]]:
         for candidate in fields:
             field_name = candidate.get("field") or candidate.get("name")
-            if field_name in {"after", "before"} and isinstance(candidate.get("fields"), list):
+            if field_name in {"after", "before"} and isinstance(
+                candidate.get("fields"), list
+            ):
                 return candidate
         return None
 
@@ -243,7 +275,10 @@ class SchemaDiscovery:
         ordered_columns: list[str] = []
         for row_version in row_versions:
             for column_name in row_version:
-                if column_name.startswith("__") or column_name in ordered_columns:
+                if (
+                    column_name.startswith("__")
+                    or column_name in ordered_columns
+                ):
                     continue
                 ordered_columns.append(column_name)
 
@@ -253,7 +288,8 @@ class SchemaDiscovery:
                 (
                     row_version[column_name]
                     for row_version in row_versions
-                    if column_name in row_version and row_version[column_name] is not None
+                    if column_name in row_version
+                    and row_version[column_name] is not None
                 ),
                 None,
             )
@@ -263,7 +299,8 @@ class SchemaDiscovery:
                     "data_type": self._infer_data_type(sample_value),
                     "is_primary_key": False,
                     "is_nullable": any(
-                        column_name in row_version and row_version[column_name] is None
+                        column_name in row_version
+                        and row_version[column_name] is None
                         for row_version in row_versions
                     ),
                     "audit_enabled": True,
@@ -274,7 +311,9 @@ class SchemaDiscovery:
 
     def _normalize_field_type(self, field_type: Any) -> str:
         if isinstance(field_type, dict):
-            return str(field_type.get("name") or field_type.get("type") or "unknown")
+            return str(
+                field_type.get("name") or field_type.get("type") or "unknown"
+            )
         return str(field_type)
 
     def _infer_data_type(self, value: Any) -> str:
@@ -292,7 +331,9 @@ class SchemaDiscovery:
             return "object"
         return "string"
 
-    def _invalidate_table_cache(self, service_name: str, table_name: str) -> None:
+    def _invalidate_table_cache(
+        self, service_name: str, table_name: str
+    ) -> None:
         self._table_cache.pop(self._cache_key(service_name, table_name), None)
 
     def _cache_key(self, service_name: str, table_name: str) -> str:
@@ -300,7 +341,9 @@ class SchemaDiscovery:
 
     async def _refresh_schema_metrics(self, session) -> None:
         table_count_result = await session.execute(
-            select(func.count()).select_from(MonitoredTable).where(MonitoredTable.is_active == True)
+            select(func.count())
+            .select_from(MonitoredTable)
+            .where(MonitoredTable.is_active)
         )
         column_count_result = await session.execute(
             select(func.count()).select_from(MonitoredColumn)
@@ -311,7 +354,9 @@ class SchemaDiscovery:
     async def get_all_tables(self) -> list[dict[str, Any]]:
         """Get all monitored tables."""
         async with self.session_factory() as session:
-            stmt = select(MonitoredTable).where(MonitoredTable.is_active == True)
+            stmt = select(MonitoredTable).where(
+                MonitoredTable.is_active
+            )
             result = await session.execute(stmt)
             tables = result.scalars().all()
             return [
@@ -321,7 +366,9 @@ class SchemaDiscovery:
                     "database_name": t.database_name,
                     "table_name": t.table_name,
                     "topic_name": t.topic_name,
-                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "created_at": t.created_at.isoformat()
+                    if t.created_at
+                    else None,
                 }
                 for t in tables
             ]
@@ -379,7 +426,7 @@ class SchemaDiscovery:
             stmt = select(MonitoredTable).where(
                 MonitoredTable.service_name == service_name,
                 MonitoredTable.table_name == table_name,
-                MonitoredTable.is_active == True,
+                MonitoredTable.is_active,
             )
             result = await session.execute(stmt)
             table = result.scalar_one_or_none()

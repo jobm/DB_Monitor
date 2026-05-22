@@ -4,18 +4,18 @@ import logging
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
-from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import Response
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
-from config import KAFKA_TOPICS, DLQ_ENABLED, BATCH_ENABLED, BATCH_SIZE
 from audit_log import AuditLogEntry, audit_log_writer
 from auth import authenticate_credentials, get_current_api_key
+from config import BATCH_ENABLED, BATCH_SIZE, DLQ_ENABLED, KAFKA_TOPICS
 from consumer_service import consumer_task
-from routes import router
-from lifecycle_manager import lifecycle_manager
 from extensions import AsyncSessionLocal
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
+from lifecycle_manager import lifecycle_manager
 from metrics import api_request_duration_seconds, failed_auth_attempts_total
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from routes import router
 from ws_manager import ws_manager
 
 
@@ -91,7 +91,9 @@ async def lifespan_manager(app: FastAPI):
         yield
 
     except Exception as e:
-        logger.error("Error during application lifespan", extra={"error": str(e)})
+        logger.error(
+            "Error during application lifespan", extra={"error": str(e)}
+        )
         raise
     finally:
         await lifecycle_manager.shutdown()

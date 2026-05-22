@@ -8,7 +8,10 @@ import uvicorn
 
 
 def _default_manifest_path() -> Path:
-    """Return the default connector manifest path for local or container runs."""
+    """Return the default connector manifest path.
+
+    This works for both local and container runs.
+    """
     container_manifest = Path("/connectors/sources.json")
     if container_manifest.exists():
         return container_manifest
@@ -22,7 +25,7 @@ CONNECTOR_MANIFEST = Path(
 
 
 def _derived_topics_from_manifest(manifest_path: Path) -> list[str]:
-    """Build the subscribed Kafka topic list from the enabled connector entries."""
+    """Build the subscribed Kafka topic list from enabled connectors."""
     if not manifest_path.exists():
         return []
 
@@ -58,7 +61,7 @@ def _configure_topics() -> None:
 
 
 def main() -> None:
-    """Start the API after aligning topic subscriptions with the connector manifest."""
+    """Start the API after aligning topics with the connector manifest."""
     _configure_topics()
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
 

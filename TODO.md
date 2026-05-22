@@ -1,81 +1,55 @@
-# Project TODOs
+# Project Backlog
 
-## High Priority
+This file tracks realistic remaining work. Delivered items stay summarized here,
+while exploratory or longer-horizon ideas live under `Future ideas` so the
+active backlog stays readable.
 
-1. Data Model Enhancements
-   - [x] Redesign the `KafkaEvent` model to capture more structured data
-   - [x] Add fields: event_type, event_time, user_id, service_name
-   - [x] Implement proper JSON parsing for event_data
-   - [x] Add indexes for common query patterns
+## Recently Closed
 
-2. Event Filtering and Configuration
-   - [x] Implement configurable event filtering
-   - [x] Add schema-based event validation
-   - [x] Create configuration for monitored tables/columns
-   - [x] Add support for event transformation rules
+### Documentation And Developer Experience
 
-3. Security Enhancements
-   - [x] Implement authentication for API endpoints
-   - [x] Add role-based access control
-   - [x] Implement audit logging for API access
-   - [x] Add SSL/TLS support for Kafka connections
+- [x] Add comprehensive API documentation
+- [x] Create example implementations
+- [x] Add developer setup scripts
+- [x] Improve API and configuration error messages with clearer remediation hints
+- [x] Add architecture documentation
+- [x] Create troubleshooting guide
+- [x] Document deployment procedures
+- [x] Add configuration examples
 
-## Medium Priority
+### Core Product And Operations
 
-1. Performance Optimizations
-   - [x] Implement batch processing for events
-   - [x] Add caching layer for frequently accessed data
-   - [x] Optimize database queries
-   - [x] Add connection pooling
+- [x] Redesign event storage around structured `KafkaEvent` records
+- [x] Add event filtering, validation, and transformation configuration
+- [x] Add authentication, RBAC, and API audit logging
+- [x] Add Kafka SSL/TLS support
+- [x] Add batch processing, caching, query optimization, and pooling
+- [x] Add Prometheus metrics, alerting config, and dashboards
+- [x] Add pagination, event-type filters, date-range queries, and search
+- [x] Add unit, integration, smoke-load, and test-data tooling
+- [x] Finalize the TUI change-history workflow and record drilldown UX
 
-2. Monitoring and Alerting
-   - [x] Add Prometheus metrics
-   - [x] Implement alert configurations
-   - [x] Create dashboard templates
-   - [x] Add email/Slack notifications
+## Future Ideas
 
-3. API Enhancements
-   - [x] Add pagination for event listings
-   - [x] Implement filtering by event type
-   - [x] Add date range queries
-   - [x] Create event search endpoint
+These are not committed backlog items yet.
 
-## Low Priority
+### Advanced Features
 
-1. Developer Experience
-   - [ ] Add comprehensive API documentation
-   - [ ] Create example implementations
-   - [ ] Add developer setup scripts
-   - [ ] Improve error messages
+- [ ] Add support for custom event processors
+- [ ] Expand replay beyond current DLQ replay into full event replay workflows
+- [ ] Add support for multiple Kafka clusters
+- [ ] Create a dedicated admin interface
 
-2. Testing
-   - [x] Add unit tests
-   - [x] Implement integration tests
-   - [x] Add load testing scripts
-   - [x] Create test data generators
+### Scalability And Observability
 
-3. Documentation
-   - [ ] Add architecture documentation
-   - [ ] Create troubleshooting guide
-   - [ ] Document deployment procedures
-   - [ ] Add configuration examples
+- [ ] Validate horizontal scaling under automated tests
+- [ ] Add distributed tracing
+- [ ] Add partition-aware scaling and placement controls
+- [ ] Add clustering support for more stateful components
 
-## Future Enhancements
+### Integration Surface
 
-1. Advanced Features
-    - [ ] Add support for custom event processors
-    - [ ] Implement event replay functionality
-    - [ ] Add support for multiple Kafka clusters
-    - [ ] Create admin interface
-
-2. Scalability
-    - [ ] Implement horizontal scaling
-    - [ ] Add support for distributed tracing
-    - [ ] Implement event partitioning
-    - [ ] Add clustering support
-
-3. Integration
-    - [ ] Add support for additional databases
-    - [ ] Implement webhook notifications
-    - [ ] Create SDK for common languages
-    - [ ] Add support for different message brokers
+- [ ] Add support for additional databases
+- [ ] Implement webhook notifications
+- [ ] Create SDKs for common languages
+- [ ] Add support for different message brokers

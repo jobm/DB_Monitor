@@ -1,7 +1,8 @@
 """Event parsing utilities.
 
-This module provides best-effort parsing of incoming Kafka message payloads into
-structured fields that can be stored and queried efficiently.
+This module provides best-effort parsing of incoming Kafka message
+payloads into structured fields that can be stored and queried
+efficiently.
 """
 
 from __future__ import annotations
@@ -52,8 +53,8 @@ def parse_event_payload(raw_payload: str) -> ParsedEvent:
     - event_time: prefer `event_time`, else Debezium `ts_ms`, else now()
     - user_id/service_name: best-effort from common keys
 
-    If the payload is not valid JSON, event_data will be None and event_type will
-    be "unparsed".
+    If the payload is not valid JSON, event_data will be None and
+    event_type will be "unparsed".
     """
 
     now = datetime.now(timezone.utc)
@@ -113,7 +114,9 @@ def parse_event_payload(raw_payload: str) -> ParsedEvent:
                 seconds = seconds / 1000.0
             event_time = datetime.fromtimestamp(seconds, tz=timezone.utc)
 
-    user_id_value = data.get("user_id") or data.get("userId") or data.get("user")
+    user_id_value = (
+        data.get("user_id") or data.get("userId") or data.get("user")
+    )
     user_id = str(user_id_value) if user_id_value is not None else None
 
     service_name_value = data.get("service_name") or data.get("service")
@@ -123,7 +126,9 @@ def parse_event_payload(raw_payload: str) -> ParsedEvent:
             source = data.get("payload", {}).get("source")
         if isinstance(source, dict):
             service_name_value = source.get("name")
-    service_name = str(service_name_value) if service_name_value is not None else None
+    service_name = (
+        str(service_name_value) if service_name_value is not None else None
+    )
 
     return ParsedEvent(
         event_type=event_type,

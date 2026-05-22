@@ -14,10 +14,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "command",
-        choices=("apply", "validate"),
+        choices=(
+            "apply",
+            "validate",
+        ),
         nargs="?",
         default="apply",
-        help="Whether to apply pending migrations or only validate schema state.",
+        help=(
+            "Whether to apply pending migrations or only validate "
+            "schema state."
+        ),
     )
     return parser
 

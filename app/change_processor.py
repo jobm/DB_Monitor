@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy import select
-
 from models import ColumnChange, KafkaEvent, MonitoredColumn, MonitoredTable
+from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +112,7 @@ class ChangeProcessor:
                         "table_id": event.source_table_id,
                         "column_id": col.id,
                         "operation": event.operation,
+                        "row_identity": event.row_identity,
                         "old_value": old_val,
                         "new_value": new_val,
                         "changed_at": event.event_time,
@@ -126,9 +126,11 @@ class ChangeProcessor:
         self,
         table_id: int,
         column_id: Optional[int] = None,
+        row_identity: Optional[dict[str, Any]] = None,
         from_time: Optional[datetime] = None,
         to_time: Optional[datetime] = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         """Query column changes with filters."""
         async with self.session_factory() as session:
@@ -143,12 +145,18 @@ class ChangeProcessor:
 
             if column_id:
                 stmt = stmt.where(ColumnChange.column_id == column_id)
+            if row_identity is not None:
+                stmt = stmt.where(ColumnChange.row_identity == row_identity)
             if from_time:
                 stmt = stmt.where(ColumnChange.changed_at >= from_time)
             if to_time:
                 stmt = stmt.where(ColumnChange.changed_at <= to_time)
 
-            stmt = stmt.order_by(ColumnChange.changed_at.desc()).limit(limit)
+            stmt = (
+                stmt.order_by(ColumnChange.changed_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
 
             result = await session.execute(stmt)
             rows = result.all()
@@ -156,8 +164,10 @@ class ChangeProcessor:
             return [
                 {
                     "id": change.id,
+                    "event_id": change.event_id,
                     "column_name": col.column_name,
                     "operation": change.operation,
+                    "row_identity": change.row_identity,
                     "old_value": change.old_value,
                     "new_value": change.new_value,
                     "changed_at": (

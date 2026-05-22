@@ -75,7 +75,7 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
 
     async def fake_get_changes(**kwargs):
         captured.update(kwargs)
-        return [{"id": 10, "column_name": "status"}]
+        return [{"id": 10, "event_id": 77, "column_name": "status"}]
 
     monkeypatch.setattr(routes.schema_discovery, "get_table_by_name", fake_get_table_by_name)
     monkeypatch.setattr(routes.change_processor, "get_changes", fake_get_changes)
@@ -84,17 +84,23 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
         table_name="orders",
         service_name="orderdb",
         column_name="status",
+        row_identity='{"id": 7}',
         from_time="2024-01-01T10:00:00Z",
         to_time="2024-01-02T11:00:00Z",
         limit=25,
+        offset=5,
     )
 
     assert response["service_name"] == "orderdb"
     assert response["table_name"] == "orders"
     assert response["count"] == 1
+    assert response["offset"] == 5
+    assert response["changes"][0]["event_id"] == 77
     assert captured["table_id"] == 1
     assert captured["column_id"] == 7
+    assert captured["row_identity"] == {"id": 7}
     assert captured["limit"] == 25
+    assert captured["offset"] == 5
     assert captured["from_time"] == datetime(2024, 1, 1, 10, 0, tzinfo=timezone.utc)
     assert captured["to_time"] == datetime(2024, 1, 2, 11, 0, tzinfo=timezone.utc)
 
@@ -109,6 +115,7 @@ async def test_get_changes_rejects_invalid_timestamp():
 
     assert exc_info.value.status_code == 400
     assert "from_time" in exc_info.value.detail
+    assert "2024-01-01T00:00:00Z" in exc_info.value.detail
 
 
 @pytest.mark.anyio
@@ -216,6 +223,7 @@ async def test_bootstrap_admin_key_rejects_when_disabled(monkeypatch):
         await routes.bootstrap_admin_key(owner_name="admin")
 
     assert exc_info.value.status_code == 403
+    assert "ALLOW_BOOTSTRAP=true" in exc_info.value.detail
 
 
 @pytest.mark.anyio
@@ -225,6 +233,7 @@ async def test_get_events_rejects_invalid_start_time():
 
     assert exc_info.value.status_code == 400
     assert "start_time" in exc_info.value.detail
+    assert "2024-01-01T00:00:00Z" in exc_info.value.detail
 
 
 @pytest.mark.anyio
@@ -238,6 +247,7 @@ async def test_get_events_parses_time_filters(monkeypatch):
             service_name="orderdb",
             operation="UPDATE",
             source_table_id=7,
+            row_identity={"id": 42},
             event_data={"after": {"status": "paid"}},
             raw_payload="{}",
         )
@@ -259,6 +269,7 @@ async def test_get_events_parses_time_filters(monkeypatch):
     assert response["total"] == 1
     assert rendered_event["service_name"] == "orderdb"
     assert rendered_event["event_type"] == "UPDATE"
+    assert rendered_event["row_identity"] == {"id": 42}
 
     first_statement = str(fake_session.statements[0])
     second_statement = str(fake_session.statements[1])
@@ -267,6 +278,89 @@ async def test_get_events_parses_time_filters(monkeypatch):
     assert "events.event_time >= :event_time_1" in first_statement
     assert "events.event_time <= :event_time_2" in first_statement
     assert "LIMIT :param_1" in second_statement
+
+
+@pytest.mark.anyio
+async def test_get_events_supports_record_filters(monkeypatch):
+    events = [
+        KafkaEvent(
+            id=2,
+            event_type="UPDATE",
+            event_time=datetime(2024, 1, 2, 12, 0, tzinfo=timezone.utc),
+            user_id=None,
+            service_name="orderdb",
+            operation="UPDATE",
+            source_table_id=7,
+            row_identity={"id": 42},
+            event_data={"after": {"status": "paid"}},
+            raw_payload="{}",
+        )
+    ]
+    fake_session = FakeEventsSession(events)
+
+    monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: fake_session)
+
+    response = await routes.get_events(
+        service_name="orderdb",
+        source_table_id=7,
+        row_identity='{"id": 42}',
+        limit=5,
+        offset=0,
+    )
+
+    assert response["events"][0]["row_identity"] == {"id": 42}
+
+    first_statement = str(fake_session.statements[0])
+    assert "events.source_table_id = :source_table_id_1" in first_statement
+    assert "events.row_identity = :row_identity_1" in first_statement
+
+
+@pytest.mark.anyio
+async def test_get_events_rejects_invalid_row_identity():
+    with pytest.raises(HTTPException) as exc_info:
+        await routes.get_events(row_identity="not-json")
+
+    assert exc_info.value.status_code == 400
+    assert "row_identity" in exc_info.value.detail
+    assert '{"id": 42}' in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_get_changes_rejects_invalid_row_identity():
+    with pytest.raises(HTTPException) as exc_info:
+        await routes.get_changes(
+            table_name="orderdb.orders",
+            row_identity="not-json",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "row_identity" in exc_info.value.detail
+    assert '{"id": 42}' in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_get_changes_requires_unambiguous_table_reference():
+    with pytest.raises(HTTPException) as exc_info:
+        await routes.get_changes(table_name="orders")
+
+    assert exc_info.value.status_code == 400
+    assert "service_name=orderdb&table_name=orders" in exc_info.value.detail
+    assert "table_name=orderdb.orders" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_get_changes_reports_table_discovery_hint(monkeypatch):
+    async def fake_get_table_by_name(service_name: str, table_name: str):
+        del service_name, table_name
+        return None
+
+    monkeypatch.setattr(routes.schema_discovery, "get_table_by_name", fake_get_table_by_name)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes.get_changes(table_name="orderdb.orders")
+
+    assert exc_info.value.status_code == 404
+    assert "GET /tables" in exc_info.value.detail
 
 
 @pytest.mark.anyio
@@ -353,3 +447,4 @@ async def test_replay_dead_letter_event_returns_404_when_missing(monkeypatch):
         await routes.replay_dead_letter_event(9, admin_api_key=None)
 
     assert exc_info.value.status_code == 404
+    assert "GET /admin/dlq" in exc_info.value.detail

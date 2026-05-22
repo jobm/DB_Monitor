@@ -86,3 +86,41 @@ def test_config_rejects_missing_jwt_secret_in_production(
         match="JWT_SECRET must be explicitly configured in production",
     ):
         _load_config_module("config_missing_secret")
+
+
+def test_config_rejects_invalid_schema_mode_with_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Config errors should identify invalid schema mode values clearly."""
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("DB_SCHEMA_MODE", "broken")
+
+    with pytest.raises(
+        ValueError,
+        match="Invalid DB_SCHEMA_MODE='broken'.*apply, validate, skip",
+    ):
+        _load_config_module("config_invalid_schema_mode")
+
+
+def test_config_reports_missing_secret_file_with_remediation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Missing secret files should point to the exact env var and fix path."""
+    postgres_url_file = tmp_path / "postgres_url"
+    postgres_url_file.write_text(
+        "postgresql+asyncpg://user:pass@db:5432/postgres\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("POSTGRES_URL", raising=False)
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.setenv("POSTGRES_URL_FILE", str(postgres_url_file))
+    monkeypatch.setenv("JWT_SECRET_FILE", str(tmp_path / "missing_jwt_secret"))
+
+    with pytest.raises(
+        ValueError,
+        match="JWT_SECRET_FILE points to '.*missing_jwt_secret'.*set JWT_SECRET directly",
+    ):
+        _load_config_module("config_missing_secret_file")
