@@ -4,7 +4,10 @@ import { DBMonitorClient } from "../sdk/javascript/db_monitor_client.mjs";
 
 const baseUrl = process.env.DB_MONITOR_BASE_URL || "http://localhost:8000";
 const apiKey = process.env.DB_MONITOR_API_KEY;
-const tableName = process.env.DB_MONITOR_TABLE || "orderdb.orders";
+
+// Default target table. Adjust to your custom database table when using in production.
+// In the bundled evaluation sandbox environment, this defaults to 'orderdb.public.orders'.
+const tableName = process.env.DB_MONITOR_TABLE || "orderdb.public.orders";
 const rowIdentityRaw = process.env.DB_MONITOR_ROW_IDENTITY;
 
 if (!apiKey) {

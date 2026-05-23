@@ -56,3 +56,13 @@ def test_configure_topics_preserves_explicit_env(monkeypatch: pytest.MonkeyPatch
     start_monitor._configure_topics()
 
     assert start_monitor.os.environ["KAFKA_TOPICS"] == "manual.topic"
+
+
+def test_derived_topics_from_manifest_handles_malformed_json(
+    tmp_path: Path,
+) -> None:
+    """Malformed source manifests should not crash startup topic derivation."""
+    manifest_path = tmp_path / "sources.json"
+    manifest_path.write_text('{"connectors": [')
+
+    assert start_monitor._derived_topics_from_manifest(manifest_path) == []

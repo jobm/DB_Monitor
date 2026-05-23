@@ -29,7 +29,16 @@ def _derived_topics_from_manifest(manifest_path: Path) -> list[str]:
     if not manifest_path.exists():
         return []
 
-    payload = json.loads(manifest_path.read_text())
+    try:
+        payload = json.loads(manifest_path.read_text())
+    except json.JSONDecodeError as exc:
+        print(
+            "WARNING: Source manifest is not valid JSON "
+            f"({manifest_path}): {exc}.\n"
+            "Starting with empty topic subscription backplane."
+        )
+        return []
+
     topics: list[str] = []
     for connector in payload.get("connectors", []):
         if not connector.get("enabled", True):
@@ -55,9 +64,23 @@ def _configure_topics() -> None:
     if os.getenv("KAFKA_TOPICS"):
         return
 
+    if not CONNECTOR_MANIFEST.exists():
+        print(
+            "WARNING: No connector source manifest found at default paths.\n"
+            "If integrating DB Monitor with custom systems, please mount a configuration file\n"
+            "or set 'CONNECTOR_SOURCES_FILE' to target a custom source manifest.\n"
+            "Starting with empty topic subscription backplane."
+        )
+        return
+
     topics = _derived_topics_from_manifest(CONNECTOR_MANIFEST)
     if topics:
         os.environ["KAFKA_TOPICS"] = ",".join(topics)
+    else:
+        print(
+            "WARNING: Source manifest found but contains no active or enabled connectors.\n"
+            "Starting with empty topic subscription backplane."
+        )
 
 
 def main() -> None:

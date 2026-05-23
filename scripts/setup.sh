@@ -59,6 +59,7 @@ echo "[+] Dependencies installed."
 
 echo "========================================="
 echo "  Setup Complete!                        "
-echo "  You can now run: make monitor-up       "
+echo "  Core platform only: make monitor-up    "
+echo "  Example sandbox:   make monitor-up-sandbox"
 echo "  Or run locally: cd app && uv run python start_monitor.py"
 echo "========================================="

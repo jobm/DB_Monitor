@@ -190,6 +190,54 @@ async def test_exchange_access_token_preserves_auth_context(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_check_health_does_not_require_api_key_exchange(monkeypatch):
+    client = DBMonitorClient(base_url="http://localhost:8000")
+    client.api_key = "invalid.key"
+
+    class HealthOnlyClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, path):
+            assert path == "/health"
+            return FakeResponse({"status": "ok"}, status_code=200)
+
+        async def post(self, path):
+            raise AssertionError(
+                "check_health should not exchange an access token",
+            )
+
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", HealthOnlyClient)
+
+    assert await client.check_health() is True
+
+
+@pytest.mark.anyio
+async def test_check_health_returns_false_on_unreachable_host(monkeypatch):
+    client = DBMonitorClient(base_url="http://localhost:8000")
+
+    class FailingHealthClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            raise RuntimeError("connection failed")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    monkeypatch.setattr(client_module.httpx, "AsyncClient", FailingHealthClient)
+
+    assert await client.check_health() is False
+
+
+@pytest.mark.anyio
 async def test_admin_client_methods_use_expected_routes():
     client = DBMonitorClient(base_url="http://localhost:8000")
     fake_http_client = FakeHttpClient()

@@ -1,0 +1,17 @@
+{
+  "$schema": "./sources.schema.json",
+  "connectors": [
+    {
+      "source_name": "yourdb",
+      "database_hostname": "your-prod-db-host",
+      "tables": [
+        "public.your_table_here"
+      ],
+      "enabled": true,
+      "config_overrides": {
+        "publication.autocreate.mode": "filtered",
+        "plugin.name": "pgoutput"
+      }
+    }
+  ]
+}

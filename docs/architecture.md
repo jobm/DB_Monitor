@@ -1,34 +1,49 @@
 # Architecture
 
-DB Monitor captures CDC events from Debezium-backed Kafka topics, stores both
-raw and derived audit data, and exposes query, monitoring, and realtime
-interfaces for operators.
+DB Monitor is designed as a reusable, pluggable CDC audit-log framework. It decouples the core consumption, storage, api metadata tracking, and operational tasks from specific business schemas or source systems.
 
 ## End-To-End Flow
 
+The pipeline operates on any source system generating compatible logical replication events:
+
 ```text
-Source Postgres DBs
-  -> Debezium Connect
-  -> Kafka topics
-  -> FastAPI consumer service
-  -> Monitor Postgres
-     -> REST API
+Pluggable Source DBs (Any monitored app database)
+  -> Debezium Connect (or compatible CDC connectors)
+  -> Message Broker (Kafka topics or RabbitMQ queues)
+  -> FastAPI Core Consumer Service (Normalizes, filters, discovers schemas, records column state)
+  -> Monitor PostgreSQL (Dedicated audit schema for events, discovered catalogs, delta history, API audits)
+     -> REST API / SDKs
      -> WebSocket stream
      -> Prometheus metrics
-     -> TUI dashboard
+     -> TUI dashboard / Admin recovery
 ```
 
 ## Runtime Components
 
+DB Monitor distinguishes between **Core Platform Services** needed by any deployment, and the **Sandbox Layer** used solely for documentation, evaluation, and automated testing.
+
+### Core Platform Services
+
 | Component | Responsibility |
 | --- | --- |
-| `postgres-order`, `postgres-catalog`, `postgres-shipping` | Source databases emitting logical replication changes |
-| `connect` | Debezium Kafka Connect worker that registers PostgreSQL CDC connectors |
-| `kafka` | CDC transport and consumer coordination |
-| `postgres-monitor` | Persistent store for events, schema catalog, deltas, API keys, audit logs, checkpoints, and DLQ records |
-| `monitor-server` | FastAPI app, Kafka consumer, auth surface, metrics, and WebSocket broadcaster |
-| `prometheus`, `grafana`, `alertmanager` | Monitoring, dashboards, and alert evaluation |
-| `tui` | Operator-facing Textual dashboard for record history exploration |
+| `monitor-server` | FastAPI app, multi-broker/multi-cluster consumer, token manager, live schema discovery, and WebSocket broadcaster |
+| `postgres-monitor` | Persistent DB storing normalized events, discovered metadata catalog, change deltas, API credentials, audit logs, recovery checkpoints, and DLQ entries |
+| Message Broker | transport stream (Kafka cluster or RabbitMQ server) delivering raw change events |
+| Debezium Connect | CDC worker capturing WAL logs and publishing event envelopes |
+| `prometheus`, `grafana` | Monitoring, metric gathering, dashboards, and alerts |
+
+### Example Sandbox Layout (Optional)
+
+The bundled docker-compose stack provides three PostgreSQL applications to simulate a live customer environment:
+
+| Container | Purpose |
+| --- | --- |
+| `postgres-order` | Simulates logical transactional Order databases (`orderdb`) |
+| `postgres-catalog` | Simulates inventory/Catalog databases (`catalogdb`) |
+| `postgres-shipping` | Simulates logistics/Fulfillment databases (`shippingdb`) |
+| `connector-registrar` | Auto-registers Debezium connectors for the sandbox databases based on the checked-in manifest |
+
+---
 
 ## Main Application Modules
 

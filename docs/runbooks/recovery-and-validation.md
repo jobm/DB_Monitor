@@ -124,7 +124,7 @@ Use this order after a production-style change:
 1. Start or confirm the stack.
 
 ```bash
-make monitor-up
+make monitor-up-sandbox
 ```
 
 2. Confirm readiness.
@@ -143,7 +143,7 @@ make monitor-test-integration
 
 ```bash
 cd app
-uv run python ../scripts/load_test.py \
+uv run python ../examples/sandbox/load_test.py \
   --workers 20 \
   --requests 100 \
   --targets events,stats,tables,checkpoints

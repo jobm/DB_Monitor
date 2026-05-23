@@ -156,9 +156,13 @@ class DBMonitorClient:
                 break
 
     async def check_health(self) -> bool:
+        """Check host reachability without requiring authentication."""
         try:
-            client = await self.get_client()
-            resp = await client.get("/health")
+            async with httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=10.0,
+            ) as client:
+                resp = await client.get("/health")
             resp.raise_for_status()
             return True
         except Exception:

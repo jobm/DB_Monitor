@@ -7,7 +7,8 @@ on:
   pull_request:
 
 jobs:
-  unit-tests:
+  core-platform-tests:
+    name: Core Platform Verification (Unit & Mock Tests)
     runs-on: ubuntu-latest
 
     steps:
@@ -27,12 +28,12 @@ jobs:
         run: uv sync --group dev --frozen
 
       - name: Run unit tests
-        working-directory: app
-        run: uv run --group dev python -m pytest ../tests/
+        run: make monitor-test-core
 
-  live-integration:
+  sandbox-integration-tests:
+    name: Example Sandbox Ingestion & Live Integration
     runs-on: ubuntu-latest
-    needs: unit-tests
+    needs: core-platform-tests
     timeout-minutes: 30
 
     steps:
@@ -51,20 +52,30 @@ jobs:
         working-directory: app
         run: uv sync --group dev --frozen
 
-      - name: Start infrastructure services
-        run: |
-          docker compose up -d \
-            zookeeper \
-            kafka \
-            postgres-monitor \
-            postgres-order \
-            postgres-catalog \
-            postgres-shipping \
-            connect \
-            connector-registrar
+      - name: Start sandbox and core services
+        run: docker compose --profile sandbox up -d
 
-      - name: Wait for infrastructure readiness
+      - name: Wait for databases and brokers to boot
         run: |
+          echo "Waiting for PostgreSQL core monitor and sandbox databases to accept queries..."
+          until docker compose exec -T postgres-monitor pg_isready -U postgres -d postgres >/dev/null 2>&1; do
+            echo "Waiting for postgres-monitor..."
+            sleep 2
+          done
+          until docker compose exec -T postgres-order pg_isready -U postgres -d postgres >/dev/null 2>&1; do
+            echo "Waiting for postgres-order..."
+            sleep 2
+          done
+          until docker compose exec -T postgres-catalog pg_isready -U postgres -d postgres >/dev/null 2>&1; do
+            echo "Waiting for postgres-catalog..."
+            sleep 2
+          done
+          until docker compose exec -T postgres-shipping pg_isready -U postgres -d postgres >/dev/null 2>&1; do
+            echo "Waiting for postgres-shipping..."
+            sleep 2
+          done
+          echo "All core and sandbox databases are fully operational."
+
           python - <<'PY'
           import socket
           import time
@@ -96,7 +107,6 @@ jobs:
               f"Timed out waiting for {host}:{port}"
             )
 
-          wait_for_port("localhost", 5437)
           wait_for_port("localhost", 9093)
           wait_for_http("http://localhost:8083/connectors")
           PY
@@ -119,41 +129,44 @@ jobs:
 
           url = "http://localhost:8000/readyz"
           deadline = time.time() + 180
+          print(f"Checking app readiness at {url}")
           while time.time() < deadline:
               try:
                   with urllib.request.urlopen(url, timeout=5) as response:
                       if response.status == 200:
+                          print("SUCCESS: DB Monitor is fully initialized and operational!")
                           print(response.read().decode())
                           raise SystemExit(0)
-              except Exception:
-                  time.sleep(2)
-          raise SystemExit(f"Timed out waiting for {url}")
+                      else:
+                          print(f"STILL WAITING: HTTP status code {response.status}")
+              except Exception as exc:
+                  print(f"STILL WAITING: Port/HTTP check failed with: {exc}")
+              time.sleep(2)
+          raise SystemExit(f"TIMED OUT waiting for {url}")
           PY
 
-      - name: Run live integration suite
-        working-directory: app
-        run: uv run python ../scripts/run_integration_tests.py
-
-      - name: Seed smoke-load admin key
+      - name: Seed sandbox admin key
         working-directory: app
         env:
           POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5437/postgres
         run: |
-          smoke_key="$(uv run python ../scripts/seed_admin_api_key.py --owner-name ci-smoke)"
-          echo "DB_MONITOR_ADMIN_API_KEY=$smoke_key" >> "$GITHUB_ENV"
+          sandbox_key="$(uv run python ../scripts/seed_admin_api_key.py --owner-name ci-sandbox)"
+          echo "DB_MONITOR_ADMIN_API_KEY=$sandbox_key" >> "$GITHUB_ENV"
 
-      - name: Run smoke-load gate
-        working-directory: app
+      - name: Run sandbox pytest checks
         env:
           DB_MONITOR_ADMIN_API_KEY: ${{ env.DB_MONITOR_ADMIN_API_KEY }}
-        run: |
-          uv run python ../scripts/load_test.py \
-            --workers 8 \
-            --requests 10 \
-            --targets events,stats,tables,checkpoints \
-            --max-failures 0 \
-            --min-success-rate 1.0 \
-            --max-p95-ms 2000
+        run: make monitor-test-sandbox-pytest
+
+      - name: Run live integration suite
+        env:
+          DB_MONITOR_ADMIN_API_KEY: ${{ env.DB_MONITOR_ADMIN_API_KEY }}
+        run: make monitor-test-integration
+
+      - name: Run smoke-load gate
+        env:
+          DB_MONITOR_ADMIN_API_KEY: ${{ env.DB_MONITOR_ADMIN_API_KEY }}
+        run: make monitor-test-smoke
 
       - name: Show app log on failure
         if: failure()

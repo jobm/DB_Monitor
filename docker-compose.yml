@@ -32,37 +32,43 @@ services:
 
   postgres-order:
     image: postgres:15
+    profiles:
+      - sandbox
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     command: ["postgres", "-c", "wal_level=logical"]
     volumes:
-      - ./init/order.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./examples/sandbox/init/order.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5434:5432"
 
   postgres-catalog:
     image: postgres:15
+    profiles:
+      - sandbox
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     command: ["postgres", "-c", "wal_level=logical"]
     volumes:
-      - ./init/catalog.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./examples/sandbox/init/catalog.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5435:5432"
 
   postgres-shipping:
     image: postgres:15
+    profiles:
+      - sandbox
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     command: ["postgres", "-c", "wal_level=logical"]
     volumes:
-      - ./init/shipping.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./examples/sandbox/init/shipping.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5436:5432"
 
@@ -77,6 +83,8 @@ services:
 
   connect:
     image: debezium/connect:2.5
+    profiles:
+      - sandbox
     ports:
       - "8083:8083"
     environment:
@@ -151,6 +159,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.register
+    profiles:
+      - sandbox
     depends_on:
       - connect
     restart: on-failure

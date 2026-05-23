@@ -1,34 +1,42 @@
 # DB Monitor
 
-DB Monitor is a FastAPI-based CDC monitoring service that consumes Debezium events from Kafka or RabbitMQ, stores them in PostgreSQL, and exposes raw events, discovered table metadata, column-level changes, metrics, and realtime notifications.
+DB Monitor is a pluggable, framework-first Change Data Capture (CDC) monitoring system and audit-log library. It consumes CDC event streams (e.g., Debezium events) from Kafka or RabbitMQ, normalizes and stores them in PostgreSQL, and exposes structured events, auto-discovered table/column metadata, column-level change history, point-in-time state lookup, metrics, and realtime notifications.
+
+Adopters can integrate DB Monitor as an audit-log platform around their own databases and message brokers, or run the bundled self-contained example stack for local evaluation.
 
 ## Documentation
 
-- API reference: `api-docs.md`
-- Architecture: `docs/architecture.md`
-- Configuration: `docs/configuration.md`
-- Deployment: `docs/deployment.md`
-- Troubleshooting: `docs/troubleshooting.md`
-- Recovery runbook: `docs/runbooks/recovery-and-validation.md`
-- Alerts runbook: `docs/runbooks/alerts-and-thresholds.md`
-- Example client: `examples/python_api_client.py`
-- SDKs: `sdk/README.md`
+- API reference: [api-docs.md](api-docs.md)
+- Architecture: [docs/architecture.md](docs/architecture.md)
+- Configuration: [docs/configuration.md](docs/configuration.md)
+- Deployment: [docs/deployment.md](docs/deployment.md)
+- Sandbox evaluation: [docs/example-sandbox.md](docs/example-sandbox.md)
+- Framework transition plan: [docs/framework-transition-plan.md](docs/framework-transition-plan.md)
+- Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
+- Recovery runbook: [docs/runbooks/recovery-and-validation.md](docs/runbooks/recovery-and-validation.md)
+- Alerts runbook: [docs/runbooks/alerts-and-thresholds.md](docs/runbooks/alerts-and-thresholds.md)
 
 ## Architecture
 
+At its core, DB Monitor decoupled the monitoring process from specific business schemas:
+
 ```text
-Source Postgres DBs -> Debezium -> Kafka or RabbitMQ -> FastAPI consumer -> Monitor Postgres -> API / WebSocket / Metrics
+Any Pluggable Source DBs -> Debezium Connect -> Kafka or RabbitMQ -> FASTAPI Core Consumer -> Monitor DB -> API / WebSocket / Metrics
 ```
 
-The default stack monitors three source databases:
+Unlike hardcoded solutions, the framework is driven entirely by a dynamic **Source Manifest**. Adopters point core consumer and registrar services at their own manifest, and the system automatically subscribes to appropriate message streams, discovers table architectures, and tracks schema changes on the fly.
 
-| Service | Source tables | External DB port |
-| --- | --- | --- |
-| `orderdb` | `public.orders`, `public.customers` | `5434` |
-| `catalogdb` | `public.categories`, `public.products` | `5435` |
-| `shippingdb` | `public.shipments`, `public.drivers` | `5436` |
+### Bundled Example Stack (Optional)
 
-The monitor database is exposed on `5437`.
+To help developers experiment with the platform locally, the repository contains a self-contained compose environment with three pre-configured source databases:
+
+| Sample Database | Simulates | Monitored tables | External DB port |
+| --- | --- | --- | --- |
+| `orderdb` | Order management | `public.orders`, `public.customers` | `5434` |
+| `catalogdb` | Product catalog | `public.categories`, `public.products` | `5435` |
+| `shippingdb` | Fulfillment | `public.shipments`, `public.drivers` | `5436` |
+
+In this sandbox deployment, the monitoring database runs on port `5437` and stores the unified audit log.
 
 ## Current capabilities
 
@@ -55,14 +63,16 @@ The monitor database is exposed on `5437`.
 - Prometheus metrics and a bundled Prometheus/Grafana/Alertmanager stack
 - WebSocket event broadcast for live updates, including cross-replica fanout via Postgres backplane
 
-## Quick start
+## Quick start (using the Local Example Stack)
+
+The quickest way to evaluate DB Monitor is using the bundled docker-compose infrastructure, which launches the core monitoring services alongside three pre-seeded PostgreSQL databases acting as the source application stack:
 
 1. Start the stack:
    ```bash
    mkdir -p secrets
    cp secrets/monitor_postgres_url.example secrets/monitor_postgres_url
    cp secrets/monitor_jwt_secret.example secrets/monitor_jwt_secret
-   ALLOW_BOOTSTRAP=true docker compose up -d
+   ALLOW_BOOTSTRAP=true make monitor-up-sandbox
    ```
 2. Check the service:
    ```bash
@@ -78,6 +88,22 @@ The monitor database is exposed on `5437`.
        -H "X-API-Key: <id.secret>" \
        http://localhost:8000/auth/token
     ```
+
+## Integrating with Custom Infrastructure (As a Study / Adopter)
+
+To run DB Monitor as a framework against your own custom message brokers and PostgreSQL databases:
+
+1. **Deploy Core Monitor DB**: Set up a clean PostgreSQL instance to store DB Monitor persistent audit data (or point to an existing dedicated schema).
+2. **Configure Environment Variables**: At minimum, provide:
+   - `POSTGRES_URL` (pointing to your monitor database utilizing `postgresql+asyncpg://`)
+   - `MESSAGE_BROKER=kafka` or `rabbitmq`
+   - `KAFKA_BROKER` or `RABBITMQ_URL` pointing to your broker
+3. **Provide a Source Manifest**: Define the databases, tables, and streams you want to audit. Point DB Monitor to your manifest by setting the path in `CONNECTOR_SOURCES_FILE` (defaults to looking for `connectors/sources.json`).
+4. **Launch DB Monitor**: Run the core app outside of the example docker containers (e.g., in Kubernetes, an App Service, or locally using `uv run python start_monitor.py`).
+
+For full details on production deployments, refer to [docs/deployment.md](docs/deployment.md) and [docs/configuration.md](docs/configuration.md).
+
+## Docker Sandbox Details
 
 The compose stack now runs with `APP_ENV=production`, applies migrations before
 startup, then validates schema state on boot. `ALLOW_BOOTSTRAP` defaults to
@@ -229,11 +255,18 @@ Preview rendered connector payloads without calling Kafka Connect:
 DRY_RUN=true ./register-connectors.sh
 ```
 
+Example-stack utilities now live under `examples/sandbox/`. The older
+top-level demo scripts under `scripts/` are still available as compatibility
+entrypoints for existing automation, but new docs and workflows should use the
+`examples/sandbox/` paths.
+
 Useful commands:
 
 ```bash
 make monitor-up
+make monitor-up-sandbox
 make monitor-test
+make monitor-test-sandbox-pytest
 make monitor-test-integration
 make monitor-test-smoke
 make monitor-test-scale

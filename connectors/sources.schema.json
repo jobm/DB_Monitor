@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DB Monitor Source Manifest Schema",
+  "description": "Declares CDC connector sources, database connections, and tables monitored by DB Monitor.",
+  "type": "object",
+  "properties": {
+    "connectors": {
+      "type": "array",
+      "description": "An array of CDC connectors to register with Debezium and monitor in the pipeline.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "source_name",
+          "database_hostname",
+          "tables"
+        ],
+        "properties": {
+          "source_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "A unique identifier for the source system. Used as the topic.prefix and server prefix for Debezium.",
+            "pattern": "^[a-zA-Z0-9_-]+$"
+          },
+          "database_hostname": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Host/IP of the source database server."
+          },
+          "tables": {
+            "type": "array",
+            "description": "A non-empty list of database tables to monitor, formatted as schema.table_name (e.g. public.orders).",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+$"
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether this source/connector is active. Disabled connectors are ignored during routing and registration."
+          },
+          "connector_name": {
+            "type": "string",
+            "description": "Custom name for Debezium's registered sink endpoint. Defaults to {source_name}-connector."
+          },
+          "slot_name": {
+            "type": "string",
+            "description": "Custom logical replication slot name. Defaults to {source_name}_slot."
+          },
+          "history_topic": {
+            "type": "string",
+            "description": "Optional name for Kafka's internal database history topic. Defaults to dbhistory.{source_name}."
+          },
+          "config_overrides": {
+            "type": "object",
+            "description": "An optional set of extra Debezium key/value properties to overlay onto the generated configuration."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "connectors"
+  ],
+  "additionalProperties": false
+}

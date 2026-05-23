@@ -6,6 +6,17 @@ active backlog stays readable.
 
 ## Recently Closed
 
+### Framework-First Transition & CI Stabilization
+
+- [x] Reposition the bundled `orderdb` / `catalogdb` / `shippingdb` stack as example assets instead of product-default assumptions
+- [x] Define a framework-first configuration and packaging model for DB Monitor so new adopters can bring their own sources without editing repo-owned demo assets
+- [x] Split docs, setup flows, and tests into `core-platform` versus `evaluation sandbox` paths so examples remain useful without shaping the runtime contract
+- [x] Introduce formal source manifest contracts via JSON schemas (`sources.schema.json` & templates)
+- [x] Decouple container services using docker compose profiles (`sandbox`) and align Makefile orchestrations
+- [x] Stabilize the CI `Wait for app readiness` pipeline using pg_isready database sockets and verbose loop poll logs
+- [x] Clean up and align SDK client workflow targets with the decoupled framework topology
+- [x] Move canonical demo automation and seed assets under `examples/sandbox` while keeping top-level script entrypoints as compatibility shims
+
 ### Documentation And Developer Experience
 
 - [x] Add comprehensive API documentation

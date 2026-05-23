@@ -24,7 +24,10 @@ if str(SDK_ROOT) not in sys.path:
 
 BASE_URL = os.getenv("DB_MONITOR_BASE_URL", "http://localhost:8000")
 API_KEY = os.getenv("DB_MONITOR_API_KEY")
-TABLE_NAME = os.getenv("DB_MONITOR_TABLE", "orderdb.orders")
+
+# Default target table. Adjust to your custom database table when using in production.
+# In the bundled evaluation sandbox environment, this defaults to 'orderdb.public.orders'.
+TABLE_NAME = os.getenv("DB_MONITOR_TABLE", "orderdb.public.orders")
 ROW_IDENTITY = os.getenv("DB_MONITOR_ROW_IDENTITY")
 
 

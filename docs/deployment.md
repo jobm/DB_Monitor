@@ -3,22 +3,24 @@
 This guide covers the supported local and production-like deployment workflows
 for DB Monitor.
 
-## 1. Docker Compose Stack
+## 1. Local Example Sandbox (Docker Compose)
 
-Use the bundled Compose stack for local integration testing and for validating
-the full CDC pipeline.
+The easiest way to evaluate DB Monitor locally is to run the bundled Docker Compose sandbox stack, which includes simulated source databases, Debezium configurations, and test data generators.
 
 ### Prerequisites
 
 - Docker with Compose support
 - `uv` for local helper commands
 
-### First-Time Setup
+### Launching the Sandbox
 
 ```bash
 ./scripts/setup.sh
-ALLOW_BOOTSTRAP=true make monitor-up
+ALLOW_BOOTSTRAP=true make monitor-up-sandbox
 ```
+
+Use `examples/sandbox/` for example-only generators and validation scripts.
+The older top-level demo scripts are compatibility shims for existing tooling.
 
 ### Health Validation
 
@@ -27,43 +29,46 @@ curl http://localhost:8000/readyz
 curl http://localhost:8000/health
 ```
 
-### Bootstrap The First Admin Key
+### Bootstrap the First Admin Key
 
 ```bash
 curl -X POST "http://localhost:8000/auth/bootstrap?owner_name=admin"
 ```
 
-### Stop The Stack
+### Stopping the Sandbox
 
 ```bash
-make monitor-down
+make monitor-down-sandbox
 ```
 
-## 2. Run The API Locally Against Docker Infrastructure
+## 2. Local App Development Against Infrastructure
 
-This mode is useful when you want live infrastructure but local Python
-debugging.
+If you are developing or debugging DB Monitor locally, you can start the platform infrastructure in Docker and run the core Python application or consumer service on your local machine.
 
-1. Start the infrastructure services.
+1. Start the supporting infrastructure core and optional sandbox sources.
 
 ```bash
-docker compose up -d kafka zookeeper postgres-monitor postgres-order postgres-catalog postgres-shipping connect connector-registrar
+# To start the baseline platform core AND the evaluation sandbox databases:
+docker compose --profile sandbox up -d
+
+# To start ONLY the core platform infrastructure (Kafka, Monitor DB, Grafana, etc.):
+docker compose up -d
 ```
 
-2. Run tracked migrations locally.
+2. Run schema migrations locally on the monitor DB.
 
 ```bash
 make monitor-migrate
 ```
 
-3. Start the API from the app directory.
+3. Start the API or consumer service from the app directory.
 
 ```bash
 cd app
 uv run python start_monitor.py
 ```
 
-Expected local `.env` values are documented in `configuration.md`.
+Expected local `.env` values are documented in [docs/configuration.md](docs/configuration.md).
 
 ## 3. Production-Like Expectations
 

@@ -27,3 +27,9 @@ dependencies = [
 dev = [
     "pytest>=9.0.0",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "core: unit and mocked validation for the reusable platform runtime",
+    "sandbox: checks that require the bundled example stack or live infra",
+]

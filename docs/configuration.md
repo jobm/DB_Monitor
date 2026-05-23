@@ -36,9 +36,11 @@ KAFKA_SSL_PASSWORD_FILE=/run/secrets/kafka_ssl_password
 | `APP_ENV` | Environment mode used for safety defaults | `development` |
 | `DB_SCHEMA_MODE` | Schema handling policy: `apply`, `validate`, or `skip` | `apply` in dev, `validate` in prod |
 | `POSTGRES_URL` | Async SQLAlchemy connection string | local monitor DB |
+| `CONNECTOR_SOURCES_FILE` | Path to the public source manifest file | `/connectors/sources.json` in docker, else `connectors/sources.json` |
 | `MESSAGE_BROKER` | Active single-broker mode: `kafka` or `rabbitmq` | `kafka` |
 | `KAFKA_BROKER` | Kafka bootstrap server | `kafka:9092` |
-| `KAFKA_TOPICS` | Explicit topic list when not using manifest-derived topics | derived from `KAFKA_TOPIC` |
+| `KAFKA_TOPIC` | Singular fallback Kafka topic if no topic derivation exists | `orderdb.public.orders` |
+| `KAFKA_TOPICS` | Explicit topic list. Overrides manifest-derived tracking if provided | derived from manifest |
 | `KAFKA_CONSUMER_GROUP` | Consumer group ID | `fastapi-consumer-group` |
 | `KAFKA_CLUSTERS` | JSON array of per-cluster config entries | unset |
 | `BROKER_CLUSTERS` | JSON array of mixed Kafka and RabbitMQ cluster entries | unset |
@@ -241,3 +243,42 @@ fanout.
 - The compose stack and local app entrypoint can both derive Kafka topics from
   `connectors/sources.json`, so you often do not need to set `KAFKA_TOPICS`
   manually.
+
+## Source Manifest Contract (`CONNECTOR_SOURCES_FILE`)
+
+The monitoring core of DB Monitor is driven by a declerative configuration contract called the **Source Manifest**. This is a JSON document located at `connectors/sources.json` by default (or custom configured via `CONNECTOR_SOURCES_FILE`).
+
+To formally declare, dry-run, or publish your custom databases and tables, provide a manifest that conforms to the JSON Schema at [connectors/sources.schema.json](../connectors/sources.schema.json).
+
+### Schema Specification
+
+The manifest consists of a root `"connectors"` array containing one or more source databases:
+
+| Field | Type | Description | Required | Default / Fallback |
+| --- | --- | --- | --- | --- |
+| `source_name` | String | A unique system identifier. Also used as Debezium topic prefix. | **Yes** | — |
+| `database_hostname` | String | Net hostname or IP address of the PostgreSQL source database. | **Yes** | — |
+| `tables` | Array | Non-empty list of schemas and tables to monitor (e.g. `"public.orders"`). | **Yes** | — |
+| `enabled` | Boolean | Activates or disables capturing of this database. | No | `true` |
+| `connector_name` | String | Custom Debezium connector registration endpoint name. | No | `"{source_name}-connector"` |
+| `slot_name` | String | Custom logical replication slot name in Postgres. | No | `"{source_name}_slot"` |
+| `history_topic` | String | Custom name for internal schema changes tracker topic. | No | `"dbhistory.{source_name}"` |
+| `config_overrides` | Object | Arbitrary extra key/values properties passed directly to the Debezium engine. | No | `{}` |
+
+### Minimal Manifest Example
+
+```json
+{
+  "connectors": [
+    {
+      "source_name": "inventory_db",
+      "database_hostname": "postgres-inventory-prod",
+      "tables": [
+        "public.items",
+        "public.categories"
+      ],
+      "enabled": true
+    }
+  ]
+}
+```
