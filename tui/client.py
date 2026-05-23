@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -7,7 +8,12 @@ import websockets
 
 
 class DBMonitorClient:
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: Optional[str] = None):
+        if base_url is None:
+            base_url = os.environ.get(
+                "DB_MONITOR_BASE_URL",
+                "http://localhost:8000",
+            )
         self.base_url = base_url.rstrip("/")
         self.api_key: Optional[str] = None
         self._access_token: Optional[str] = None
@@ -169,12 +175,21 @@ class DBMonitorClient:
             return False
 
     async def verify_auth(self) -> bool:
+        return (await self.verify_auth_status()) == "ok"
+
+    async def verify_auth_status(self) -> str:
         try:
             client = await self.get_client()
             resp = await client.get("/info")
-            return resp.status_code == 200
+            if resp.status_code == 200:
+                return "ok"
+            if resp.status_code == 401:
+                return "unauthorized"
+            if resp.status_code == 403:
+                return "forbidden"
+            return "error"
         except Exception:
-            return False
+            return "error"
 
     async def get_tables(self) -> List[Dict[str, Any]]:
         client = await self.get_client()

@@ -19,6 +19,8 @@ CONNECTOR_DATABASE_USER="${CONNECTOR_DATABASE_USER:-postgres}"
 CONNECTOR_DATABASE_PASSWORD="${CONNECTOR_DATABASE_PASSWORD:-postgres}"
 CONNECTOR_DATABASE_DBNAME="${CONNECTOR_DATABASE_DBNAME:-postgres}"
 CONNECTOR_HISTORY_BOOTSTRAP_SERVERS="${CONNECTOR_HISTORY_BOOTSTRAP_SERVERS:-kafka:9092}"
+CONNECTOR_STATUS_RETRIES="${CONNECTOR_STATUS_RETRIES:-20}"
+CONNECTOR_STATUS_DELAY_SECONDS="${CONNECTOR_STATUS_DELAY_SECONDS:-3}"
 DRY_RUN="${DRY_RUN:-false}"
 
 manifest_errors() {
@@ -164,11 +166,14 @@ else
     echo "DRY_RUN enabled. Skipping Kafka Connect readiness check."
 fi
 
-render_connectors | while IFS= read -r payload; do
+registered_connectors=()
+
+while IFS= read -r payload; do
     connector_name=$(printf '%s' "$payload" | jq -r '.name')
     echo "Registering $connector_name..."
     if [[ "$DRY_RUN" == "true" ]]; then
         printf '%s\n' "$payload" | jq .
+        registered_connectors+=("$connector_name")
         continue
     fi
 
@@ -176,7 +181,34 @@ render_connectors | while IFS= read -r payload; do
     curl -s -X PUT -H "Content-Type: application/json" \
         --data "$connector_config" "$CONNECT_URL/$connector_name/config" \
         | jq .
-done
+    registered_connectors+=("$connector_name")
+done < <(render_connectors)
+
+if [[ "$DRY_RUN" != "true" ]]; then
+    for connector_name in "${registered_connectors[@]}"; do
+        echo "Validating status for $connector_name..."
+        running=false
+        for ((attempt=1; attempt<=CONNECTOR_STATUS_RETRIES; attempt++)); do
+            status_json=$(curl -s "$CONNECT_URL/$connector_name/status")
+            connector_state=$(printf '%s' "$status_json" | jq -r '.connector.state // ""')
+            tasks_ok=$(printf '%s' "$status_json" | jq -r 'if (.tasks | length) == 0 then "true" else all(.tasks[]; .state == "RUNNING") end')
+
+            if [[ "$connector_state" == "RUNNING" && "$tasks_ok" == "true" ]]; then
+                running=true
+                break
+            fi
+
+            echo "  Attempt $attempt/$CONNECTOR_STATUS_RETRIES: state=$connector_state tasks_ok=$tasks_ok"
+            sleep "$CONNECTOR_STATUS_DELAY_SECONDS"
+        done
+
+        if [[ "$running" != "true" ]]; then
+            echo "Connector $connector_name failed to reach RUNNING state" >&2
+            curl -s "$CONNECT_URL/$connector_name/status" | jq . >&2
+            exit 1
+        fi
+    done
+fi
 
 echo "Derived KAFKA_TOPICS from sources manifest:"
 desired_topics | jq -R . | jq -s .

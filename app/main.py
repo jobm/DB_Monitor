@@ -54,6 +54,7 @@ logger = logging.getLogger(__name__)
 def _configure_tracing(app: FastAPI) -> None:
     """Initialize optional distributed tracing for the app."""
     if not OTEL_TRACING_ENABLED:
+        logger.debug("OpenTelemetry tracing disabled — set OTEL_TRACING_ENABLED=true to enable")
         return
 
     initialize_tracing(

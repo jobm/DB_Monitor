@@ -84,8 +84,19 @@ class LoginScreen(Screen):
             self.query_one("#connect-btn", Button).disabled = False
             return
 
-        if not await api_client.verify_auth():
-            status.update("[red]Invalid API Key.[/red]")
+        auth_status = await api_client.verify_auth_status()
+        if auth_status == "unauthorized":
+            status.update("[red]Invalid or expired API key.[/red]")
+            self.query_one("#connect-btn", Button).disabled = False
+            return
+
+        if auth_status == "forbidden":
+            status.update("[red]Authenticated, but access is forbidden.[/red]")
+            self.query_one("#connect-btn", Button).disabled = False
+            return
+
+        if auth_status != "ok":
+            status.update("[red]Authentication check failed. Try again.[/red]")
             self.query_one("#connect-btn", Button).disabled = False
             return
 

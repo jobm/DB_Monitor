@@ -14,6 +14,29 @@ from typing import Any, Optional
 
 from source_metadata import extract_source_service_name
 
+# ── Payload key constants ──────────────────────────────────────────
+# Top-level event keys
+KEY_EVENT_TYPE = "event_type"
+KEY_TYPE = "type"
+KEY_EVENT_TIME = "event_time"
+KEY_TIMESTAMP_MS = "timestamp_ms"
+KEY_TS = "ts"
+KEY_USER_ID = "user_id"
+KEY_USER_ID_CAMEL = "userId"
+KEY_USER = "user"
+KEY_SERVICE_NAME = "service_name"
+KEY_SERVICE = "service"
+
+# Debezium envelope keys
+KEY_OP = "op"
+KEY_PAYLOAD = "payload"
+KEY_TS_MS = "ts_ms"
+
+# Fallback/status values
+VAL_UNKNOWN = "unknown"
+VAL_UNPARSED = "unparsed"
+VAL_DATA = "data"
+
 
 @dataclass(frozen=True)
 class ParsedEvent:
@@ -65,7 +88,7 @@ def parse_event_payload(raw_payload: str) -> ParsedEvent:
         payload = json.loads(raw_payload)
     except json.JSONDecodeError:
         return ParsedEvent(
-            event_type="unparsed",
+            event_type=VAL_UNPARSED,
             event_time=now,
             user_id=None,
             service_name=None,
@@ -77,27 +100,27 @@ def parse_event_payload(raw_payload: str) -> ParsedEvent:
     if isinstance(payload, dict):
         data = payload
     else:
-        data = {"data": payload}
+        data = {VAL_DATA: payload}
 
     event_type_value = (
-        data.get("event_type")
-        or data.get("type")
-        or data.get("op")
+        data.get(KEY_EVENT_TYPE)
+        or data.get(KEY_TYPE)
+        or data.get(KEY_OP)
         or (
-            data.get("payload", {}).get("op")
-            if isinstance(data.get("payload"), dict)
+            data.get(KEY_PAYLOAD, {}).get(KEY_OP)
+            if isinstance(data.get(KEY_PAYLOAD), dict)
             else None
         )
-        or "unknown"
+        or VAL_UNKNOWN
     )
     event_type = str(event_type_value)
 
     event_time: datetime = now
     explicit_event_time = (
-        data.get("payload", {}).get("ts_ms")
-        if isinstance(data.get("payload"), dict)
+        data.get(KEY_PAYLOAD, {}).get(KEY_TS_MS)
+        if isinstance(data.get(KEY_PAYLOAD), dict)
         else None
-    ) or data.get("event_time")
+    ) or data.get(KEY_EVENT_TIME)
     if isinstance(explicit_event_time, str):
         parsed = _parse_iso_datetime(explicit_event_time)
         if parsed is not None:
@@ -109,7 +132,7 @@ def parse_event_payload(raw_payload: str) -> ParsedEvent:
         event_time = datetime.fromtimestamp(seconds, tz=timezone.utc)
 
     if event_time == now:
-        ts_ms = data.get("ts_ms") or data.get("timestamp_ms") or data.get("ts")
+        ts_ms = data.get(KEY_TS_MS) or data.get(KEY_TIMESTAMP_MS) or data.get(KEY_TS)
         if isinstance(ts_ms, (int, float)):
             seconds = ts_ms
             if seconds > 10_000_000_000:
@@ -117,11 +140,11 @@ def parse_event_payload(raw_payload: str) -> ParsedEvent:
             event_time = datetime.fromtimestamp(seconds, tz=timezone.utc)
 
     user_id_value = (
-        data.get("user_id") or data.get("userId") or data.get("user")
+        data.get(KEY_USER_ID) or data.get(KEY_USER_ID_CAMEL) or data.get(KEY_USER)
     )
     user_id = str(user_id_value) if user_id_value is not None else None
 
-    service_name_value = data.get("service_name") or data.get("service")
+    service_name_value = data.get(KEY_SERVICE_NAME) or data.get(KEY_SERVICE)
     if service_name_value is None:
         service_name_value = extract_source_service_name(data)
     service_name = (

@@ -9,10 +9,16 @@ export class DBMonitorClient {
    * @param {string | null} [options.apiKey]
    * @param {string | null} [options.accessToken]
    */
-  constructor({ baseUrl, apiKey = null, accessToken = null }) {
+  constructor({
+    baseUrl,
+    apiKey = null,
+    accessToken = null,
+    timeoutMs = 10000,
+  }) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.apiKey = apiKey;
     this.accessToken = accessToken;
+    this.timeoutMs = timeoutMs;
   }
 
   /**
@@ -27,6 +33,7 @@ export class DBMonitorClient {
     const payload = await this._requestJson("/auth/token", {
       method: "POST",
       headers: { "X-API-Key": this.apiKey },
+      includeDefaultHeaders: false,
     });
     this.accessToken = payload.access_token;
     return this.accessToken;
@@ -70,7 +77,7 @@ export class DBMonitorClient {
    * @param {object} options
    * @returns {Promise<object>}
    */
-  getChanges(options) {
+  getChanges(options = {}) {
     const {
       tableName,
       serviceName = null,
@@ -78,6 +85,9 @@ export class DBMonitorClient {
       limit = 100,
       offset = 0,
     } = options;
+    if (!tableName) {
+      throw new Error("tableName is required for getChanges().");
+    }
     const query = {
       table_name: tableName,
       limit: String(limit),
@@ -122,11 +132,18 @@ export class DBMonitorClient {
    * @returns {Promise<object>}
    */
   async _requestJson(path, options = {}) {
-    const { method = "GET", query = null, headers = {} } = options;
-    const requestHeaders = {
-      ...this._defaultHeaders(),
-      ...headers,
-    };
+    const {
+      method = "GET",
+      query = null,
+      headers = {},
+      includeDefaultHeaders = true,
+    } = options;
+    const requestHeaders = includeDefaultHeaders
+      ? {
+          ...this._defaultHeaders(),
+          ...headers,
+        }
+      : { ...headers };
     const url = new URL(`${this.baseUrl}${path}`);
     if (query) {
       for (const [key, value] of Object.entries(query)) {
@@ -134,14 +151,46 @@ export class DBMonitorClient {
       }
     }
 
-    const response = await fetch(url, {
-      method,
-      headers: requestHeaders,
-    });
-    if (!response.ok) {
-      throw new Error(`DB Monitor request failed: ${response.status}`);
+    const controller = new AbortController();
+    const timeoutHandle = setTimeout(() => {
+      controller.abort();
+    }, this.timeoutMs);
+
+    let response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers: requestHeaders,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error(
+          `DB Monitor request timed out after ${this.timeoutMs}ms`,
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeoutHandle);
     }
-    return await response.json();
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      const bodySuffix = errorBody ? ` - ${errorBody}` : "";
+      throw new Error(
+        `DB Monitor request failed: ${response.status} ${response.statusText}${bodySuffix}`,
+      );
+    }
+
+    if (response.status === 204) {
+      return {};
+    }
+
+    try {
+      return await response.json();
+    } catch {
+      throw new Error("DB Monitor request failed: invalid JSON response body");
+    }
   }
 
   /**

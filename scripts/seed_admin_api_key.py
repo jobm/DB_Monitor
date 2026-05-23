@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
+from sqlalchemy import select
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = REPO_ROOT / "app"
@@ -27,8 +29,23 @@ async def create_admin_api_key(owner_name: str, ttl_days: int) -> str:
     """Create a short-lived admin API key and return it in client format."""
     raw_key = generate_new_api_key()
     key_hash = get_api_key_hash(raw_key)
+    now = datetime.now(timezone.utc)
 
     async with AsyncSessionLocal() as session:
+        # Deactivate any currently active admin keys for this owner so this
+        # command always returns exactly one fresh, usable key.
+        existing_result = await session.execute(
+            select(ApiKey).where(
+                ApiKey.owner_name == owner_name,
+                ApiKey.is_active.is_(True),
+                ApiKey.role == "admin",
+            )
+        )
+        for existing in existing_result.scalars().all():
+            existing.is_active = False
+            if existing.revoked_at is None:
+                existing.revoked_at = now
+
         api_key = ApiKey(
             key_hash=key_hash,
             owner_name=owner_name,

@@ -232,7 +232,11 @@ async def test_check_health_returns_false_on_unreachable_host(monkeypatch):
         async def __aexit__(self, exc_type, exc, tb):
             return None
 
-    monkeypatch.setattr(client_module.httpx, "AsyncClient", FailingHealthClient)
+    monkeypatch.setattr(
+        client_module.httpx,
+        "AsyncClient",
+        FailingHealthClient,
+    )
 
     assert await client.check_health() is False
 
@@ -304,3 +308,29 @@ async def test_admin_client_methods_use_expected_routes():
             {"limit": 25, "include_replayed": True},
         ),
     ]
+
+
+@pytest.mark.anyio
+async def test_verify_auth_status_distinguishes_auth_failures():
+    client = DBMonitorClient(base_url="http://localhost:8000")
+
+    class AuthStatusClient:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+        async def get(self, path, params=None):
+            assert path == "/info"
+            return FakeResponse({}, status_code=self.status_code)
+
+    client._client = AuthStatusClient(401)
+    client._access_token = "token-123"
+    assert await client.verify_auth_status() == "unauthorized"
+    assert await client.verify_auth() is False
+
+    client._client = AuthStatusClient(403)
+    assert await client.verify_auth_status() == "forbidden"
+    assert await client.verify_auth() is False
+
+    client._client = AuthStatusClient(200)
+    assert await client.verify_auth_status() == "ok"
+    assert await client.verify_auth() is True
