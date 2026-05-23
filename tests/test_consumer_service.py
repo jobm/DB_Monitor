@@ -488,6 +488,136 @@ async def test_process_single_event_commits_after_dlq_persist(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_handle_message_processing_error_continues_after_dlq(
+    monkeypatch,
+):
+    msg = FakeBrokerMessage(
+        "orderdb.public.orders",
+        '{"not":"valid for parser path"}',
+        partition=2,
+        offset=91,
+    )
+
+    metrics_state = {
+        "failed": FakeTimerMetric(),
+    }
+    captured = {}
+
+    async def fake_send_to_dlq(
+        dlq_publisher,
+        event,
+        error,
+        raw_message=None,
+        dlq_destination="db-monitor-dlq",
+        broker_kind="kafka",
+    ):
+        captured["event"] = event
+        captured["error"] = error
+        captured["raw_message"] = raw_message
+        captured["dlq_destination"] = dlq_destination
+        captured["broker_kind"] = broker_kind
+        return True
+
+    monkeypatch.setattr(
+        consumer_service,
+        "events_failed_total",
+        metrics_state["failed"],
+    )
+    monkeypatch.setattr(consumer_service, "send_to_dlq", fake_send_to_dlq)
+
+    should_continue = await consumer_service._handle_message_processing_error(
+        msg=msg,
+        raw_payload="{bad-json}",
+        exc=ValueError("parse failed"),
+        dlq_publisher=FakeDeadLetterPublisher(),
+        dlq_destination="db-monitor-dlq",
+        enable_dlq=True,
+        broker_kind="kafka",
+    )
+
+    assert should_continue is True
+    assert metrics_state["failed"].value == 1
+    assert captured["event"].kafka_topic == "orderdb.public.orders"
+    assert captured["event"].kafka_partition == 2
+    assert captured["event"].kafka_offset == 91
+    assert captured["event"].event_type == "unparsed"
+    assert captured["event"].operation == "UNKNOWN"
+    assert captured["raw_message"] == b"{bad-json}"
+
+
+@pytest.mark.anyio
+async def test_handle_message_processing_error_stops_when_dlq_persist_fails(
+    monkeypatch,
+):
+    msg = FakeBrokerMessage(
+        "orderdb.public.orders",
+        "{}",
+        partition=1,
+        offset=9,
+    )
+    metrics_state = {
+        "failed": FakeTimerMetric(),
+    }
+
+    async def fake_send_to_dlq(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(
+        consumer_service,
+        "events_failed_total",
+        metrics_state["failed"],
+    )
+    monkeypatch.setattr(consumer_service, "send_to_dlq", fake_send_to_dlq)
+
+    should_continue = await consumer_service._handle_message_processing_error(
+        msg=msg,
+        raw_payload="{}",
+        exc=RuntimeError("boom"),
+        dlq_publisher=FakeDeadLetterPublisher(),
+        dlq_destination="db-monitor-dlq",
+        enable_dlq=True,
+        broker_kind="kafka",
+    )
+
+    assert should_continue is False
+    assert metrics_state["failed"].value == 1
+
+
+@pytest.mark.anyio
+async def test_handle_message_processing_error_stops_when_dlq_disabled(
+    monkeypatch,
+):
+    msg = FakeBrokerMessage(
+        "orderdb.public.orders",
+        "{}",
+        partition=1,
+        offset=9,
+    )
+    metrics_state = {
+        "failed": FakeTimerMetric(),
+    }
+
+    monkeypatch.setattr(
+        consumer_service,
+        "events_failed_total",
+        metrics_state["failed"],
+    )
+
+    should_continue = await consumer_service._handle_message_processing_error(
+        msg=msg,
+        raw_payload="{}",
+        exc=RuntimeError("boom"),
+        dlq_publisher=FakeDeadLetterPublisher(),
+        dlq_destination="db-monitor-dlq",
+        enable_dlq=False,
+        broker_kind="kafka",
+    )
+
+    assert should_continue is False
+    assert metrics_state["failed"].value == 1
+
+
+@pytest.mark.anyio
 async def test_broadcast_event_delivers_webhooks(monkeypatch):
     event = KafkaEvent(
         id=77,

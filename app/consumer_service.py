@@ -955,6 +955,83 @@ async def send_to_dlq(
     return True
 
 
+def _fallback_event_from_message(
+    msg: BrokerMessage,
+    raw_payload: str,
+) -> KafkaEvent:
+    """Build a minimal event shell when normal parsing fails."""
+    return KafkaEvent(
+        event_type="unparsed",
+        event_time=datetime.now(timezone.utc),
+        user_id=None,
+        service_name=_get_canonical_service_name(msg.destination, None),
+        kafka_topic=msg.destination,
+        kafka_partition=msg.partition,
+        kafka_offset=msg.offset,
+        event_data=None,
+        raw_payload=raw_payload,
+        operation="UNKNOWN",
+    )
+
+
+async def _handle_message_processing_error(
+    *,
+    msg: BrokerMessage,
+    raw_payload: str,
+    exc: Exception,
+    dlq_publisher: Optional[DeadLetterPublisher],
+    dlq_destination: str,
+    enable_dlq: bool,
+    broker_kind: str,
+) -> bool:
+    """Persist a failed message to DLQ.
+
+    Decide whether processing can continue after a message-level failure.
+
+    Returns True when it is safe to continue consuming. Returns False when the
+    consumer should stop to avoid committing offsets for unpersisted failures.
+    """
+    fallback_event = _fallback_event_from_message(msg, raw_payload)
+    events_failed_total.labels(
+        service=fallback_event.service_name or "unknown",
+        error_type=type(exc).__name__,
+    ).inc()
+
+    if not enable_dlq:
+        logger.error(
+            (
+                "Stopping consumer after message failure because DLQ is "
+                "disabled for %s/%s/%s"
+            ),
+            msg.destination,
+            msg.partition,
+            msg.offset,
+        )
+        return False
+
+    handled = await send_to_dlq(
+        dlq_publisher,
+        fallback_event,
+        str(exc),
+        raw_payload.encode(),
+        dlq_destination=dlq_destination,
+        broker_kind=broker_kind,
+    )
+    if not handled:
+        logger.error(
+            (
+                "Stopping consumer because DLQ persistence failed for "
+                "%s/%s/%s"
+            ),
+            msg.destination,
+            msg.partition,
+            msg.offset,
+        )
+        return False
+
+    return True
+
+
 async def consumer_task(
     cluster_name: str = "default",
     broker_kind: str = "kafka",
@@ -1232,7 +1309,19 @@ async def consumer_task(
                 raise
             except Exception as e:
                 logger.exception("Error processing message: %s", e)
+                raw_payload = msg.value.decode("utf-8", errors="replace")
+                should_continue = await _handle_message_processing_error(
+                    msg=msg,
+                    raw_payload=raw_payload,
+                    exc=e,
+                    dlq_publisher=dlq_publisher,
+                    dlq_destination=dlq_destination,
+                    enable_dlq=enable_dlq,
+                    broker_kind=broker_kind,
+                )
                 breaker.record_failure()
+                if not should_continue:
+                    raise
 
         if batch:
             await _process_batch(
