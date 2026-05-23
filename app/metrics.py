@@ -87,6 +87,24 @@ consumer_lag = Gauge(
     ["cluster", "topic", "partition"],
 )
 
+consumer_current_offset = Gauge(
+    "db_monitor_consumer_current_offset",
+    "Most recent consumed broker offset per partition",
+    ["cluster", "topic", "partition"],
+)
+
+consumer_committed_offset = Gauge(
+    "db_monitor_consumer_committed_offset",
+    "Most recent committed broker offset per partition",
+    ["cluster", "topic", "partition"],
+)
+
+consumer_commit_lag = Gauge(
+    "db_monitor_consumer_commit_lag",
+    "Difference between broker high-water mark and last committed offset",
+    ["cluster", "topic", "partition"],
+)
+
 dlq_messages_total = Counter(
     "db_monitor_dlq_messages_total",
     "Total number of messages forwarded to the dead-letter queue",
@@ -114,4 +132,16 @@ circuit_breaker_state = Gauge(
     "db_monitor_circuit_breaker_state",
     "Circuit breaker state (0=closed, 1=open, 2=half-open)",
     ["breaker"],
+)
+
+webhook_delivery_attempts_total = Counter(
+    "db_monitor_webhook_delivery_attempts_total",
+    "Total number of outbound webhook delivery attempts",
+    ["url", "result"],
+)
+
+webhook_circuit_breaker_state = Gauge(
+    "db_monitor_webhook_circuit_breaker_state",
+    "Webhook circuit breaker state (0=closed, 1=open)",
+    ["url"],
 )

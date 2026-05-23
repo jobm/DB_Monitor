@@ -270,6 +270,10 @@ def test_config_loads_webhook_settings(
     )
     monkeypatch.setenv("WEBHOOK_TIMEOUT_SECONDS", "9.5")
     monkeypatch.setenv("WEBHOOK_SHARED_SECRET", "shared-secret")
+    monkeypatch.setenv("WEBHOOK_MAX_RETRIES", "4")
+    monkeypatch.setenv("WEBHOOK_RETRY_BACKOFF_SECONDS", "0.75")
+    monkeypatch.setenv("WEBHOOK_CIRCUIT_BREAKER_THRESHOLD", "6")
+    monkeypatch.setenv("WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS", "12")
 
     config = _load_config_module("config_webhooks")
 
@@ -279,6 +283,10 @@ def test_config_loads_webhook_settings(
     ]
     assert config.WEBHOOK_TIMEOUT_SECONDS == 9.5
     assert config.WEBHOOK_SHARED_SECRET == "shared-secret"
+    assert config.WEBHOOK_MAX_RETRIES == 4
+    assert config.WEBHOOK_RETRY_BACKOFF_SECONDS == 0.75
+    assert config.WEBHOOK_CIRCUIT_BREAKER_THRESHOLD == 6
+    assert config.WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS == 12.0
 
 
 def test_config_loads_rabbitmq_broker_clusters(

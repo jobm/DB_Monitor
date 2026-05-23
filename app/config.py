@@ -637,6 +637,16 @@ WEBHOOK_TIMEOUT_SECONDS = float(
     os.getenv("WEBHOOK_TIMEOUT_SECONDS", "5.0")
 )
 WEBHOOK_SHARED_SECRET = _get_env_or_file("WEBHOOK_SHARED_SECRET")
+WEBHOOK_MAX_RETRIES = int(os.getenv("WEBHOOK_MAX_RETRIES", "3"))
+WEBHOOK_RETRY_BACKOFF_SECONDS = float(
+    os.getenv("WEBHOOK_RETRY_BACKOFF_SECONDS", "0.5")
+)
+WEBHOOK_CIRCUIT_BREAKER_THRESHOLD = int(
+    os.getenv("WEBHOOK_CIRCUIT_BREAKER_THRESHOLD", "5")
+)
+WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS = float(
+    os.getenv("WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS", "30.0")
+)
 OTEL_TRACING_ENABLED = (
     os.getenv(
         "OTEL_TRACING_ENABLED",
@@ -731,6 +741,30 @@ if WEBHOOK_TIMEOUT_SECONDS <= 0:
     _config_error(
         "WEBHOOK_TIMEOUT_SECONDS must be greater than zero.",
         hint="Set a positive timeout value such as 5.0.",
+    )
+
+if WEBHOOK_MAX_RETRIES < 0:
+    _config_error(
+        "WEBHOOK_MAX_RETRIES cannot be negative.",
+        hint="Use 0 to disable retries or a positive integer.",
+    )
+
+if WEBHOOK_RETRY_BACKOFF_SECONDS < 0:
+    _config_error(
+        "WEBHOOK_RETRY_BACKOFF_SECONDS cannot be negative.",
+        hint="Use 0 for immediate retries or a positive delay.",
+    )
+
+if WEBHOOK_CIRCUIT_BREAKER_THRESHOLD < 1:
+    _config_error(
+        "WEBHOOK_CIRCUIT_BREAKER_THRESHOLD must be at least 1.",
+        hint="Use a positive integer failure threshold.",
+    )
+
+if WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS <= 0:
+    _config_error(
+        "WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS must be greater than zero.",
+        hint="Use a positive recovery timeout in seconds.",
     )
 
 for webhook_url in WEBHOOK_URLS:

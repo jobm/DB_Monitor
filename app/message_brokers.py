@@ -25,6 +25,7 @@ class BrokerMessage:
     value: bytes
     lag: int | None
     ack_callback: Callable[[], Awaitable[None]]
+    nack_callback: Callable[[], Awaitable[None]] | None = None
 
 
 class MessageConsumerAdapter(Protocol):
@@ -135,6 +136,7 @@ class KafkaConsumerAdapter:
                 value=raw_message.value,
                 lag=lag,
                 ack_callback=self._consumer.commit,
+                nack_callback=None,
             )
 
 
@@ -270,6 +272,9 @@ class RabbitMQConsumerAdapter:
         queue_name: str,
     ) -> Callable[[Any], Awaitable[None]]:
         async def callback(message: Any) -> None:
+            async def nack_callback() -> None:
+                await message.nack(requeue=True)
+
             await self._message_queue.put(
                 BrokerMessage(
                     destination=queue_name,
@@ -278,6 +283,7 @@ class RabbitMQConsumerAdapter:
                     value=message.body,
                     lag=None,
                     ack_callback=message.ack,
+                    nack_callback=nack_callback,
                 )
             )
 

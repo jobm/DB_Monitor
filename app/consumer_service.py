@@ -22,6 +22,9 @@ from message_brokers import (
     build_message_consumer,
 )
 from metrics import (
+    consumer_commit_lag,
+    consumer_committed_offset,
+    consumer_current_offset,
     circuit_breaker_state,
     consumer_lag,
     consumer_last_successful_commit_timestamp_seconds,
@@ -71,9 +74,14 @@ def _new_consumer_runtime_state() -> dict[str, object]:
         "last_message_at": None,
         "last_commit_at": None,
         "lag_by_partition": {},
+        "highwater_by_partition": {},
         "lag_total": 0,
         "dlq_messages_total": 0,
     }
+
+
+class ConsumerStopRequested(RuntimeError):
+    """Raised when the consumer must stop to avoid losing broker messages."""
 
 
 consumer_runtime: dict[str, object] = _new_consumer_runtime_state()
@@ -179,6 +187,7 @@ def _update_runtime_lag(
     cluster_name: str,
     destination: str,
     partition: int,
+    offset: int,
     lag_value: int | None,
 ) -> None:
     """Update current lag snapshots for readiness and metrics."""
@@ -189,12 +198,55 @@ def _update_runtime_lag(
     lag_by_partition = dict(runtime.get("lag_by_partition") or {})
     lag_by_partition[lag_key] = lag_value
     runtime["lag_by_partition"] = lag_by_partition
+    highwater_by_partition = dict(runtime.get("highwater_by_partition") or {})
+    highwater_by_partition[lag_key] = offset + lag_value + 1
+    runtime["highwater_by_partition"] = highwater_by_partition
     runtime["lag_total"] = sum(lag_by_partition.values())
     consumer_lag.labels(
         cluster=cluster_name,
         topic=destination,
         partition=str(partition),
     ).set(lag_value)
+    consumer_current_offset.labels(
+        cluster=cluster_name,
+        topic=destination,
+        partition=str(partition),
+    ).set(offset)
+
+
+def _record_committed_offsets(
+    runtime: dict[str, object],
+    cluster_name: str,
+    events: list[KafkaEvent],
+) -> None:
+    """Update offset and commit-lag gauges from the committed batch."""
+    highwater_by_partition = dict(runtime.get("highwater_by_partition") or {})
+    for event in events:
+        if event.kafka_topic is None or event.kafka_partition is None:
+            continue
+        if event.kafka_offset is None:
+            continue
+
+        partition_label = str(event.kafka_partition)
+        consumer_committed_offset.labels(
+            cluster=cluster_name,
+            topic=event.kafka_topic,
+            partition=partition_label,
+        ).set(event.kafka_offset)
+
+        lag_key = (
+            f"{cluster_name}:{event.kafka_topic}:{event.kafka_partition}"
+        )
+        highwater = highwater_by_partition.get(lag_key)
+        if highwater is None:
+            continue
+
+        commit_lag = max(int(highwater) - int(event.kafka_offset) - 1, 0)
+        consumer_commit_lag.labels(
+            cluster=cluster_name,
+            topic=event.kafka_topic,
+            partition=partition_label,
+        ).set(commit_lag)
 
 
 def _record_successful_commit(runtime: dict[str, object]) -> None:
@@ -1032,6 +1084,24 @@ async def _handle_message_processing_error(
     return True
 
 
+async def _requeue_broker_messages(messages: list[BrokerMessage]) -> None:
+    """Request broker redelivery for unacked messages when supported."""
+    for message in messages:
+        nack_callback = getattr(message, "nack_callback", None)
+        if nack_callback is None:
+            continue
+        try:
+            await nack_callback()
+        except Exception as exc:
+            logger.warning(
+                "Failed to requeue broker message %s/%s/%s: %s",
+                message.destination,
+                message.partition,
+                message.offset,
+                exc,
+            )
+
+
 async def consumer_task(
     cluster_name: str = "default",
     broker_kind: str = "kafka",
@@ -1223,6 +1293,7 @@ async def consumer_task(
                     cluster_name,
                     msg.destination,
                     msg.partition,
+                    msg.offset,
                     msg.lag,
                 )
 
@@ -1278,34 +1349,47 @@ async def consumer_task(
                             len(batch) >= batch_size
                             or batch_elapsed >= batch_timeout
                         ):
-                            await _process_batch(
+                            batch_processed = await _process_batch(
                                 batch,
                                 consumer.ack_batch,
                                 dlq_publisher,
                                 dlq_destination,
                                 enable_dlq,
                                 runtime,
+                                cluster_name,
                                 consumer_group,
                                 broker_kind,
                             )
+                            if not batch_processed:
+                                raise ConsumerStopRequested(
+                                    "Batch processing aborted before ack."
+                                )
                             batch = []
                     else:
-                        await _process_single_event(
+                        processed = await _process_single_event(
                             event,
-                            lambda: msg.ack_callback(),
+                            msg,
                             dlq_publisher=dlq_publisher,
                             dlq_destination=dlq_destination,
                             enable_dlq=enable_dlq,
                             raw_data=data,
                             runtime=runtime,
+                            cluster_name=cluster_name,
                             consumer_group=consumer_group,
                             broker_kind=broker_kind,
                         )
+                        if not processed:
+                            raise ConsumerStopRequested(
+                                "Message processing aborted before ack."
+                            )
 
                 breaker.record_success()
 
             except asyncio.CancelledError:
                 logger.info("Consumer task received cancellation signal")
+                raise
+            except ConsumerStopRequested:
+                breaker.record_failure()
                 raise
             except Exception as e:
                 logger.exception("Error processing message: %s", e)
@@ -1324,16 +1408,21 @@ async def consumer_task(
                     raise
 
         if batch:
-            await _process_batch(
+            batch_processed = await _process_batch(
                 batch,
                 consumer.ack_batch,
                 dlq_publisher,
                 dlq_destination,
                 enable_dlq,
                 runtime,
+                cluster_name,
                 consumer_group,
                 broker_kind,
             )
+            if not batch_processed:
+                raise ConsumerStopRequested(
+                    "Final batch processing aborted before ack."
+                )
 
     except asyncio.CancelledError:
         logger.info("Consumer task received cancellation signal (outer)")
@@ -1354,9 +1443,10 @@ async def _process_batch(
     dlq_destination: str,
     enable_dlq: bool,
     runtime: dict[str, object],
-    consumer_group: str,
-    broker_kind: str,
-):
+    cluster_name: str = "default",
+    consumer_group: str = KAFKA_CONSUMER_GROUP,
+    broker_kind: str = "kafka",
+) -> bool:
     """Process a batch of events."""
     with start_span(
         "kafka.process.batch",
@@ -1416,7 +1506,11 @@ async def _process_batch(
                             event.kafka_partition,
                             event.kafka_offset,
                         )
-                        return
+                        batch_messages = [
+                            message for _event, _raw_data, message in batch
+                        ]
+                        await _requeue_broker_messages(batch_messages)
+                        return False
                 else:
                     logger.error(
                         "Skipping commit because DLQ is disabled for %s/%s/%s",
@@ -1424,7 +1518,11 @@ async def _process_batch(
                         event.kafka_partition,
                         event.kafka_offset,
                     )
-                    return
+                    batch_messages = [
+                        message for _event, _raw_data, message in batch
+                    ]
+                    await _requeue_broker_messages(batch_messages)
+                    return False
 
     try:
         with kafka_commit_duration_seconds.time():
@@ -1437,9 +1535,18 @@ async def _process_batch(
             consumer_group=consumer_group,
             broker_kind=broker_kind,
         )
+        _record_committed_offsets(
+            runtime,
+            cluster_name,
+            [event for event, _raw_data, _message in batch],
+        )
         _record_successful_commit(runtime)
     except Exception as exc:
+        batch_messages = [message for _event, _raw_data, message in batch]
+        await _requeue_broker_messages(batch_messages)
         logger.exception("Failed to acknowledge broker messages: %s", exc)
+        return False
+    return True
 
 
 def _event_to_ws_payload(event: KafkaEvent) -> dict:
@@ -1491,9 +1598,10 @@ async def _process_single_event(
     enable_dlq: bool = True,
     raw_data: str = "",
     runtime: Optional[dict[str, object]] = None,
+    cluster_name: str = "default",
     consumer_group: str = KAFKA_CONSUMER_GROUP,
     broker_kind: str = "kafka",
-):
+) -> bool:
     """Process a single event."""
     if runtime is None:
         runtime = consumer_runtime
@@ -1503,8 +1611,15 @@ async def _process_single_event(
 
     if callable(ack_target):
         ack_callback = ack_target
+        nack_callback = None
+    elif hasattr(ack_target, "ack_callback") and callable(
+        ack_target.ack_callback
+    ):
+        ack_callback = ack_target.ack_callback
+        nack_callback = getattr(ack_target, "nack_callback", None)
     elif hasattr(ack_target, "commit") and callable(ack_target.commit):
         ack_callback = ack_target.commit
+        nack_callback = None
     else:
         raise TypeError("ack_target must be callable or expose commit().")
 
@@ -1558,9 +1673,13 @@ async def _process_single_event(
                 broker_kind=broker_kind,
             )
             if not handled:
-                return
+                if nack_callback is not None:
+                    await nack_callback()
+                return False
         else:
-            return
+            if nack_callback is not None:
+                await nack_callback()
+            return False
 
     try:
         with kafka_commit_duration_seconds.time():
@@ -1570,6 +1689,11 @@ async def _process_single_event(
             consumer_group=consumer_group,
             broker_kind=broker_kind,
         )
+        _record_committed_offsets(runtime, cluster_name, [event])
         _record_successful_commit(runtime)
     except Exception as exc:
+        if nack_callback is not None:
+            await nack_callback()
         logger.exception("Failed to acknowledge broker message: %s", exc)
+        return False
+    return True

@@ -137,9 +137,13 @@ class FakeBrokerMessage:
         self.value = value.encode("utf-8")
         self.lag = lag
         self.acked = 0
+        self.nacked = 0
 
     async def ack_callback(self):
         self.acked += 1
+
+    async def nack_callback(self):
+        self.nacked += 1
 
 
 class FakeBrokerConsumerAdapter:
@@ -833,6 +837,98 @@ async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
     assert broker_message.acked == 1
     assert persisted_checkpoints[0][1] == "rabbit-group"
     assert runtime["broker_kind"] == "rabbitmq"
+
+
+@pytest.mark.anyio
+async def test_process_single_event_requeues_rabbitmq_message_on_dlq_failure(
+    monkeypatch,
+):
+    event = KafkaEvent(
+        event_type="u",
+        event_time=datetime.now(timezone.utc),
+        user_id=None,
+        service_name="orderdb",
+        kafka_topic="orderdb.public.orders",
+        kafka_partition=0,
+        kafka_offset=10,
+        event_data={"after": {"id": 1}},
+        raw_payload="{}",
+        operation="UPDATE",
+    )
+    message = FakeBrokerMessage("orderdb.public.orders", event.raw_payload)
+
+    async def fake_store(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    async def fake_send_to_dlq(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_event_graph_with_retries",
+        fake_store,
+    )
+    monkeypatch.setattr(consumer_service, "send_to_dlq", fake_send_to_dlq)
+
+    processed = await consumer_service._process_single_event(
+        event,
+        message,
+        enable_dlq=True,
+        raw_data=event.raw_payload,
+        runtime=consumer_service.consumer_runtime,
+        broker_kind="rabbitmq",
+    )
+
+    assert processed is False
+    assert message.acked == 0
+    assert message.nacked == 1
+
+
+@pytest.mark.anyio
+async def test_process_batch_requeues_rabbitmq_messages_on_dlq_failure(
+    monkeypatch,
+):
+    event = KafkaEvent(
+        event_type="u",
+        event_time=datetime.now(timezone.utc),
+        user_id=None,
+        service_name="orderdb",
+        kafka_topic="orderdb.public.orders",
+        kafka_partition=0,
+        kafka_offset=11,
+        event_data={"after": {"id": 2}},
+        raw_payload="{}",
+        operation="UPDATE",
+    )
+    message = FakeBrokerMessage("orderdb.public.orders", event.raw_payload)
+
+    async def fake_store(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    async def fake_send_to_dlq(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_event_graph_with_retries",
+        fake_store,
+    )
+    monkeypatch.setattr(consumer_service, "send_to_dlq", fake_send_to_dlq)
+
+    processed = await consumer_service._process_batch(
+        [(event, event.raw_payload, message)],
+        lambda _messages: None,
+        dlq_publisher=FakeDeadLetterPublisher(),
+        dlq_destination="rabbit-dlq",
+        enable_dlq=True,
+        runtime=consumer_service.consumer_runtime,
+        consumer_group="rabbit-group",
+        broker_kind="rabbitmq",
+    )
+
+    assert processed is False
+    assert message.acked == 0
+    assert message.nacked == 1
 
 
 @pytest.mark.anyio
