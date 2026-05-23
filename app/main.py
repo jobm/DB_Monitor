@@ -1,10 +1,10 @@
-import asyncio
 import json
 import logging
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from app_factory import create_application
 from audit_log import AuditLogEntry, audit_log_writer
 from auth import authenticate_credentials
 from config import (
@@ -23,6 +23,7 @@ from extensions import engine
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from lifecycle_manager import lifecycle_manager
+from lifespan import managed_lifespan
 from metrics import api_request_duration_seconds, failed_auth_attempts_total
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from routes import router
@@ -89,76 +90,23 @@ def _credential_type(
 
 @asynccontextmanager
 async def lifespan_manager(app: FastAPI):
-    loop = asyncio.get_running_loop()
-    lifecycle_manager.setup_signal_handlers(loop)
-
-    await lifecycle_manager.startup()
-
-    consumer_task_instances: list[asyncio.Task] = []
-    audit_log_task = None
-    schema_cache_backplane_task = None
-    ws_backplane_task = None
-    try:
-        audit_log_task = asyncio.create_task(
-            audit_log_writer.run(),
-            name="audit_log_writer",
-        )
-        lifecycle_manager.register_task(audit_log_task)
-
-        schema_cache_backplane_task = (
-            await schema_cache_backplane.start_listener()
-        )
-        if schema_cache_backplane_task is not None:
-            lifecycle_manager.register_task(schema_cache_backplane_task)
-
-        ws_backplane_task = await ws_manager.start_backplane_listener()
-        if ws_backplane_task is not None:
-            lifecycle_manager.register_task(ws_backplane_task)
-
-        for cluster in BROKER_CLUSTERS:
-            cluster_name = str(cluster["name"])
-            task = asyncio.create_task(
-                consumer_task(
-                    cluster_name=cluster_name,
-                    broker_kind=str(cluster["broker_kind"]),
-                    bootstrap_servers=cluster["bootstrap_servers"],
-                    consumer_group=str(cluster["consumer_group"]),
-                    topics=list(cluster["topics"]),
-                    topic_partitions=cluster.get("topic_partitions"),
-                    connection_url=cluster.get("connection_url"),
-                    queue_names=cluster.get("queue_names"),
-                    prefetch_count=int(cluster.get("prefetch_count") or 100),
-                    dlq_destination=str(
-                        cluster.get("dlq_destination") or "db-monitor-dlq"
-                    ),
-                    enable_dlq=DLQ_ENABLED,
-                    enable_batch=BATCH_ENABLED,
-                    batch_size=BATCH_SIZE,
-                ),
-                name=f"kafka_consumer_{cluster_name}",
-            )
-            consumer_task_instances.append(task)
-            lifecycle_manager.register_task(task)
-
-        logger.info(
-            "Consumer tasks started",
-            extra={
-                "clusters": [cluster["name"] for cluster in BROKER_CLUSTERS],
-            },
-        )
-
+    async with managed_lifespan(
+        app,
+        lifecycle_manager=lifecycle_manager,
+        audit_log_writer=audit_log_writer,
+        schema_cache_backplane=schema_cache_backplane,
+        ws_manager=ws_manager,
+        broker_clusters=BROKER_CLUSTERS,
+        consumer_task=consumer_task,
+        dlq_enabled=DLQ_ENABLED,
+        batch_enabled=BATCH_ENABLED,
+        batch_size=BATCH_SIZE,
+        logger=logger,
+    ):
         yield
 
-    except Exception as e:
-        logger.error(
-            "Error during application lifespan", extra={"error": str(e)}
-        )
-        raise
-    finally:
-        await lifecycle_manager.shutdown()
 
-
-app = FastAPI(
+app = create_application(
     title="DB Monitor",
     description="Database Change Data Capture Monitoring System",
     version="1.0.0",
