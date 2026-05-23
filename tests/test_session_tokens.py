@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import auth
 import pytest
 
-import routes
+import routes.auth as routes_auth
 from models import ApiKey
 
 
@@ -67,7 +67,7 @@ def test_decode_session_token_accepts_next_secret(monkeypatch) -> None:
 
 @pytest.mark.anyio
 async def test_token_exchange_uses_authenticated_api_key() -> None:
-    response = await routes.create_access_token_exchange(_api_key())
+    response = await routes_auth.create_access_token_exchange(_api_key())
 
     assert response["token_type"] == "bearer"
     assert response["role"] == "admin"
@@ -80,7 +80,7 @@ async def test_token_exchange_uses_authenticated_api_key() -> None:
 
 @pytest.mark.anyio
 async def test_ws_token_exchange_returns_ws_session_token() -> None:
-    response = await routes.create_websocket_session_token(_api_key())
+    response = await routes_auth.create_websocket_session_token(_api_key())
 
     assert response["role"] == "admin"
     assert auth.decode_session_token(

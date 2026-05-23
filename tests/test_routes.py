@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import HTTPException
 
-import routes
+import routes.auth as routes_auth
+import routes.data as routes_data
+import routes.ops as routes_ops
 from models import ApiKey, KafkaEvent
 
 
@@ -94,17 +96,17 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
         return [{"id": 10, "event_id": 77, "column_name": "status"}]
 
     monkeypatch.setattr(
-        routes.schema_discovery,
+        routes_data.schema_discovery,
         "get_table_by_name",
         fake_get_table_by_name,
     )
     monkeypatch.setattr(
-        routes.change_processor,
+        routes_data.change_processor,
         "get_changes",
         fake_get_changes,
     )
 
-    response = await routes.get_changes(
+    response = await routes_data.get_changes(
         table_name="orders",
         service_name="orderdb",
         column_name="status",
@@ -146,7 +148,7 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
 @pytest.mark.anyio
 async def test_get_changes_rejects_invalid_timestamp():
     with pytest.raises(HTTPException) as exc_info:
-        await routes.get_changes(
+        await routes_data.get_changes(
             table_name="orderdb.orders",
             from_time="not-a-timestamp",
         )
@@ -177,12 +179,12 @@ async def test_get_value_at_time_legacy_resolves_service_from_table_name(
         return "shipped"
 
     monkeypatch.setattr(
-        routes.change_processor,
+        routes_data.change_processor,
         "get_value_at_time",
         fake_get_value_at_time,
     )
 
-    response = await routes.get_value_at_time_legacy(
+    response = await routes_data.get_value_at_time_legacy(
         table_name="orderdb.orders",
         column_name="status",
         timestamp="2024-01-03T12:30:00Z",
@@ -206,9 +208,13 @@ async def test_get_value_at_time_legacy_resolves_service_from_table_name(
 
 @pytest.mark.anyio
 async def test_health_check_reports_database_and_consumer_state(monkeypatch):
-    monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: FakeSession())
     monkeypatch.setattr(
-        routes,
+        routes_ops,
+        "AsyncSessionLocal",
+        lambda: FakeSession(),
+    )
+    monkeypatch.setattr(
+        routes_ops,
         "get_consumer_health",
         lambda: {
             "status": "healthy",
@@ -224,14 +230,14 @@ async def test_health_check_reports_database_and_consumer_state(monkeypatch):
             "circuit_breaker_state": "closed",
         },
     )
-    monkeypatch.setattr(routes.lifecycle_manager, "_startup_complete", True)
+    monkeypatch.setattr(routes_ops.lifecycle_manager, "_startup_complete", True)
     monkeypatch.setattr(
-        routes.lifecycle_manager.shutdown_manager,
+        routes_ops.lifecycle_manager.shutdown_manager,
         "_shutdown_in_progress",
         False,
     )
 
-    response = await routes.health_check()
+    response = await routes_ops.health_check()
 
     assert response["status"] == "healthy"
     assert response["checks"]["database"]["status"] == "healthy"
@@ -243,9 +249,13 @@ async def test_health_check_reports_database_and_consumer_state(monkeypatch):
 async def test_readiness_check_returns_503_when_consumer_signals_degrade(
     monkeypatch,
 ):
-    monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: FakeSession())
     monkeypatch.setattr(
-        routes,
+        routes_ops,
+        "AsyncSessionLocal",
+        lambda: FakeSession(),
+    )
+    monkeypatch.setattr(
+        routes_ops,
         "get_consumer_health",
         lambda: {
             "status": "healthy",
@@ -261,14 +271,14 @@ async def test_readiness_check_returns_503_when_consumer_signals_degrade(
             "circuit_breaker_state": "closed",
         },
     )
-    monkeypatch.setattr(routes.lifecycle_manager, "_startup_complete", True)
+    monkeypatch.setattr(routes_ops.lifecycle_manager, "_startup_complete", True)
     monkeypatch.setattr(
-        routes.lifecycle_manager.shutdown_manager,
+        routes_ops.lifecycle_manager.shutdown_manager,
         "_shutdown_in_progress",
         False,
     )
 
-    response = await routes.readiness_check()
+    response = await routes_ops.readiness_check()
     payload = json.loads(response.body)
 
     assert response.status_code == 503
@@ -278,10 +288,10 @@ async def test_readiness_check_returns_503_when_consumer_signals_degrade(
 
 @pytest.mark.anyio
 async def test_bootstrap_admin_key_rejects_when_disabled(monkeypatch):
-    monkeypatch.setattr(routes, "ALLOW_BOOTSTRAP", False)
+    monkeypatch.setattr(routes_auth, "ALLOW_BOOTSTRAP", False)
 
     with pytest.raises(HTTPException) as exc_info:
-        await routes.bootstrap_admin_key(owner_name="admin")
+        await routes_auth.bootstrap_admin_key(owner_name="admin")
 
     assert exc_info.value.status_code == 403
     assert "ALLOW_BOOTSTRAP=true" in exc_info.value.detail
@@ -290,7 +300,7 @@ async def test_bootstrap_admin_key_rejects_when_disabled(monkeypatch):
 @pytest.mark.anyio
 async def test_get_events_rejects_invalid_start_time():
     with pytest.raises(HTTPException) as exc_info:
-        await routes.get_events(start_time="not-a-timestamp")
+        await routes_data.get_events(start_time="not-a-timestamp")
 
     assert exc_info.value.status_code == 400
     assert "start_time" in exc_info.value.detail
@@ -315,9 +325,9 @@ async def test_get_events_parses_time_filters(monkeypatch):
     ]
     fake_session = FakeEventsSession(events)
 
-    monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr(routes_data, "AsyncSessionLocal", lambda: fake_session)
 
-    response = await routes.get_events(
+    response = await routes_data.get_events(
         service_name="orderdb",
         event_type="UPDATE",
         start_time="2024-01-01T10:00:00Z",
@@ -359,9 +369,9 @@ async def test_get_events_supports_record_filters(monkeypatch):
     ]
     fake_session = FakeEventsSession(events)
 
-    monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr(routes_data, "AsyncSessionLocal", lambda: fake_session)
 
-    response = await routes.get_events(
+    response = await routes_data.get_events(
         service_name="orderdb",
         source_table_id=7,
         row_identity='{"id": 42}',
@@ -379,7 +389,7 @@ async def test_get_events_supports_record_filters(monkeypatch):
 @pytest.mark.anyio
 async def test_get_events_rejects_invalid_row_identity():
     with pytest.raises(HTTPException) as exc_info:
-        await routes.get_events(row_identity="not-json")
+        await routes_data.get_events(row_identity="not-json")
 
     assert exc_info.value.status_code == 400
     assert "row_identity" in exc_info.value.detail
@@ -389,7 +399,7 @@ async def test_get_events_rejects_invalid_row_identity():
 @pytest.mark.anyio
 async def test_get_changes_rejects_invalid_row_identity():
     with pytest.raises(HTTPException) as exc_info:
-        await routes.get_changes(
+        await routes_data.get_changes(
             table_name="orderdb.orders",
             row_identity="not-json",
         )
@@ -402,7 +412,7 @@ async def test_get_changes_rejects_invalid_row_identity():
 @pytest.mark.anyio
 async def test_get_changes_requires_unambiguous_table_reference():
     with pytest.raises(HTTPException) as exc_info:
-        await routes.get_changes(table_name="orders")
+        await routes_data.get_changes(table_name="orders")
 
     assert exc_info.value.status_code == 400
     assert "service_name=orderdb&table_name=orders" in exc_info.value.detail
@@ -416,13 +426,13 @@ async def test_get_changes_reports_table_discovery_hint(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        routes.schema_discovery,
+        routes_data.schema_discovery,
         "get_table_by_name",
         fake_get_table_by_name,
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await routes.get_changes(table_name="orderdb.orders")
+        await routes_data.get_changes(table_name="orderdb.orders")
 
     assert exc_info.value.status_code == 404
     assert "GET /tables" in exc_info.value.detail
@@ -447,12 +457,14 @@ async def test_get_consumer_checkpoints_returns_snapshot(monkeypatch):
         ]
 
     monkeypatch.setattr(
-        routes,
+        routes_ops,
         "list_consumer_checkpoints_snapshot",
         fake_snapshot,
     )
 
-    response = await routes.get_consumer_checkpoints(admin_api_key=None)
+    response = await routes_ops.get_consumer_checkpoints(
+        admin_api_key=None
+    )
 
     assert response["count"] == 1
     assert response["checkpoints"][0]["kafka_offset"] == 22
@@ -489,9 +501,9 @@ async def test_list_api_keys_filters_inactive_by_default(monkeypatch):
         ),
     ]
     fake_session = FakeApiKeysSession(api_keys)
-    monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr(routes_auth, "AsyncSessionLocal", lambda: fake_session)
 
-    response = await routes.list_api_keys(
+    response = await routes_auth.list_api_keys(
         include_inactive=False,
         creator_api_key=ApiKey(id=10, owner_name="active-admin", role="admin"),
     )
@@ -526,9 +538,9 @@ async def test_list_api_keys_can_include_inactive(monkeypatch):
         ),
     ]
     fake_session = FakeApiKeysSession(api_keys)
-    monkeypatch.setattr(routes, "AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr(routes_auth, "AsyncSessionLocal", lambda: fake_session)
 
-    response = await routes.list_api_keys(
+    response = await routes_auth.list_api_keys(
         include_inactive=True,
         creator_api_key=ApiKey(id=99, owner_name="ops", role="admin"),
     )
@@ -559,12 +571,12 @@ async def test_get_dead_letter_events_returns_pending_records(monkeypatch):
         ]
 
     monkeypatch.setattr(
-        routes,
-        "list_dead_letter_events",
+        routes_ops,
+        "list_dead_letter_records",
         fake_list_dead_letters,
     )
 
-    response = await routes.get_dead_letter_events(
+    response = await routes_ops.get_dead_letter_events(
         limit=25,
         include_replayed=False,
         admin_api_key=None,
@@ -592,12 +604,12 @@ async def test_replay_dead_letter_events_returns_batch_summary(monkeypatch):
         }
 
     monkeypatch.setattr(
-        routes,
+        routes_ops,
         "replay_dead_letter_event_records",
         fake_replay_many,
     )
 
-    response = await routes.replay_dead_letter_events(
+    response = await routes_ops.replay_dead_letter_events(
         limit=10,
         include_replayed=True,
         admin_api_key=None,
@@ -619,9 +631,16 @@ async def test_replay_dead_letter_event_returns_replay_result(monkeypatch):
             "event_id": 100,
         }
 
-    monkeypatch.setattr(routes, "replay_dead_letter_event_record", fake_replay)
+    monkeypatch.setattr(
+        routes_ops,
+        "replay_dead_letter_event_record",
+        fake_replay,
+    )
 
-    response = await routes.replay_dead_letter_event(9, admin_api_key=None)
+    response = await routes_ops.replay_dead_letter_event(
+        9,
+        admin_api_key=None,
+    )
 
     assert response["status"] == "replayed"
     assert response["event_id"] == 100
@@ -633,10 +652,14 @@ async def test_replay_dead_letter_event_returns_404_when_missing(monkeypatch):
         del dlq_event_id
         raise LookupError("DLQ event not found")
 
-    monkeypatch.setattr(routes, "replay_dead_letter_event_record", fake_replay)
+    monkeypatch.setattr(
+        routes_ops,
+        "replay_dead_letter_event_record",
+        fake_replay,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
-        await routes.replay_dead_letter_event(9, admin_api_key=None)
+        await routes_ops.replay_dead_letter_event(9, admin_api_key=None)
 
     assert exc_info.value.status_code == 404
     assert "GET /admin/dlq" in exc_info.value.detail
