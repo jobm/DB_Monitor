@@ -188,8 +188,17 @@ if [[ "$DRY_RUN" != "true" ]]; then
     for connector_name in "${registered_connectors[@]}"; do
         echo "Validating status for $connector_name..."
         running=false
+        last_status_json=""
         for ((attempt=1; attempt<=CONNECTOR_STATUS_RETRIES; attempt++)); do
             status_json=$(curl -s "$CONNECT_URL/$connector_name/status")
+            last_status_json="$status_json"
+
+            if ! printf '%s' "$status_json" | jq -e . >/dev/null 2>&1; then
+                echo "  Attempt $attempt/$CONNECTOR_STATUS_RETRIES: status endpoint not ready yet"
+                sleep "$CONNECTOR_STATUS_DELAY_SECONDS"
+                continue
+            fi
+
             connector_state=$(printf '%s' "$status_json" | jq -r '.connector.state // ""')
             tasks_ok=$(printf '%s' "$status_json" | jq -r 'if (.tasks | length) == 0 then "true" else all(.tasks[]; .state == "RUNNING") end')
 
@@ -204,7 +213,11 @@ if [[ "$DRY_RUN" != "true" ]]; then
 
         if [[ "$running" != "true" ]]; then
             echo "Connector $connector_name failed to reach RUNNING state" >&2
-            curl -s "$CONNECT_URL/$connector_name/status" | jq . >&2
+            if printf '%s' "$last_status_json" | jq -e . >/dev/null 2>&1; then
+                printf '%s' "$last_status_json" | jq . >&2
+            else
+                printf '%s\n' "$last_status_json" >&2
+            fi
             exit 1
         fi
     done

@@ -8,6 +8,8 @@ import urllib.request
 
 import pytest
 
+from examples.sandbox.preflight import resolve_admin_api_key
+
 
 BASE_URL = os.getenv("DB_MONITOR_BASE_URL", "http://localhost:8000")
 PRESEEDED_ADMIN_KEY = os.getenv("DB_MONITOR_ADMIN_API_KEY")
@@ -38,25 +40,13 @@ def _request_json_with_headers(
 
 def _get_admin_api_key() -> str:
     """Return an admin API key for sandbox-authenticated test flows."""
-    if PRESEEDED_ADMIN_KEY:
-        return PRESEEDED_ADMIN_KEY
-
-    encoded_owner = urllib.parse.quote("sandbox_pytest")
-    try:
-        _, payload = _request_json_with_headers(
-            f"/auth/bootstrap?owner_name={encoded_owner}",
-            headers={},
-            method="POST",
-        )
-    except urllib.error.HTTPError as exc:
-        if exc.code in {400, 403}:
-            pytest.skip(
-                "Sandbox authenticated checks require "
-                "DB_MONITOR_ADMIN_API_KEY or ALLOW_BOOTSTRAP=true.",
-            )
-        raise
-
-    return str(payload["api_key"])
+    api_key, _ = resolve_admin_api_key(
+        base_url=BASE_URL,
+        preseeded_api_key=PRESEEDED_ADMIN_KEY,
+        owner_name="sandbox_pytest",
+        ttl_days=1,
+    )
+    return api_key
 
 
 def _exchange_access_token(api_key: str) -> str:

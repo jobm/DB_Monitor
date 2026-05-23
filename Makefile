@@ -53,6 +53,10 @@ monitor-recovery: ## One-command recovery: start sandbox + register connectors +
 	sleep 3
 	@echo "Restarting monitor-server to resume consumer..."
 	docker compose restart monitor-server
+	@echo "Waiting for monitor-server health endpoint..."
+	@until curl -fsS http://localhost:8000/health >/dev/null; do \
+		sleep 3; \
+	done
 	@echo "Recovery complete. Monitor consumer should now be connected."
 	@echo ""
 	docker compose ps monitor-server

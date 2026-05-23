@@ -6,7 +6,7 @@ import types
 from pathlib import Path
 
 
-# Stub Textual modules so dashboard logic can be unit-tested without UI runtime.
+# Stub Textual modules for dashboard unit tests without a UI runtime.
 textual_app_stub = types.ModuleType("textual.app")
 textual_app_stub.ComposeResult = object
 

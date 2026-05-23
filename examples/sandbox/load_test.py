@@ -2,18 +2,32 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import importlib
 import itertools
 import json
 import os
+from pathlib import Path
 import statistics
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
 BASE_URL = "http://localhost:8000"
 PRESEEDED_ADMIN_KEY = os.getenv("DB_MONITOR_ADMIN_API_KEY")
+
+_preflight = importlib.import_module("examples.sandbox.preflight")
+require_live_sandbox = _preflight.require_live_sandbox
+resolve_admin_api_key = _preflight.resolve_admin_api_key
+_bootstrap_admin_api_key = _preflight._bootstrap_admin_api_key
+
 DEFAULT_TARGETS = ["events", "stats", "tables", "checkpoints"]
 
 
@@ -35,27 +49,7 @@ def bootstrap_admin_key(
     ttl_days: int = 1,
 ) -> str | None:
     """Attempt first-run bootstrap and return the composite API key."""
-    encoded_owner = urllib.parse.quote(owner_name)
-    request = urllib.request.Request(
-        (
-            f"{BASE_URL}/auth/bootstrap"
-            f"?owner_name={encoded_owner}&ttl_days={ttl_days}"
-        ),
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            payload = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        if exc.code in {400, 403}:
-            return None
-        error_body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"Failed to bootstrap admin key: {exc.code} {error_body}"
-        ) from exc
-
-    return json.loads(payload)["api_key"]
+    return _bootstrap_admin_api_key(BASE_URL, owner_name, ttl_days)
 
 
 def _authorized_get(path: str, access_token: str) -> tuple[bool, float]:
@@ -118,18 +112,13 @@ def _build_task_cycle(
 
 def _resolve_access_token() -> tuple[str, str]:
     """Return a bearer token and the auth source that provided it."""
-    admin_key = PRESEEDED_ADMIN_KEY
-    if admin_key:
-        return exchange_access_token(admin_key), "DB_MONITOR_ADMIN_API_KEY"
-
-    bootstrapped_key = bootstrap_admin_key()
-    if bootstrapped_key is None:
-        raise RuntimeError(
-            "Load tests require DB_MONITOR_ADMIN_API_KEY once bootstrap has "
-            "already been consumed."
-        )
-
-    return exchange_access_token(bootstrapped_key), "bootstrap"
+    admin_key, auth_source = resolve_admin_api_key(
+        base_url=BASE_URL,
+        preseeded_api_key=PRESEEDED_ADMIN_KEY,
+        owner_name="load_tester",
+        ttl_days=1,
+    )
+    return exchange_access_token(admin_key), auth_source
 
 
 def evaluate_thresholds(
@@ -306,6 +295,12 @@ def main() -> int:
         help="Fail when p95 latency exceeds this threshold in milliseconds.",
     )
     args = parser.parse_args()
+
+    try:
+        require_live_sandbox(BASE_URL)
+    except RuntimeError as exc:
+        print(exc)
+        return 1
 
     summary = load_test(
         args.workers,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import os
 from datetime import datetime, timezone
@@ -19,6 +20,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
+
+_preflight = importlib.import_module("examples.sandbox.preflight")
+require_live_sandbox = _preflight.require_live_sandbox
+resolve_admin_api_key = _preflight.resolve_admin_api_key
 
 from consumer_service import (  # noqa: E402
     _serialize_broker_fields,
@@ -241,6 +246,12 @@ def run_tests() -> None:
     print("Beginning Integration Tests...")
 
     try:
+        require_live_sandbox(BASE_URL)
+    except RuntimeError as exc:
+        print(exc)
+        sys.exit(1)
+
+    try:
         status_code, health = request_json("/health")
         if status_code != 200 or health.get("status") != "healthy":
             print("Server not healthy!")
@@ -249,39 +260,18 @@ def run_tests() -> None:
         print(f"Could not connect to {BASE_URL}: {exc}")
         sys.exit(1)
 
-    admin_key = PRESEEDED_ADMIN_KEY
-    if admin_key:
-        print("Using pre-seeded admin key from DB_MONITOR_ADMIN_API_KEY.")
-    else:
-        try:
-            encoded_owner = urllib.parse.quote("test_admin")
-            status_code, data = request_json(
-                f"/auth/bootstrap?owner_name={encoded_owner}",
-                method="POST",
-            )
-            if status_code == 200:
-                admin_key = data["api_key"]
-                print("Successfully bootstrapped the system admin key.")
-        except urllib.error.HTTPError as exc:
-            if exc.code in {400, 403}:
-                print(
-                    (
-                        "System already bootstrapped "
-                        "or bootstrap is disabled. "
-                        "Provide DB_MONITOR_ADMIN_API_KEY or run "
-                        "with "
-                        "ALLOW_BOOTSTRAP=true for first-time initialization."
-                    )
-                )
-                sys.exit(0)
-            print(f"Failed to bootstrap: {exc.code} {exc.read().decode()}")
-            sys.exit(1)
-
-    if not admin_key:
-        print(
-            "Cannot proceed with secured endpoint tests without an admin key."
+    try:
+        admin_key, admin_key_source = resolve_admin_api_key(
+            base_url=BASE_URL,
+            preseeded_api_key=PRESEEDED_ADMIN_KEY,
+            owner_name="test_admin",
+            ttl_days=1,
         )
-        sys.exit(0)
+    except RuntimeError as exc:
+        print(exc)
+        sys.exit(1)
+
+    print(f"Using admin key source: {admin_key_source}.")
 
     access_token = exchange_access_token(admin_key)
     headers = {"Authorization": f"Bearer {access_token}"}

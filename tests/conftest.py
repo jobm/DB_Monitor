@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 
@@ -14,6 +15,10 @@ if str(REPO_ROOT) not in sys.path:
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
+sandbox_pytest_skip_reason = importlib.import_module(
+    "examples.sandbox.preflight"
+).sandbox_pytest_skip_reason
+
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Default repository tests to the core-platform marker.
@@ -26,3 +31,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         if item.get_closest_marker("sandbox") is None:
             item.add_marker(pytest.mark.core)
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    """Skip sandbox tests cleanly when the live stack is unavailable."""
+    if item.get_closest_marker("sandbox") is None:
+        return
+
+    skip_reason = sandbox_pytest_skip_reason()
+    if skip_reason is not None:
+        pytest.skip(skip_reason)
