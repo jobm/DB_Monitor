@@ -287,7 +287,10 @@ async def require_valid_api_key(
                 "Invalid or missing credentials. "
                 "Use Authorization: Bearer <token> "
                 "or X-API-Key: <id>.<raw_secret>. "
-                "If you only have an API key, first exchange it at POST /auth/token."
+                (
+                    "If you only have an API key, first exchange it "
+                    "at POST /auth/token."
+                )
             ),
         )
     return api_key_record

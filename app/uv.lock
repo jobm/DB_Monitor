@@ -101,57 +101,6 @@ wheels = [
 ]
 
 [[package]]
-name = "app"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "aio-pika" },
-    { name = "aiokafka" },
-    { name = "argon2-cffi" },
-    { name = "asyncpg" },
-    { name = "confluent-kafka" },
-    { name = "fastapi" },
-    { name = "opentelemetry-api" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-instrumentation-fastapi" },
-    { name = "opentelemetry-instrumentation-sqlalchemy" },
-    { name = "opentelemetry-sdk" },
-    { name = "prometheus-client" },
-    { name = "pyjwt" },
-    { name = "python-dotenv" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aio-pika", specifier = ">=9.5.7" },
-    { name = "aiokafka", specifier = ">=0.13.0" },
-    { name = "argon2-cffi", specifier = ">=25.1.0" },
-    { name = "asyncpg", specifier = "==0.29.0" },
-    { name = "confluent-kafka", specifier = ">=2.13.2" },
-    { name = "fastapi", specifier = ">=0.135.1" },
-    { name = "opentelemetry-api", specifier = ">=1.36.0" },
-    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.36.0" },
-    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.57b0" },
-    { name = "opentelemetry-instrumentation-sqlalchemy", specifier = ">=0.57b0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.36.0" },
-    { name = "prometheus-client", specifier = ">=0.24.1" },
-    { name = "pyjwt", specifier = ">=2.10.1" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.25" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.41.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.0.0" }]
-
-[[package]]
 name = "argon2-cffi"
 version = "25.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -455,6 +404,57 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cf/bb/0d0cdad1763044f3e06bea52c3332256b17f3e64c04a8214ee217fc68ab0/confluent_kafka-2.13.2-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:fa3be1fe231e06b2c7501fa3641b30ea90ea17be79ca89806eef22ff34ed106c", size = 3981002, upload-time = "2026-03-02T12:53:13.399Z" },
     { url = "https://files.pythonhosted.org/packages/69/65/361ace93de20ab5d83dc0d108389b29f4549f478e0b8aa0f19baf597c0f0/confluent_kafka-2.13.2-cp314-cp314-win_amd64.whl", hash = "sha256:a8d1e0721de378034ecc928b47238272b56bf20af5dd504233bcb93ce07a38a6", size = 4275836, upload-time = "2026-03-02T12:53:14.703Z" },
 ]
+
+[[package]]
+name = "db-monitor"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "aio-pika" },
+    { name = "aiokafka" },
+    { name = "argon2-cffi" },
+    { name = "asyncpg" },
+    { name = "confluent-kafka" },
+    { name = "fastapi" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-instrumentation-sqlalchemy" },
+    { name = "opentelemetry-sdk" },
+    { name = "prometheus-client" },
+    { name = "pyjwt" },
+    { name = "python-dotenv" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aio-pika", specifier = ">=9.5.7" },
+    { name = "aiokafka", specifier = ">=0.13.0" },
+    { name = "argon2-cffi", specifier = ">=25.1.0" },
+    { name = "asyncpg", specifier = "==0.29.0" },
+    { name = "confluent-kafka", specifier = ">=2.13.2" },
+    { name = "fastapi", specifier = ">=0.135.1" },
+    { name = "opentelemetry-api", specifier = ">=1.36.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.36.0" },
+    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.57b0" },
+    { name = "opentelemetry-instrumentation-sqlalchemy", specifier = ">=0.57b0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.36.0" },
+    { name = "prometheus-client", specifier = ">=0.24.1" },
+    { name = "pyjwt", specifier = ">=2.10.1" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = "==2.0.25" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.41.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.0" }]
 
 [[package]]
 name = "fastapi"

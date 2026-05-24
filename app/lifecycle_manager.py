@@ -11,10 +11,9 @@ import logging
 import signal
 import sys
 import weakref
-from typing import Optional, Set
 
 from config import APP_SHUTDOWN_TIMEOUT_SECONDS
-from extensions import AsyncSessionLocal, init_db
+from extensions import init_db
 
 logger = logging.getLogger(__name__)
 

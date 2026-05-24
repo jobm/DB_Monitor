@@ -51,8 +51,16 @@ def test_decode_session_token_accepts_next_secret(monkeypatch) -> None:
         "exp": int((issued_at + timedelta(minutes=15)).timestamp()),
     }
 
-    monkeypatch.setattr(auth, "JWT_SECRET", "current-secret-12345678901234567890")
-    monkeypatch.setattr(auth, "JWT_SECRET_NEXT", "next-secret-123456789012345678901234")
+    monkeypatch.setattr(
+        auth,
+        "JWT_SECRET",
+        "current-secret-12345678901234567890",
+    )
+    monkeypatch.setattr(
+        auth,
+        "JWT_SECRET_NEXT",
+        "next-secret-123456789012345678901234",
+    )
     token = auth.jwt.encode(
         payload,
         auth.JWT_SECRET_NEXT,

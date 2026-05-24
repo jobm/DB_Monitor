@@ -1,7 +1,7 @@
 [project]
-name = "app"
+name = "db-monitor"
 version = "0.1.0"
-description = "Add your description here"
+description = "Framework-first CDC monitoring and audit-log platform"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -27,6 +27,11 @@ dependencies = [
 dev = [
     "pytest>=9.0.0",
 ]
+
+[project.scripts]
+db-monitor = "db_monitor.cli:main"
+db-monitor-serve = "db_monitor.cli:serve"
+db-monitor-migrate = "db_monitor.cli:migrate"
 
 [tool.pytest.ini_options]
 markers = [

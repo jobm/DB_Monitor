@@ -69,3 +69,76 @@ These are not committed backlog items yet.
 - [x] Add support for different message brokers
 - [x] Replace Kafka-style checkpoint semantics with broker-native progress tracking for RabbitMQ and other non-Kafka backends
 - [x] Package the Python SDK for normal package imports and add package-level import coverage
+
+## Active Backlog
+
+### Package Standardization For OSS Release
+
+- [x] Phase 1: Establish canonical package metadata and CLI entrypoints
+- [x] Phase 2: Migrate runtime imports to a canonical `db_monitor` namespace
+- [ ] Phase 3: Move package layout to `src/` and remove compatibility shims
+- [ ] Phase 4: Define and document public API stability contracts
+- [ ] Phase 5: Harden quality gates (ruff, type checks, packaging smoke tests)
+- [ ] Phase 6: Add automated release workflows and signed/tagged distribution
+
+#### Remaining Checklist
+
+- [x] Phase 2: Move auth/runtime modules into src/db_monitor and keep app shims
+- [x] Phase 2: Move ingestion modules into src/db_monitor and keep app shims
+- [x] Phase 2: Move repositories and route composition into src/db_monitor
+- [x] Phase 2: Replace legacy flat imports in app/main.py with canonical package imports
+- [x] Phase 2: Add package-level import tests for auth, ingestion, repositories, and routing surfaces
+- [x] Phase 2: Validate docker compose startup using package-native entry commands end-to-end
+- [x] Phase 2: Re-sync app/uv.lock after all namespace migration edits stabilize
+
+- [ ] Phase 3: Remove app compatibility shims after full src/db_monitor migration
+- [ ] Phase 3: Remove sys.path bridge helpers once legacy imports are eliminated
+- [ ] Phase 3: Collapse duplicate packaging metadata to one canonical pyproject
+- [ ] Phase 3: Update docs and make targets to use package-native module invocations only
+
+- [ ] Phase 4: Define supported public Python API modules and document stability guarantees
+- [ ] Phase 4: Define deprecation and removal policy with minimum grace window
+- [ ] Phase 4: Add versioning policy and release compatibility matrix
+
+- [ ] Phase 5: Add Ruff config and enforce lint gate in CI
+- [ ] Phase 5: Add static typing gate (mypy or pyright) for package namespace
+- [ ] Phase 5: Add packaging smoke tests for wheel and sdist install/import
+- [ ] Phase 5: Add container smoke test for monitor-server readiness in CI
+
+- [ ] Phase 6: Add release workflow with tag-triggered build and publish
+- [ ] Phase 6: Add changelog automation and release-note generation
+- [ ] Phase 6: Add signed release tags and artifact provenance checks
+
+- [ ] Investigate readiness gate where `last_message_at` is set but
+	`last_commit_at` remains null under sandbox startup, causing persistent
+	`/readyz` 503 despite connected consumer and healthy DB/lifecycle.
+
+#### In Progress Notes
+
+- Added initial root and app script metadata for `db_monitor` entrypoints.
+- Added compatibility-first `src/db_monitor` package scaffolding:
+	CLI dispatch, ASGI export, module execution, and legacy runtime bridge.
+- Migrated API namespace slice to canonical package modules:
+	`src/db_monitor/api/factory.py` and `src/db_monitor/api/router.py`, with
+	compatibility wrappers in `app/api/` delegating through namespace bridges.
+- Migrated core namespace slice to canonical package modules:
+	`src/db_monitor/core/config.py` and `src/db_monitor/core/db.py`, with
+	`app/core/config.py` and `app/core/db.py` delegating to canonical proxies.
+- Added canonical top-level runtime surfaces:
+	`src/db_monitor/config.py` and `src/db_monitor/extensions.py` now proxy to
+	legacy runtime modules during migration, with package-surface tests added.
+- Added canonical startup surfaces:
+	`src/db_monitor/start_monitor.py` and `src/db_monitor/main.py` provide
+	package-native startup/ASGI entry modules while delegating to legacy runtime.
+- Switched container/runtime bootstrap toward package-native entrypoints:
+	`app/container-entrypoint.sh` now runs `python -m db_monitor...`; Docker
+	build context now includes `src/` via repo-root build in compose + Dockerfile.
+- Added package-level namespace coverage in
+	`tests/test_package_phase2_surfaces.py` for auth, ingestion,
+	repositories, and routing module imports.
+- End-to-end compose startup validation now runs with package-native startup
+	entry commands (`python -m db_monitor...`) and reaches connected consumer
+	state. Current `/readyz` remains not-ready due existing commit-gate logic
+	(`last_message_at` with null `last_commit_at`) tracked as follow-up.
+- Next implementation slice: migrate selected modules from `app/` into
+	`src/db_monitor` with import rewrites and compatibility shims.
