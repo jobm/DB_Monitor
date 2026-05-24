@@ -79,7 +79,7 @@ These are not committed backlog items yet.
 - [x] Phase 3: Move package layout to `src/` and remove compatibility shims
 - [x] Phase 4: Define and document public API stability contracts
 - [x] Phase 5: Harden quality gates (ruff, type checks, packaging smoke tests)
-- [ ] Phase 6: Add automated release workflows and signed/tagged distribution
+- [x] Phase 6: Add automated release workflows and signed/tagged distribution
 
 #### Remaining Checklist
 
@@ -105,9 +105,9 @@ These are not committed backlog items yet.
 - [x] Phase 5: Add packaging smoke tests for wheel and sdist install/import
 - [x] Phase 5: Add container smoke test for monitor-server readiness in CI
 
-- [ ] Phase 6: Add release workflow with tag-triggered build and publish
-- [ ] Phase 6: Add changelog automation and release-note generation
-- [ ] Phase 6: Add signed release tags and artifact provenance checks
+- [x] Phase 6: Add release workflow with tag-triggered build and publish
+- [x] Phase 6: Add changelog automation and release-note generation
+- [x] Phase 6: Add signed release tags and artifact provenance checks
 
 - [ ] Investigate readiness gate where `last_message_at` is set but
 	`last_commit_at` remains null under sandbox startup, causing persistent
@@ -162,3 +162,8 @@ These are not committed backlog items yet.
 - Added Make targets for linting, type-checking, packaging smoke checks,
 	and monitor container readiness smoke validation.
 - Wired new quality gates into CI before the core unit test stage.
+- Added Phase 6 release automation workflows:
+	tag-triggered build/publish, release-drafter changelog automation,
+	and signed-tag verification gates.
+- Added artifact integrity/provenance checks in release flow:
+	SHA256 verification and GitHub build provenance attestations.

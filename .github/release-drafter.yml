@@ -1,0 +1,40 @@
+name-template: "v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+change-template: "- $TITLE (#$NUMBER) @$AUTHOR"
+no-changes-template: "- No user-facing changes in this cycle."
+version-resolver:
+  major:
+    labels:
+      - "semver:major"
+  minor:
+    labels:
+      - "semver:minor"
+  patch:
+    labels:
+      - "semver:patch"
+  default: patch
+categories:
+  - title: "Breaking Changes"
+    labels:
+      - "semver:major"
+      - "breaking-change"
+  - title: "Features"
+    labels:
+      - "feature"
+      - "enhancement"
+  - title: "Fixes"
+    labels:
+      - "bug"
+      - "fix"
+  - title: "Maintenance"
+    labels:
+      - "chore"
+      - "dependencies"
+template: |
+  ## What Changed
+
+  $CHANGES
+
+  ## Full Changelog
+
+  $CONTRIBUTORS

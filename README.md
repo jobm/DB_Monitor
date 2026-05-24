@@ -223,6 +223,17 @@ cd app
 uv sync --group dev
 ```
 
+## Releases
+
+Release automation is driven by GitHub Actions:
+
+1. Create and push a signed annotated tag (`git tag -s vX.Y.Z`).
+2. The `Release` workflow verifies tag signatures, builds wheel/sdist,
+   generates checksums, attests provenance, creates a GitHub Release with
+   generated notes, and publishes to PyPI.
+3. The `Release Drafter` workflow continuously updates a draft changelog-based
+   release note on `main`.
+
 Run the API locally:
 
 ```bash
