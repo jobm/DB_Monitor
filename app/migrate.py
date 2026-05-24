@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from extensions import AsyncSessionLocal, engine
+from core.db import AsyncSessionLocal, engine
 from migrations import apply_migrations, validate_migrations
 
 

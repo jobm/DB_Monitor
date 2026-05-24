@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from config import KAFKA_CONSUMER_GROUP
-from extensions import AsyncSessionLocal
+from core.config import KAFKA_CONSUMER_GROUP
+from core.db import AsyncSessionLocal
+from core.models import ConsumerCheckpoint, DeadLetterEvent, KafkaEvent
 from metrics import dlq_records_pending
-from models import ConsumerCheckpoint, DeadLetterEvent, KafkaEvent
 from consumer.runtime_state import consumer_runtimes
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert

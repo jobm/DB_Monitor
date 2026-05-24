@@ -143,6 +143,11 @@ These are not committed backlog items yet.
 	`app/routes/*` and selected runtime modules (`auth`, `audit_log`,
 	`message_brokers`, `webhooks`) through `core.*` wrappers instead of
 	direct flat-module imports.
+- Completed a high-level import cleanup across runtime internals by routing
+	`consumer_service`, `schema_discovery`, `ws_manager`, `consumer/recovery`,
+	`change_processor`, `event_pipeline`, `repositories/events`,
+	`lifecycle_manager`, `migrate`, and `migrations` through `core.config`,
+	`core.db`, and `core.models` facades.
 - End-to-end compose startup validation now runs with package-native startup
 	entry commands (`python -m db_monitor...`) and reaches connected consumer
 	state. `/readyz` commit-gate behavior is now stable: filtered events and

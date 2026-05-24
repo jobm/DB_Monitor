@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from models import KafkaEvent
+from core.models import KafkaEvent
 
 
 @dataclass(slots=True)

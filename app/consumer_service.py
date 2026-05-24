@@ -8,14 +8,19 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from change_processor import ChangeProcessor
-from config import (
+from core.config import (
     KAFKA_BROKER,
     KAFKA_CONSUMER_GROUP,
     KAFKA_TOPIC,
 )
+from core.db import AsyncSessionLocal
+from core.models import (
+    DeadLetterEvent,
+    KafkaEvent,
+    MonitoredColumn,
+)
 from event_parser import parse_event_payload
 from event_pipeline import event_pipeline
-from extensions import AsyncSessionLocal
 from consumer.runtime_state import (
     CircuitBreaker as RuntimeCircuitBreaker,
     ConsumerStopRequested,
@@ -45,11 +50,6 @@ from metrics import (
     events_failed_total,
     events_processed_total,
     kafka_commit_duration_seconds,
-)
-from models import (
-    DeadLetterEvent,
-    KafkaEvent,
-    MonitoredColumn,
 )
 from row_identity import extract_row_identity
 from schema_discovery import SchemaDiscovery, extract_operation

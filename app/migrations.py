@@ -13,8 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from core.models import Base, KafkaEvent, KafkaEventLegacy
 from event_parser import parse_event_payload
-from models import Base, KafkaEvent, KafkaEventLegacy
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine

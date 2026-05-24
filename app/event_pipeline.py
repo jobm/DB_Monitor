@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable
 from typing import Any, Optional
 
-from models import KafkaEvent
+from core.models import KafkaEvent
 from source_metadata import extract_source_coordinates
 
 logger = logging.getLogger(__name__)

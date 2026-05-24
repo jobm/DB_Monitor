@@ -12,8 +12,8 @@ import signal
 import sys
 import weakref
 
-from config import APP_SHUTDOWN_TIMEOUT_SECONDS
-from extensions import init_db
+from core.config import APP_SHUTDOWN_TIMEOUT_SECONDS
+from core.db import init_db
 
 logger = logging.getLogger(__name__)
 

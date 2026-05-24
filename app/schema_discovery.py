@@ -15,10 +15,14 @@ from typing import Any, Optional
 from uuid import uuid4
 
 import asyncpg
-from config import POSTGRES_URL, WS_BACKPLANE_CHANNEL, WS_BACKPLANE_ENABLED
-from extensions import engine
+from core.config import (
+    POSTGRES_URL,
+    WS_BACKPLANE_CHANNEL,
+    WS_BACKPLANE_ENABLED,
+)
+from core.db import engine
+from core.models import KafkaEvent, MonitoredColumn, MonitoredTable
 from metrics import columns_discovered_total, tables_discovered_total
-from models import KafkaEvent, MonitoredColumn, MonitoredTable
 from source_metadata import extract_source_coordinates, extract_source_record
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert

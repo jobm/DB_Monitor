@@ -7,7 +7,12 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Optional
 
-from models import ColumnChange, KafkaEvent, MonitoredColumn, MonitoredTable
+from core.models import (
+    ColumnChange,
+    KafkaEvent,
+    MonitoredColumn,
+    MonitoredTable,
+)
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)

@@ -4,10 +4,14 @@ import logging
 from uuid import uuid4
 
 import asyncpg
-from config import POSTGRES_URL, WS_BACKPLANE_CHANNEL, WS_BACKPLANE_ENABLED
-from extensions import AsyncSessionLocal, engine
+from core.config import (
+    POSTGRES_URL,
+    WS_BACKPLANE_CHANNEL,
+    WS_BACKPLANE_ENABLED,
+)
+from core.db import AsyncSessionLocal, engine
+from core.models import KafkaEvent
 from fastapi import WebSocket
-from models import KafkaEvent
 from sqlalchemy import select, text
 from tracing import start_span
 
