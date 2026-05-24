@@ -109,6 +109,32 @@ def test_get_changes_encodes_json_row_identity(monkeypatch) -> None:
     assert captured["headers"]["Authorization"] == "Bearer token-123"
 
 
+def test_get_events_encodes_cursor(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_urlopen(request, timeout):
+        del timeout
+        captured["url"] = request.full_url
+        captured["headers"] = dict(request.header_items())
+        return FakeResponse({"events": [], "total": None, "limit": 5, "offset": 0})
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        fake_urlopen,
+    )
+
+    client = DBMonitorClient(
+        "http://localhost:8000",
+        access_token="token-123",
+    )
+    payload = client.get_events(limit=5, cursor_id=88)
+
+    assert payload["events"] == []
+    assert "limit=5" in captured["url"]
+    assert "cursor_id=88" in captured["url"]
+    assert captured["headers"]["Authorization"] == "Bearer token-123"
+
+
 def test_packaged_sdk_import_exposes_client() -> None:
     client = PackagedDBMonitorClient(
         "http://localhost:8000",

@@ -194,6 +194,7 @@ Query parameters:
 | --- | --- | --- |
 | `limit` | No | `1-1000`, default `100` |
 | `offset` | No | Pagination offset, default `0` |
+| `cursor_id` | No | Keyset cursor. When provided, returns rows with `id < cursor_id` in descending order |
 | `service_name` | No | Filter by source prefix such as `orderdb` |
 | `source_table_id` | No | Filter by discovered table ID |
 | `row_identity` | No | JSON object string used for exact-record filtering |
@@ -221,9 +222,16 @@ Response shape:
   ],
   "total": 1,
   "limit": 100,
-  "offset": 0
+  "offset": 0,
+  "next_cursor": null
 }
 ```
+
+Notes:
+
+- Offset pagination remains supported.
+- When `cursor_id` is used, `total` is omitted (`null`) to avoid expensive
+  count queries and `next_cursor` is populated when another page is available.
 
 ### `GET /events/stats`
 

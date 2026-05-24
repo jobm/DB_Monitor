@@ -41,6 +41,7 @@ class EventsResponse(BaseModel):
     total: int | None
     limit: int
     offset: int
+    next_cursor: int | None = None
 
 
 class ChangesResponse(BaseModel):

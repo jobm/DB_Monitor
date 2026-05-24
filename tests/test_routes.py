@@ -396,6 +396,63 @@ async def test_get_events_supports_record_filters(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_get_events_supports_cursor_pagination(monkeypatch):
+    events = [
+        KafkaEvent(
+            id=50,
+            event_type="UPDATE",
+            event_time=datetime(2024, 1, 2, 12, 0, tzinfo=timezone.utc),
+            user_id=None,
+            service_name="orderdb",
+            operation="UPDATE",
+            source_table_id=7,
+            row_identity={"id": 42},
+            event_data={"after": {"status": "paid"}},
+            raw_payload="{}",
+        ),
+        KafkaEvent(
+            id=49,
+            event_type="UPDATE",
+            event_time=datetime(2024, 1, 2, 12, 1, tzinfo=timezone.utc),
+            user_id=None,
+            service_name="orderdb",
+            operation="UPDATE",
+            source_table_id=7,
+            row_identity={"id": 43},
+            event_data={"after": {"status": "paid"}},
+            raw_payload="{}",
+        ),
+    ]
+
+    captured: dict[str, object] = {}
+
+    async def fake_list_events(*, filters, limit, offset, cursor_id, include_total):
+        del filters
+        captured["limit"] = limit
+        captured["offset"] = offset
+        captured["cursor_id"] = cursor_id
+        captured["include_total"] = include_total
+        return events, None
+
+    monkeypatch.setattr(
+        routes_data,
+        "get_events_repository",
+        lambda: SimpleNamespace(list_events=fake_list_events),
+    )
+
+    response = await routes_data.get_events(limit=2, offset=100, cursor_id=99)
+
+    assert captured["limit"] == 2
+    assert captured["offset"] == 100
+    assert captured["cursor_id"] == 99
+    assert captured["include_total"] is False
+
+    assert response["total"] is None
+    assert response["offset"] == 0
+    assert response["next_cursor"] == 49
+
+
+@pytest.mark.anyio
 async def test_get_events_rejects_invalid_row_identity():
     with pytest.raises(HTTPException) as exc_info:
         await routes_data.get_events(row_identity="not-json")

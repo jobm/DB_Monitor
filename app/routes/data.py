@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.params import Param
 
 from db_monitor.auth import require_viewer_role
 from db_monitor.core.db import AsyncSessionLocal
@@ -135,6 +136,7 @@ async def get_table_columns(service_name: str, table_name: str):
 async def get_events(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    cursor_id: int | None = Query(None, ge=1),
     service_name: str | None = None,
     source_table_id: int | None = Query(None, ge=1),
     row_identity: str | None = None,
@@ -144,6 +146,8 @@ async def get_events(
     search_term: str | None = None,
 ):
     """Get events with pagination and optional filtering."""
+    cursor_value = None if isinstance(cursor_id, Param) else cursor_id
+
     parsed_start_time = parse_timestamp(start_time, "start_time")
     parsed_end_time = parse_timestamp(end_time, "end_time")
     parsed_row_identity = parse_json_object_query(
@@ -163,7 +167,13 @@ async def get_events(
         ),
         limit=limit,
         offset=offset,
+        cursor_id=cursor_value,
+        include_total=cursor_value is None,
     )
+
+    next_cursor = None
+    if cursor_value is not None and len(events) == limit:
+        next_cursor = events[-1].id
 
     return {
         "events": [
@@ -186,7 +196,8 @@ async def get_events(
         ],
         "total": total,
         "limit": limit,
-        "offset": offset,
+        "offset": 0 if cursor_value is not None else offset,
+        "next_cursor": next_cursor,
     }
 
 

@@ -37,17 +37,30 @@ class EventsRepository:
         filters: EventQueryFilters,
         limit: int,
         offset: int,
-    ) -> tuple[list[KafkaEvent], int]:
-        """Return paginated events and total count for filters."""
+        cursor_id: int | None = None,
+        include_total: bool = True,
+    ) -> tuple[list[KafkaEvent], int | None]:
+        """Return paginated events for filters.
+
+        Uses offset pagination by default and keyset pagination when a
+        cursor_id is provided.
+        """
         async with self._session_factory() as session:
             query = select(KafkaEvent).order_by(KafkaEvent.id.desc())
             query = self._apply_filters(query, filters)
+            if cursor_id is not None:
+                query = query.where(KafkaEvent.id < cursor_id)
 
-            count_query = select(func.count()).select_from(query.subquery())
-            total_result = await session.execute(count_query)
-            total = int(total_result.scalar() or 0)
+            total: int | None = None
+            if include_total:
+                count_query = select(func.count()).select_from(query.subquery())
+                total_result = await session.execute(count_query)
+                total = int(total_result.scalar() or 0)
 
-            result = await session.execute(query.limit(limit).offset(offset))
+            effective_offset = 0 if cursor_id is not None else offset
+            result = await session.execute(
+                query.limit(limit).offset(effective_offset)
+            )
             events = result.scalars().all()
             return events, total
 

@@ -51,6 +51,7 @@ class DBMonitorClient:
         limit: int = 100,
         service_name: str | None = None,
         operation: str | None = None,
+        cursor_id: int | None = None,
     ) -> dict[str, Any]:
         """Return recent events with optional filters."""
         query = {"limit": limit}
@@ -58,6 +59,8 @@ class DBMonitorClient:
             query["service_name"] = service_name
         if operation:
             query["operation"] = operation
+        if cursor_id is not None:
+            query["cursor_id"] = cursor_id
         return self._request_json("/events", query=query)
 
     def get_changes(
