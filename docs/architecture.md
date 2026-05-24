@@ -54,7 +54,7 @@ The bundled docker-compose stack provides three PostgreSQL applications to simul
 | `app/event_pipeline.py` | Applies filtering, validation, and masking rules |
 | `app/schema_discovery.py` | Maintains discovered tables and columns from Debezium payloads |
 | `app/change_processor.py` | Extracts per-column deltas and point-in-time values |
-| `app/routes.py` | HTTP API for tables, events, changes, auth, readiness, checkpoints, and DLQ replay |
+| `app/routes/` | HTTP API modules split across data, auth, and ops routes with shared helpers |
 | `app/ws_manager.py` | WebSocket fanout for live event updates |
 | `app/migrations.py` | Tracked schema migrations and legacy backfill steps |
 
