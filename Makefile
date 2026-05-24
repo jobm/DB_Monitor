@@ -1,4 +1,4 @@
-.PHONY: monitor-help monitor-up monitor-up-sandbox monitor-down monitor-down-sandbox monitor-logs monitor-logs-sandbox monitor-register monitor-dev monitor-migrate monitor-test monitor-test-core monitor-test-integration monitor-test-sandbox monitor-test-sandbox-pytest monitor-test-smoke monitor-test-scale monitor-recovery monitor-tui monitor-tui-build
+.PHONY: monitor-help monitor-up monitor-up-sandbox monitor-down monitor-down-sandbox monitor-logs monitor-logs-sandbox monitor-register monitor-dev monitor-migrate monitor-test monitor-test-core monitor-test-integration monitor-test-sandbox monitor-test-sandbox-pytest monitor-test-smoke monitor-test-scale monitor-test-container-readyz monitor-lint monitor-typecheck monitor-package-smoke monitor-recovery monitor-tui monitor-tui-build
 
 .DEFAULT_GOAL := monitor-help
 
@@ -72,6 +72,29 @@ monitor-test: ## Run all core-platform tests
 
 monitor-test-core: ## Run reusable core-platform pytest coverage
 	cd app && uv run --group dev python -m pytest -m core ../tests/
+
+monitor-lint: ## Run Ruff lint checks for package and tests
+	uv run --group dev python -m ruff check src/db_monitor tests
+
+monitor-typecheck: ## Run mypy checks for the package namespace
+	uv run --group dev python -m mypy
+
+monitor-package-smoke: ## Build wheel/sdist and verify package import in clean venv
+	rm -rf dist .pkg-smoke-wheel .pkg-smoke-sdist
+	uv run --group dev python -m build
+	uv venv --python 3.11 --seed .pkg-smoke-wheel
+	.pkg-smoke-wheel/bin/pip install --upgrade pip
+	.pkg-smoke-wheel/bin/pip install dist/*.whl
+	.pkg-smoke-wheel/bin/python -c "import db_monitor; import db_monitor.cli; import db_monitor.public_api"
+	uv venv --python 3.11 --seed .pkg-smoke-sdist
+	.pkg-smoke-sdist/bin/pip install --upgrade pip
+	.pkg-smoke-sdist/bin/pip install dist/*.tar.gz
+	.pkg-smoke-sdist/bin/python -c "import db_monitor; import db_monitor.cli; import db_monitor.public_api"
+
+monitor-test-container-readyz: ## Start monitor container and validate readiness endpoint semantics
+	DB_SCHEMA_MODE=apply docker compose up -d --build monitor-server
+	python scripts/check_container_readyz.py || (docker compose logs --tail=200 monitor-server postgres-monitor kafka; docker compose down -v; exit 1)
+	docker compose down -v
 
 monitor-test-integration: ## Run sandbox-backed live integration checks
 	cd app && uv run --group dev python ../examples/sandbox/run_integration_tests.py

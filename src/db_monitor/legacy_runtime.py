@@ -13,8 +13,20 @@ from pathlib import Path
 
 
 def _legacy_app_root() -> Path:
-    """Return the repository-local legacy app directory path."""
-    return Path(__file__).resolve().parents[2] / "app"
+    """Return the legacy runtime directory path.
+
+    Supports both repository layout (`<repo>/app`) and container layout where
+    legacy modules are copied directly into `/app`.
+    """
+    workspace_root = Path(__file__).resolve().parents[2]
+    repo_app_root = workspace_root / "app"
+    if (repo_app_root / "main.py").exists():
+        return repo_app_root
+
+    if (workspace_root / "main.py").exists():
+        return workspace_root
+
+    return repo_app_root
 
 
 def _ensure_legacy_path() -> None:
@@ -22,9 +34,10 @@ def _ensure_legacy_path() -> None:
     app_root = _legacy_app_root()
     if not app_root.exists():
         raise RuntimeError(
-            "Legacy runtime directory 'app/' was not found. "
-            "Complete Phase 2+ namespace migration or run from a full "
-            "repository checkout."
+            "Legacy runtime directory was not found. Expected either 'app/' "
+            "under the project root or legacy modules at the project root. "
+            "Complete namespace migration or run from a full repository "
+            "checkout."
         )
 
     app_root_text = str(app_root)
@@ -56,6 +69,6 @@ def run_legacy_migrate(argv: Sequence[str] | None = None) -> int:
     original_argv = sys.argv[:]
     try:
         sys.argv = ["migrate.py", *forwarded_args]
-        return migrate.main()
+        return int(migrate.main())
     finally:
         sys.argv = original_argv

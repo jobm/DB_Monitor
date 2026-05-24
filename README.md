@@ -266,6 +266,10 @@ Useful commands:
 ```bash
 make monitor-up
 make monitor-up-sandbox
+make monitor-lint
+make monitor-typecheck
+make monitor-package-smoke
+make monitor-test-container-readyz
 make monitor-test
 make monitor-test-sandbox-pytest
 make monitor-test-integration

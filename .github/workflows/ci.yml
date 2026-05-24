@@ -27,6 +27,18 @@ jobs:
         working-directory: app
         run: uv sync --group dev --frozen
 
+      - name: Run lint gate (ruff)
+        run: make monitor-lint
+
+      - name: Run type-check gate (mypy)
+        run: make monitor-typecheck
+
+      - name: Run package smoke gate (wheel and sdist)
+        run: make monitor-package-smoke
+
+      - name: Run container readiness smoke gate
+        run: make monitor-test-container-readyz
+
       - name: Run unit tests
         run: make monitor-test-core
 

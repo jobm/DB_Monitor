@@ -78,7 +78,7 @@ These are not committed backlog items yet.
 - [x] Phase 2: Migrate runtime imports to a canonical `db_monitor` namespace
 - [x] Phase 3: Move package layout to `src/` and remove compatibility shims
 - [x] Phase 4: Define and document public API stability contracts
-- [ ] Phase 5: Harden quality gates (ruff, type checks, packaging smoke tests)
+- [x] Phase 5: Harden quality gates (ruff, type checks, packaging smoke tests)
 - [ ] Phase 6: Add automated release workflows and signed/tagged distribution
 
 #### Remaining Checklist
@@ -100,10 +100,10 @@ These are not committed backlog items yet.
 - [x] Phase 4: Define deprecation and removal policy with minimum grace window
 - [x] Phase 4: Add versioning policy and release compatibility matrix
 
-- [ ] Phase 5: Add Ruff config and enforce lint gate in CI
-- [ ] Phase 5: Add static typing gate (mypy or pyright) for package namespace
-- [ ] Phase 5: Add packaging smoke tests for wheel and sdist install/import
-- [ ] Phase 5: Add container smoke test for monitor-server readiness in CI
+- [x] Phase 5: Add Ruff config and enforce lint gate in CI
+- [x] Phase 5: Add static typing gate (mypy or pyright) for package namespace
+- [x] Phase 5: Add packaging smoke tests for wheel and sdist install/import
+- [x] Phase 5: Add container smoke test for monitor-server readiness in CI
 
 - [ ] Phase 6: Add release workflow with tag-triggered build and publish
 - [ ] Phase 6: Add changelog automation and release-note generation
@@ -157,3 +157,8 @@ These are not committed backlog items yet.
 	public module/symbol list, deprecation window, and compatibility matrix.
 - Added machine-readable contract constants in
 	`src/db_monitor/public_api.py` plus import/symbol policy tests.
+- Added Phase 5 quality gates:
+	Ruff + mypy configuration in root `pyproject.toml`.
+- Added Make targets for linting, type-checking, packaging smoke checks,
+	and monitor container readiness smoke validation.
+- Wired new quality gates into CI before the core unit test stage.
