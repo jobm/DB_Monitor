@@ -100,11 +100,8 @@ ALLOW_BOOTSTRAP=false
 
 3. Provide secrets through mounted files where possible.
 
-```text
-POSTGRES_URL_FILE=/run/secrets/monitor_postgres_url
-JWT_SECRET_FILE=/run/secrets/monitor_jwt_secret
-JWT_SECRET_NEXT_FILE=/run/secrets/monitor_jwt_secret_next
-```
+Use the production `*_FILE` examples in `docs/configuration.md` for the
+authoritative variable list and naming.
 
 4. Validate readiness after startup.
 

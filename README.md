@@ -113,58 +113,15 @@ For full details on production deployments, refer to [docs/deployment.md](docs/d
 
 ## Docker Sandbox Details
 
-The compose stack now runs with `APP_ENV=production`, applies migrations before
-startup, then validates schema state on boot. `ALLOW_BOOTSTRAP` defaults to
-`false`, so first-time local initialization must opt in explicitly as shown
-above. In deployed environments, keep bootstrap disabled and pre-provision or
-rotate admin keys out of band.
+Sandbox lifecycle commands and local operational workflows are documented in
+`docs/deployment.md` and `docs/example-sandbox.md`.
 
-The monitor container now runs as a non-root user and starts through an explicit
-entrypoint that applies migrations, then `exec`s the app process for cleaner
-signal handling. Production deployments can also source sensitive values from
-`POSTGRES_URL_FILE`, `JWT_SECRET_FILE`, and `KAFKA_SSL_PASSWORD_FILE` instead of
-plain environment variables. Graceful shutdown timing is configurable with
-`APP_SHUTDOWN_TIMEOUT_SECONDS`.
+Configuration and environment variable reference (including `*_FILE` secret
+loading, schema mode, broker settings, pool tuning, and JWT rotation) is
+documented in `docs/configuration.md`.
 
-Database pool sizing is now configurable with `DB_POOL_SIZE`,
-`DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT_SECONDS`, `DB_POOL_RECYCLE_SECONDS`, and
-`DB_POOL_PRE_PING` so production deployments can tune connection pressure
-explicitly.
-
-JWT signing now supports a staged rotation window through `JWT_SECRET_NEXT` or
-`JWT_SECRET_NEXT_FILE`. The app always signs with `JWT_SECRET`, but it will
-accept tokens signed by either secret while the overlap window is active. The
-intended rotation flow is: set `JWT_SECRET_NEXT`, deploy, wait for outstanding
-access and WebSocket session tokens to expire, promote the next secret into
-`JWT_SECRET`, then remove `JWT_SECRET_NEXT`.
-
-Connectors are registered automatically by the `connector-registrar` service. You can also run `./register-connectors.sh` manually.
-
-Connector configs now use a reusable template in `connectors/postgres-template.json`
-plus a canonical manifest in `connectors/sources.json`. Add a new source by
-appending one manifest entry instead of creating another full
-`*-connector.json` file.
-
-Each enabled manifest entry only needs the source identity, hostname, and
-monitored tables:
-
-```json
-{
-   "source_name": "catalogdb",
-   "database_hostname": "postgres-catalog",
-   "tables": ["public.categories", "public.products"],
-   "enabled": true
-}
-```
-
-The registrar derives repeated Debezium fields from `source_name`, including the
-connector name, topic prefix, replication slot, and schema history topic. Use
-optional fields like `connector_name`, `slot_name`, `history_topic`, or
-`config_overrides` only when a source must deviate from the defaults.
-
-Both the connector registrar and the FastAPI consumer now read the same
-manifest. That keeps Debezium registration and `KAFKA_TOPICS` subscription
-aligned without maintaining two separate topic lists.
+Source-manifest structure and validation rules are documented in
+`docs/configuration.md` under the manifest contract section.
 
 ## Service endpoints
 

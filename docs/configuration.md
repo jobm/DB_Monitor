@@ -246,7 +246,7 @@ fanout.
 
 ## Source Manifest Contract (`CONNECTOR_SOURCES_FILE`)
 
-The monitoring core of DB Monitor is driven by a declerative configuration contract called the **Source Manifest**. This is a JSON document located at `connectors/sources.json` by default (or custom configured via `CONNECTOR_SOURCES_FILE`).
+The monitoring core of DB Monitor is driven by a declarative configuration contract called the **Source Manifest**. This is a JSON document located at `connectors/sources.json` by default (or custom configured via `CONNECTOR_SOURCES_FILE`).
 
 To formally declare, dry-run, or publish your custom databases and tables, provide a manifest that conforms to the JSON Schema at [connectors/sources.schema.json](../connectors/sources.schema.json).
 
