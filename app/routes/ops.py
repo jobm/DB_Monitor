@@ -7,20 +7,20 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
 from auth import require_admin_role, require_viewer_role
-from config import (
+from core.config import (
     READINESS_MAX_COMMIT_AGE_SECONDS,
     READINESS_MAX_CONSUMER_LAG,
     READINESS_MAX_DLQ_MESSAGES,
 )
-from consumer_service import (
+from core.db import AsyncSessionLocal
+from core.lifecycle import lifecycle_manager
+from ingestion.consumer import (
     get_consumer_health,
     list_consumer_checkpoints_snapshot,
     list_dead_letter_events as list_dead_letter_records,
     replay_dead_letter_event_record,
     replay_dead_letter_event_records,
 )
-from extensions import AsyncSessionLocal
-from lifecycle_manager import lifecycle_manager
 from models import ApiKey
 from response_models import AppInfoResponse, HealthResponse, ReadinessResponse
 from .utils import timestamp_age_seconds

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -96,14 +97,14 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
         return [{"id": 10, "event_id": 77, "column_name": "status"}]
 
     monkeypatch.setattr(
-        routes_data.schema_discovery,
-        "get_table_by_name",
-        fake_get_table_by_name,
+        routes_data,
+        "get_schema_discovery",
+        lambda: SimpleNamespace(get_table_by_name=fake_get_table_by_name),
     )
     monkeypatch.setattr(
-        routes_data.change_processor,
-        "get_changes",
-        fake_get_changes,
+        routes_data,
+        "get_change_processor",
+        lambda: SimpleNamespace(get_changes=fake_get_changes),
     )
 
     response = await routes_data.get_changes(
@@ -179,9 +180,9 @@ async def test_get_value_at_time_legacy_resolves_service_from_table_name(
         return "shipped"
 
     monkeypatch.setattr(
-        routes_data.change_processor,
-        "get_value_at_time",
-        fake_get_value_at_time,
+        routes_data,
+        "get_change_processor",
+        lambda: SimpleNamespace(get_value_at_time=fake_get_value_at_time),
     )
 
     response = await routes_data.get_value_at_time_legacy(
@@ -230,7 +231,11 @@ async def test_health_check_reports_database_and_consumer_state(monkeypatch):
             "circuit_breaker_state": "closed",
         },
     )
-    monkeypatch.setattr(routes_ops.lifecycle_manager, "_startup_complete", True)
+    monkeypatch.setattr(
+        routes_ops.lifecycle_manager,
+        "_startup_complete",
+        True,
+    )
     monkeypatch.setattr(
         routes_ops.lifecycle_manager.shutdown_manager,
         "_shutdown_in_progress",
@@ -271,7 +276,11 @@ async def test_readiness_check_returns_503_when_consumer_signals_degrade(
             "circuit_breaker_state": "closed",
         },
     )
-    monkeypatch.setattr(routes_ops.lifecycle_manager, "_startup_complete", True)
+    monkeypatch.setattr(
+        routes_ops.lifecycle_manager,
+        "_startup_complete",
+        True,
+    )
     monkeypatch.setattr(
         routes_ops.lifecycle_manager.shutdown_manager,
         "_shutdown_in_progress",
@@ -426,9 +435,9 @@ async def test_get_changes_reports_table_discovery_hint(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        routes_data.schema_discovery,
-        "get_table_by_name",
-        fake_get_table_by_name,
+        routes_data,
+        "get_schema_discovery",
+        lambda: SimpleNamespace(get_table_by_name=fake_get_table_by_name),
     )
 
     with pytest.raises(HTTPException) as exc_info:

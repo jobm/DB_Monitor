@@ -15,6 +15,21 @@ from config import (
 from event_parser import parse_event_payload
 from event_pipeline import event_pipeline
 from extensions import AsyncSessionLocal
+from consumer.runtime_state import (
+    CircuitBreaker as RuntimeCircuitBreaker,
+    ConsumerStopRequested,
+    _get_circuit_breaker,
+    _get_consumer_runtime,
+    _record_committed_offsets,
+    _record_successful_commit,
+    _update_runtime_lag,
+    _utc_now_iso,
+    cluster_circuit_breakers as runtime_cluster_circuit_breakers,
+    consumer_runtime,
+    consumer_runtimes as runtime_consumer_runtimes,
+    get_consumer_health as runtime_get_consumer_health,
+)
+from consumer import recovery as consumer_recovery
 from message_brokers import (
     BrokerMessage,
     DeadLetterPublisher,
@@ -22,29 +37,22 @@ from message_brokers import (
     build_message_consumer,
 )
 from metrics import (
-    consumer_commit_lag,
-    consumer_committed_offset,
-    consumer_current_offset,
-    circuit_breaker_state,
-    consumer_lag,
-    consumer_last_successful_commit_timestamp_seconds,
     db_write_duration_seconds,
+    dlq_records_pending as dlq_records_pending_metric,
     dlq_messages_total,
-    dlq_records_pending,
     events_consumed_total,
     events_failed_total,
     events_processed_total,
     kafka_commit_duration_seconds,
 )
 from models import (
-    ConsumerCheckpoint,
     DeadLetterEvent,
     KafkaEvent,
     MonitoredColumn,
 )
 from row_identity import extract_row_identity
 from schema_discovery import SchemaDiscovery, extract_operation
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
 from tracing import start_span
@@ -60,202 +68,17 @@ DLQ_TOPIC = "db-monitor-dlq"
 DEFAULT_TOPICS = [KAFKA_TOPIC]
 MAX_CONNECTION_RETRIES = 60
 CONNECTION_RETRY_DELAY = 5.0
-CONSUMER_METRIC_NAME = "broker_consumer"
 
 
-def _new_consumer_runtime_state() -> dict[str, object]:
-    """Build a clean runtime state structure for a Kafka consumer."""
-    return {
-        "running": False,
-        "connected": False,
-        "topics": [],
-        "broker_kind": "kafka",
-        "last_error": None,
-        "last_message_at": None,
-        "last_commit_at": None,
-        "lag_by_partition": {},
-        "highwater_by_partition": {},
-        "lag_total": 0,
-        "dlq_messages_total": 0,
-    }
+CircuitBreaker = RuntimeCircuitBreaker
+cluster_circuit_breakers = runtime_cluster_circuit_breakers
+consumer_runtimes = runtime_consumer_runtimes
+dlq_records_pending = dlq_records_pending_metric
 
 
-class ConsumerStopRequested(RuntimeError):
-    """Raised when the consumer must stop to avoid losing broker messages."""
-
-
-consumer_runtime: dict[str, object] = _new_consumer_runtime_state()
-consumer_runtimes: dict[str, dict[str, object]] = {"default": consumer_runtime}
-
-
-class CircuitBreaker:
-    def __init__(
-        self,
-        failure_threshold: int = 5,
-        recovery_timeout: float = 30.0,
-        metric_name: str = CONSUMER_METRIC_NAME,
-    ):
-        self.failure_threshold = failure_threshold
-        self.recovery_timeout = recovery_timeout
-        self.failure_count = 0
-        self.last_failure_time = 0.0
-        self.state = "closed"
-        self.metric_name = metric_name
-        self._update_metric()
-
-    def record_failure(self):
-        self.failure_count += 1
-        self.last_failure_time = asyncio.get_event_loop().time()
-        if self.failure_count >= self.failure_threshold:
-            self.state = "open"
-            self._update_metric()
-            logger.warning("Circuit breaker opened due to repeated failures")
-
-    def record_success(self):
-        self.failure_count = 0
-        self.state = "closed"
-        self._update_metric()
-
-    def can_execute(self) -> bool:
-        if self.state == "closed":
-            return True
-        if (
-            asyncio.get_event_loop().time() - self.last_failure_time
-            > self.recovery_timeout
-        ):
-            self.state = "half-open"
-            self._update_metric()
-            logger.info("Circuit breaker half-open, allowing test request")
-            return True
-        return False
-
-    def _update_metric(self):
-        state_value = {
-            "closed": 0,
-            "open": 1,
-            "half-open": 2,
-        }.get(self.state, 0)
-        circuit_breaker_state.labels(breaker=self.metric_name).set(
-            state_value
-        )
-
-
-circuit_breaker = CircuitBreaker()
-cluster_circuit_breakers: dict[str, CircuitBreaker] = {
-    "default": circuit_breaker,
-}
-
-
-def _get_consumer_runtime(cluster_name: str) -> dict[str, object]:
-    """Return the mutable runtime state for a cluster consumer."""
-    if cluster_name == "default":
-        return consumer_runtime
-
-    runtime = consumer_runtimes.get(cluster_name)
-    if runtime is None:
-        runtime = _new_consumer_runtime_state()
-        consumer_runtimes[cluster_name] = runtime
-    return runtime
-
-
-def _get_circuit_breaker(cluster_name: str) -> CircuitBreaker:
-    """Return the circuit breaker assigned to a cluster consumer."""
-    breaker = cluster_circuit_breakers.get(cluster_name)
-    if breaker is None:
-        breaker = CircuitBreaker(
-            metric_name=f"{CONSUMER_METRIC_NAME}:{cluster_name}"
-        )
-        cluster_circuit_breakers[cluster_name] = breaker
-    return breaker
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _timestamp_to_age_seconds(value: Optional[str]) -> Optional[float]:
-    """Return the age of an ISO 8601 timestamp in seconds."""
-    if value is None:
-        return None
-
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return max((datetime.now(timezone.utc) - parsed).total_seconds(), 0.0)
-
-
-def _update_runtime_lag(
-    runtime: dict[str, object],
-    cluster_name: str,
-    destination: str,
-    partition: int,
-    offset: int,
-    lag_value: int | None,
-) -> None:
-    """Update current lag snapshots for readiness and metrics."""
-    if lag_value is None:
-        return
-
-    lag_key = f"{cluster_name}:{destination}:{partition}"
-    lag_by_partition = dict(runtime.get("lag_by_partition") or {})
-    lag_by_partition[lag_key] = lag_value
-    runtime["lag_by_partition"] = lag_by_partition
-    highwater_by_partition = dict(runtime.get("highwater_by_partition") or {})
-    highwater_by_partition[lag_key] = offset + lag_value + 1
-    runtime["highwater_by_partition"] = highwater_by_partition
-    runtime["lag_total"] = sum(lag_by_partition.values())
-    consumer_lag.labels(
-        cluster=cluster_name,
-        topic=destination,
-        partition=str(partition),
-    ).set(lag_value)
-    consumer_current_offset.labels(
-        cluster=cluster_name,
-        topic=destination,
-        partition=str(partition),
-    ).set(offset)
-
-
-def _record_committed_offsets(
-    runtime: dict[str, object],
-    cluster_name: str,
-    events: list[KafkaEvent],
-) -> None:
-    """Update offset and commit-lag gauges from the committed batch."""
-    highwater_by_partition = dict(runtime.get("highwater_by_partition") or {})
-    for event in events:
-        if event.kafka_topic is None or event.kafka_partition is None:
-            continue
-        if event.kafka_offset is None:
-            continue
-
-        partition_label = str(event.kafka_partition)
-        consumer_committed_offset.labels(
-            cluster=cluster_name,
-            topic=event.kafka_topic,
-            partition=partition_label,
-        ).set(event.kafka_offset)
-
-        lag_key = (
-            f"{cluster_name}:{event.kafka_topic}:{event.kafka_partition}"
-        )
-        highwater = highwater_by_partition.get(lag_key)
-        if highwater is None:
-            continue
-
-        commit_lag = max(int(highwater) - int(event.kafka_offset) - 1, 0)
-        consumer_commit_lag.labels(
-            cluster=cluster_name,
-            topic=event.kafka_topic,
-            partition=partition_label,
-        ).set(commit_lag)
-
-
-def _record_successful_commit(runtime: dict[str, object]) -> None:
-    """Record the latest successful Kafka commit time."""
-    timestamp = datetime.now(timezone.utc)
-    runtime["last_commit_at"] = timestamp.isoformat()
-    consumer_last_successful_commit_timestamp_seconds.set(
-        timestamp.timestamp()
-    )
+def get_consumer_health() -> dict[str, object]:
+    """Expose aggregate consumer health for API and readiness checks."""
+    return runtime_get_consumer_health()
 
 
 def _get_canonical_service_name(
@@ -271,115 +94,13 @@ def _get_canonical_service_name(
     return "unknown"
 
 
-def get_consumer_health() -> dict[str, object]:
-    runtimes = {
-        cluster_name: runtime
-        for cluster_name, runtime in consumer_runtimes.items()
-    }
-    cluster_count = len(runtimes)
-    connected = cluster_count > 0 and all(
-        bool(runtime["connected"]) for runtime in runtimes.values()
-    )
-    running = cluster_count > 0 and all(
-        bool(runtime["running"]) for runtime in runtimes.values()
-    )
-    lag_by_partition: dict[str, int] = {}
-    topics: list[str] = []
-    errors: list[str] = []
-    last_message_at_values: list[str] = []
-    last_commit_at_values: list[str] = []
-    breaker_states: list[str] = []
-    clusters_payload: dict[str, dict[str, object]] = {}
-
-    for cluster_name, runtime in runtimes.items():
-        cluster_topics = list(runtime.get("topics") or [])
-        topics.extend(cluster_topics)
-        lag_by_partition.update(dict(runtime.get("lag_by_partition") or {}))
-        if runtime.get("last_error"):
-            errors.append(f"{cluster_name}: {runtime['last_error']}")
-        if runtime.get("last_message_at"):
-            last_message_at_values.append(str(runtime["last_message_at"]))
-        if runtime.get("last_commit_at"):
-            last_commit_at_values.append(str(runtime["last_commit_at"]))
-
-        breaker_state = _get_circuit_breaker(cluster_name).state
-        breaker_states.append(breaker_state)
-        clusters_payload[cluster_name] = {
-            "running": runtime["running"],
-            "connected": runtime["connected"],
-            "broker_kind": runtime.get("broker_kind", "kafka"),
-            "topics": cluster_topics,
-            "last_error": runtime["last_error"],
-            "last_message_at": runtime["last_message_at"],
-            "last_commit_at": runtime["last_commit_at"],
-            "last_commit_age_seconds": _timestamp_to_age_seconds(
-                runtime["last_commit_at"]
-            ),
-            "lag_by_partition": dict(runtime.get("lag_by_partition") or {}),
-            "lag_total": runtime["lag_total"],
-            "dlq_messages_total": runtime["dlq_messages_total"],
-            "circuit_breaker_state": breaker_state,
-        }
-
-    if any(state == "open" for state in breaker_states):
-        aggregate_breaker_state = "open"
-    elif any(state == "half-open" for state in breaker_states):
-        aggregate_breaker_state = "half-open"
-    else:
-        aggregate_breaker_state = "closed"
-
-    status = "healthy" if running and connected else "unhealthy"
-    return {
-        "status": status,
-        "running": running,
-        "connected": connected,
-        "topics": sorted(dict.fromkeys(topics)),
-        "last_error": "; ".join(errors) if errors else None,
-        "last_message_at": (
-            max(last_message_at_values)
-            if last_message_at_values
-            else None
-        ),
-        "last_commit_at": (
-            max(last_commit_at_values)
-            if last_commit_at_values
-            else None
-        ),
-        "last_commit_age_seconds": _timestamp_to_age_seconds(
-            max(last_commit_at_values) if last_commit_at_values else None
-        ),
-        "lag_by_partition": lag_by_partition,
-        "lag_total": sum(
-            int(runtime.get("lag_total") or 0) for runtime in runtimes.values()
-        ),
-        "dlq_messages_total": max(
-            [
-                int(runtime.get("dlq_messages_total") or 0)
-                for runtime in runtimes.values()
-            ]
-            or [0]
-        ),
-        "circuit_breaker_state": aggregate_breaker_state,
-        "clusters": clusters_payload,
-    }
-
-
 async def refresh_dead_letter_backlog_metric(
     session_factory: Callable = AsyncSessionLocal,
 ) -> int:
     """Refresh the pending DLQ gauge from persisted recovery records."""
-    async with session_factory() as session:
-        result = await session.execute(
-            select(func.count())
-            .select_from(DeadLetterEvent)
-            .where(DeadLetterEvent.is_replayed.is_(False))
-        )
-        pending_count = int(result.scalar_one() or 0)
-
-    dlq_records_pending.set(pending_count)
-    for runtime in consumer_runtimes.values():
-        runtime["dlq_messages_total"] = pending_count
-    return pending_count
+    return await consumer_recovery.refresh_dead_letter_backlog_metric(
+        session_factory=session_factory,
+    )
 
 
 def _checkpoint_rows_for_events(
@@ -388,28 +109,11 @@ def _checkpoint_rows_for_events(
     broker_kind: str = "kafka",
 ) -> list[dict[str, object]]:
     """Return highest committed broker positions for a processed batch."""
-    checkpoints: dict[tuple[str, str, str], dict[str, object]] = {}
-    for event in events:
-        location = _build_broker_location(event, broker_kind)
-        if location is None:
-            continue
-
-        key = (
-            str(location["broker_destination"]),
-            str(location["broker_substream"]),
-            str(location["broker_kind"]),
-        )
-        existing = checkpoints.get(key)
-        if existing is None or int(location["broker_position"]) > int(
-            existing["broker_position"]
-        ):
-            checkpoints[key] = {
-                "consumer_group": consumer_group,
-                **location,
-                "last_event_time": event.event_time,
-            }
-
-    return list(checkpoints.values())
+    return consumer_recovery._checkpoint_rows_for_events(
+        events,
+        consumer_group=consumer_group,
+        broker_kind=broker_kind,
+    )
 
 
 def _build_broker_location(
@@ -417,31 +121,7 @@ def _build_broker_location(
     broker_kind: str,
 ) -> dict[str, object] | None:
     """Build broker-neutral recovery metadata for one consumed event."""
-    if event.kafka_topic is None or event.kafka_offset is None:
-        return None
-
-    if broker_kind == "kafka":
-        if event.kafka_partition is None:
-            return None
-        broker_substream = str(event.kafka_partition)
-        kafka_topic = event.kafka_topic
-        kafka_partition = event.kafka_partition
-        kafka_offset = event.kafka_offset
-    else:
-        broker_substream = ""
-        kafka_topic = None
-        kafka_partition = None
-        kafka_offset = None
-
-    return {
-        "broker_kind": broker_kind,
-        "broker_destination": event.kafka_topic,
-        "broker_substream": broker_substream,
-        "broker_position": str(event.kafka_offset),
-        "kafka_topic": kafka_topic,
-        "kafka_partition": kafka_partition,
-        "kafka_offset": kafka_offset,
-    }
+    return consumer_recovery._build_broker_location(event, broker_kind)
 
 
 def _legacy_event_location(
@@ -454,23 +134,15 @@ def _legacy_event_location(
     kafka_offset: int | None,
 ) -> tuple[str, int | None, int | None]:
     """Build the legacy event location fields used by the event table."""
-    if kafka_topic is not None:
-        return kafka_topic, kafka_partition, kafka_offset
-
-    try:
-        position = int(broker_position)
-    except (TypeError, ValueError):
-        position = None
-
-    if broker_kind == "kafka":
-        try:
-            partition = int(broker_substream)
-        except (TypeError, ValueError):
-            partition = None
-    else:
-        partition = 0
-
-    return broker_destination, partition, position
+    return consumer_recovery._legacy_event_location(
+        broker_kind,
+        broker_destination,
+        broker_substream,
+        broker_position,
+        kafka_topic,
+        kafka_partition,
+        kafka_offset,
+    )
 
 
 def _serialize_broker_fields(
@@ -484,15 +156,15 @@ def _serialize_broker_fields(
     kafka_offset: int | None,
 ) -> dict[str, object]:
     """Render broker metadata alongside Kafka compatibility aliases."""
-    return {
-        "broker_kind": broker_kind,
-        "broker_destination": broker_destination,
-        "broker_substream": broker_substream or None,
-        "broker_position": broker_position,
-        "kafka_topic": kafka_topic,
-        "kafka_partition": kafka_partition,
-        "kafka_offset": kafka_offset,
-    }
+    return consumer_recovery._serialize_broker_fields(
+        broker_kind=broker_kind,
+        broker_destination=broker_destination,
+        broker_substream=broker_substream,
+        broker_position=broker_position,
+        kafka_topic=kafka_topic,
+        kafka_partition=kafka_partition,
+        kafka_offset=kafka_offset,
+    )
 
 
 async def persist_consumer_checkpoints(
@@ -502,76 +174,21 @@ async def persist_consumer_checkpoints(
     session_factory: Callable = AsyncSessionLocal,
 ) -> None:
     """Persist the latest committed broker positions per stream."""
-    checkpoint_rows = _checkpoint_rows_for_events(
+    await consumer_recovery.persist_consumer_checkpoints(
         events,
-        consumer_group,
-        broker_kind,
+        consumer_group=consumer_group,
+        broker_kind=broker_kind,
+        session_factory=session_factory,
     )
-    if not checkpoint_rows:
-        return
-
-    async with session_factory() as session:
-        async with session.begin():
-            insert_stmt = pg_insert(ConsumerCheckpoint).values(checkpoint_rows)
-            upsert_stmt = insert_stmt.on_conflict_do_update(
-                index_elements=[
-                    "consumer_group",
-                    "broker_kind",
-                    "broker_destination",
-                    "broker_substream",
-                ],
-                set_={
-                    "broker_position": insert_stmt.excluded.broker_position,
-                    "kafka_topic": insert_stmt.excluded.kafka_topic,
-                    "kafka_partition": insert_stmt.excluded.kafka_partition,
-                    "kafka_offset": insert_stmt.excluded.kafka_offset,
-                    "last_event_time": insert_stmt.excluded.last_event_time,
-                    "updated_at": func.now(),
-                },
-            )
-            await session.execute(upsert_stmt)
 
 
 async def list_consumer_checkpoints_snapshot(
     session_factory: Callable = AsyncSessionLocal,
 ) -> list[dict[str, object]]:
     """Return the persisted checkpoint snapshot for operators."""
-    async with session_factory() as session:
-        result = await session.execute(
-            select(ConsumerCheckpoint).order_by(
-                ConsumerCheckpoint.consumer_group.asc(),
-                ConsumerCheckpoint.broker_kind.asc(),
-                ConsumerCheckpoint.broker_destination.asc(),
-                ConsumerCheckpoint.broker_substream.asc(),
-            )
-        )
-        checkpoints = result.scalars().all()
-
-    return [
-        {
-            "consumer_group": checkpoint.consumer_group,
-            **_serialize_broker_fields(
-                broker_kind=checkpoint.broker_kind,
-                broker_destination=checkpoint.broker_destination,
-                broker_substream=checkpoint.broker_substream,
-                broker_position=checkpoint.broker_position,
-                kafka_topic=checkpoint.kafka_topic,
-                kafka_partition=checkpoint.kafka_partition,
-                kafka_offset=checkpoint.kafka_offset,
-            ),
-            "last_event_time": (
-                checkpoint.last_event_time.isoformat()
-                if checkpoint.last_event_time
-                else None
-            ),
-            "updated_at": (
-                checkpoint.updated_at.isoformat()
-                if checkpoint.updated_at
-                else None
-            ),
-        }
-        for checkpoint in checkpoints
-    ]
+    return await consumer_recovery.list_consumer_checkpoints_snapshot(
+        session_factory=session_factory,
+    )
 
 
 async def _persist_dead_letter_event(
@@ -582,45 +199,13 @@ async def _persist_dead_letter_event(
     session_factory: Callable = AsyncSessionLocal,
 ) -> int:
     """Store the failed message in the persistent DLQ table."""
-    location = _build_broker_location(event, broker_kind)
-    if location is None:
-        raise ValueError("Dead-letter event is missing broker location.")
-
-    async with session_factory() as session:
-        async with session.begin():
-            insert_stmt = pg_insert(DeadLetterEvent).values(
-                service_name=event.service_name,
-                **location,
-                operation=event.operation,
-                raw_payload=raw_payload,
-                error_message=error,
-                is_replayed=False,
-                replayed_at=None,
-                replay_error=None,
-            )
-            upsert_stmt = insert_stmt.on_conflict_do_update(
-                index_elements=[
-                    "broker_kind",
-                    "broker_destination",
-                    "broker_substream",
-                    "broker_position",
-                ],
-                set_={
-                    "service_name": insert_stmt.excluded.service_name,
-                    "kafka_topic": insert_stmt.excluded.kafka_topic,
-                    "kafka_partition": insert_stmt.excluded.kafka_partition,
-                    "kafka_offset": insert_stmt.excluded.kafka_offset,
-                    "operation": insert_stmt.excluded.operation,
-                    "raw_payload": insert_stmt.excluded.raw_payload,
-                    "error_message": insert_stmt.excluded.error_message,
-                    "failed_at": func.now(),
-                    "is_replayed": False,
-                    "replayed_at": None,
-                    "replay_error": None,
-                },
-            ).returning(DeadLetterEvent.id)
-            result = await session.execute(upsert_stmt)
-            return int(result.scalar_one())
+    return await consumer_recovery._persist_dead_letter_event(
+        event,
+        raw_payload,
+        error,
+        broker_kind=broker_kind,
+        session_factory=session_factory,
+    )
 
 
 async def list_dead_letter_events(
@@ -629,43 +214,11 @@ async def list_dead_letter_events(
     session_factory: Callable = AsyncSessionLocal,
 ) -> list[dict[str, object]]:
     """Return persisted DLQ records for operator inspection."""
-    async with session_factory() as session:
-        statement = select(DeadLetterEvent)
-        if not include_replayed:
-            statement = statement.where(DeadLetterEvent.is_replayed.is_(False))
-        statement = statement.order_by(DeadLetterEvent.failed_at.desc()).limit(
-            limit
-        )
-        result = await session.execute(statement)
-        events = result.scalars().all()
-
-    return [
-        {
-            "id": event.id,
-            "service_name": event.service_name,
-            **_serialize_broker_fields(
-                broker_kind=event.broker_kind,
-                broker_destination=event.broker_destination,
-                broker_substream=event.broker_substream,
-                broker_position=event.broker_position,
-                kafka_topic=event.kafka_topic,
-                kafka_partition=event.kafka_partition,
-                kafka_offset=event.kafka_offset,
-            ),
-            "operation": event.operation,
-            "error_message": event.error_message,
-            "failed_at": (
-                event.failed_at.isoformat() if event.failed_at else None
-            ),
-            "is_replayed": event.is_replayed,
-            "replayed_at": (
-                event.replayed_at.isoformat() if event.replayed_at else None
-            ),
-            "replay_error": event.replay_error,
-            "raw_payload": event.raw_payload,
-        }
-        for event in events
-    ]
+    return await consumer_recovery.list_dead_letter_events(
+        limit=limit,
+        include_replayed=include_replayed,
+        session_factory=session_factory,
+    )
 
 
 def _build_replay_event(dlq_event: DeadLetterEvent) -> KafkaEvent:

@@ -4,10 +4,10 @@ import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from app_factory import create_application
+from api.factory import create_application
 from audit_log import AuditLogEntry, audit_log_writer
 from auth import authenticate_credentials
-from config import (
+from core.config import (
     BATCH_ENABLED,
     BATCH_SIZE,
     BROKER_CLUSTERS,
@@ -18,16 +18,16 @@ from config import (
     OTEL_SERVICE_NAME,
     OTEL_TRACING_ENABLED,
 )
-from consumer_service import consumer_task
-from extensions import engine
+from core.db import engine
+from core.lifecycle import lifecycle_manager
 from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
-from lifecycle_manager import lifecycle_manager
+from ingestion.consumer import consumer_task
+from ingestion.schema import schema_cache_backplane
 from lifespan import managed_lifespan
 from metrics import api_request_duration_seconds, failed_auth_attempts_total
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from routes import router
-from schema_discovery import schema_cache_backplane
+from api.router import router
 from tracing import current_trace_context, initialize_tracing
 from ws_manager import ws_manager
 

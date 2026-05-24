@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
 
 from auth import require_viewer_role
-from change_processor import ChangeProcessor
-from extensions import AsyncSessionLocal
-from models import KafkaEvent
+from core.db import AsyncSessionLocal
+from ingestion.changes import ChangeProcessor
+from repositories.events import EventQueryFilters, EventsRepository
 from response_models import (
     ChangesResponse,
     EventsResponse,
@@ -17,12 +16,24 @@ from response_models import (
     TableListResponse,
 )
 from .utils import parse_json_object_query, parse_timestamp
-from schema_discovery import SchemaDiscovery
+from ingestion.schema import SchemaDiscovery
 
 router = APIRouter()
 
-schema_discovery = SchemaDiscovery(AsyncSessionLocal)
-change_processor = ChangeProcessor(AsyncSessionLocal)
+
+def get_schema_discovery() -> SchemaDiscovery:
+    """Return a schema discovery service bound to the app DB session."""
+    return SchemaDiscovery(AsyncSessionLocal)
+
+
+def get_change_processor() -> ChangeProcessor:
+    """Return a change processor service bound to the app DB session."""
+    return ChangeProcessor(AsyncSessionLocal)
+
+
+def get_events_repository() -> EventsRepository:
+    """Return a read-model repository for events queries."""
+    return EventsRepository(AsyncSessionLocal)
 
 
 def resolve_table_reference(
@@ -67,7 +78,7 @@ def resolve_table_reference(
 )
 async def get_tables():
     """List all monitored tables."""
-    tables = await schema_discovery.get_all_tables()
+    tables = await get_schema_discovery().get_all_tables()
     return {"tables": tables, "count": len(tables)}
 
 
@@ -77,7 +88,10 @@ async def get_tables():
 )
 async def get_table(service_name: str, table_name: str):
     """Get table details including columns."""
-    table = await schema_discovery.get_table_by_name(service_name, table_name)
+    table = await get_schema_discovery().get_table_by_name(
+        service_name,
+        table_name,
+    )
     if not table:
         raise HTTPException(
             status_code=404,
@@ -97,7 +111,10 @@ async def get_table(service_name: str, table_name: str):
 )
 async def get_table_columns(service_name: str, table_name: str):
     """Get columns for a specific table."""
-    table = await schema_discovery.get_table_by_name(service_name, table_name)
+    table = await get_schema_discovery().get_table_by_name(
+        service_name,
+        table_name,
+    )
     if not table:
         raise HTTPException(
             status_code=404,
@@ -134,96 +151,49 @@ async def get_events(
         "row_identity",
     )
 
-    async with AsyncSessionLocal() as session:
-        query = select(KafkaEvent).order_by(KafkaEvent.id.desc())
+    events, total = await get_events_repository().list_events(
+        filters=EventQueryFilters(
+            service_name=service_name,
+            source_table_id=source_table_id,
+            row_identity=parsed_row_identity,
+            event_type=event_type,
+            start_time=parsed_start_time,
+            end_time=parsed_end_time,
+            search_term=search_term,
+        ),
+        limit=limit,
+        offset=offset,
+    )
 
-        if service_name:
-            query = query.where(KafkaEvent.service_name == service_name)
-        if source_table_id:
-            query = query.where(KafkaEvent.source_table_id == source_table_id)
-        if parsed_row_identity is not None:
-            query = query.where(KafkaEvent.row_identity == parsed_row_identity)
-        if event_type:
-            query = query.where(KafkaEvent.event_type == event_type)
-
-        if parsed_start_time:
-            query = query.where(KafkaEvent.event_time >= parsed_start_time)
-        if parsed_end_time:
-            query = query.where(KafkaEvent.event_time <= parsed_end_time)
-
-        if search_term:
-            query = query.where(
-                KafkaEvent.raw_payload.ilike(f"%{search_term}%")
-            )
-
-        count_query = select(func.count()).select_from(query.subquery())
-        total_result = await session.execute(count_query)
-        total = total_result.scalar()
-
-        query = query.limit(limit).offset(offset)
-        result = await session.execute(query)
-        events = result.scalars().all()
-
-        return {
-            "events": [
-                {
-                    "id": event.id,
-                    "event_type": event.event_type,
-                    "event_time": (
-                        event.event_time.isoformat()
-                        if event.event_time
-                        else None
-                    ),
-                    "user_id": event.user_id,
-                    "service_name": event.service_name,
-                    "operation": event.operation,
-                    "source_table_id": event.source_table_id,
-                    "row_identity": event.row_identity,
-                    "event_data": event.event_data,
-                }
-                for event in events
-            ],
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-        }
+    return {
+        "events": [
+            {
+                "id": event.id,
+                "event_type": event.event_type,
+                "event_time": (
+                    event.event_time.isoformat()
+                    if event.event_time
+                    else None
+                ),
+                "user_id": event.user_id,
+                "service_name": event.service_name,
+                "operation": event.operation,
+                "source_table_id": event.source_table_id,
+                "row_identity": event.row_identity,
+                "event_data": event.event_data,
+            }
+            for event in events
+        ],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/events/stats", dependencies=[Depends(require_viewer_role)])
 async def get_event_stats():
     """Get aggregated event statistics."""
-    async with AsyncSessionLocal() as session:
-        by_service = await session.execute(
-            select(
-                KafkaEvent.service_name,
-                func.count(KafkaEvent.id),
-            ).group_by(KafkaEvent.service_name)
-        )
-        by_type = await session.execute(
-            select(KafkaEvent.event_type, func.count(KafkaEvent.id)).group_by(
-                KafkaEvent.event_type
-            )
-        )
-        by_operation = await session.execute(
-            select(KafkaEvent.operation, func.count(KafkaEvent.id)).group_by(
-                KafkaEvent.operation
-            )
-        )
-        total = await session.execute(select(func.count(KafkaEvent.id)))
-
-        return {
-            "total_events": total.scalar(),
-            "by_service": {
-                row[0] or "unknown": row[1]
-                for row in by_service.fetchall()
-            },
-            "by_type": {
-                row[0] or "unknown": row[1] for row in by_type.fetchall()
-            },
-            "by_operation": {
-                row[0] or "unknown": row[1] for row in by_operation.fetchall()
-            },
-        }
+    return await get_events_repository().event_stats()
 
 
 @router.get(
@@ -250,7 +220,7 @@ async def get_changes(
     parsed_to_time = parse_timestamp(to_time, "to_time")
     parsed_row_identity = parse_json_object_query(row_identity, "row_identity")
 
-    table = await schema_discovery.get_table_by_name(
+    table = await get_schema_discovery().get_table_by_name(
         resolved_service_name,
         resolved_table_name,
     )
@@ -281,7 +251,7 @@ async def get_changes(
                 ),
             )
 
-    changes = await change_processor.get_changes(
+    changes = await get_change_processor().get_changes(
         table_id=table["id"],
         column_id=column_id,
         row_identity=parsed_row_identity,
@@ -317,7 +287,7 @@ async def _get_value_at_time_response(
             ),
         )
 
-    value = await change_processor.get_value_at_time(
+    value = await get_change_processor().get_value_at_time(
         service_name=service_name,
         table_name=table_name,
         column_name=column_name,

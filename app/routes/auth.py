@@ -17,8 +17,8 @@ from auth import (
     require_admin_role,
     require_viewer_role,
 )
-from config import ALLOW_BOOTSTRAP, API_KEY_DEFAULT_TTL_DAYS
-from extensions import AsyncSessionLocal
+from core.config import ALLOW_BOOTSTRAP, API_KEY_DEFAULT_TTL_DAYS
+from core.db import AsyncSessionLocal
 from models import ApiKey
 from response_models import (
     AccessTokenExchangeResponse,
