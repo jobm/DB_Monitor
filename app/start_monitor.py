@@ -33,6 +33,19 @@ _CONNECTOR_ALLOWED_FIELDS = {
 }
 
 
+def _default_manifest_schema_path() -> Path:
+    """Return the default connector manifest schema path."""
+    container_schema = Path("/connectors/sources.schema.json")
+    if container_schema.exists():
+        return container_schema
+
+    return (
+        Path(__file__).resolve().parents[1]
+        / "connectors"
+        / "sources.schema.json"
+    )
+
+
 def _default_manifest_path() -> Path:
     """Return the default connector manifest path.
 
@@ -48,11 +61,80 @@ def _default_manifest_path() -> Path:
 CONNECTOR_MANIFEST = Path(
     os.getenv("CONNECTOR_SOURCES_FILE", str(_default_manifest_path()))
 )
+CONNECTOR_MANIFEST_SCHEMA = Path(
+    os.getenv(
+        "CONNECTOR_SOURCES_SCHEMA_FILE",
+        str(_default_manifest_schema_path()),
+    )
+)
+
+
+def _manifest_schema_rules(
+    schema_path: Path,
+) -> tuple[set[str], set[str], str, str]:
+    """Load validation rules from the JSON schema file when available."""
+    try:
+        schema = json.loads(schema_path.read_text())
+    except FileNotFoundError:
+        return (
+            _CONNECTOR_REQUIRED_FIELDS,
+            _CONNECTOR_ALLOWED_FIELDS,
+            _SOURCE_NAME_PATTERN.pattern,
+            _TABLE_NAME_PATTERN.pattern,
+        )
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "Connector schema at %s is invalid JSON (%s). "
+            "Falling back to built-in manifest validation rules.",
+            schema_path,
+            exc,
+        )
+        return (
+            _CONNECTOR_REQUIRED_FIELDS,
+            _CONNECTOR_ALLOWED_FIELDS,
+            _SOURCE_NAME_PATTERN.pattern,
+            _TABLE_NAME_PATTERN.pattern,
+        )
+
+    connector_item = (
+        schema.get("properties", {})
+        .get("connectors", {})
+        .get("items", {})
+    )
+    schema_required = set(connector_item.get("required", []))
+    schema_allowed = set(connector_item.get("properties", {}).keys())
+    source_pattern = (
+        connector_item.get("properties", {})
+        .get("source_name", {})
+        .get("pattern", _SOURCE_NAME_PATTERN.pattern)
+    )
+    table_pattern = (
+        connector_item.get("properties", {})
+        .get("tables", {})
+        .get("items", {})
+        .get("pattern", _TABLE_NAME_PATTERN.pattern)
+    )
+
+    if not schema_required or not schema_allowed:
+        return (
+            _CONNECTOR_REQUIRED_FIELDS,
+            _CONNECTOR_ALLOWED_FIELDS,
+            _SOURCE_NAME_PATTERN.pattern,
+            _TABLE_NAME_PATTERN.pattern,
+        )
+
+    return schema_required, schema_allowed, source_pattern, table_pattern
 
 
 def _validate_manifest_payload(payload: object) -> list[str]:
     """Validate the source manifest payload against expected schema rules."""
     errors: list[str] = []
+    (
+        connector_required_fields,
+        connector_allowed_fields,
+        source_name_pattern,
+        table_name_pattern,
+    ) = _manifest_schema_rules(CONNECTOR_MANIFEST_SCHEMA)
 
     if not isinstance(payload, dict):
         return ["Manifest root must be a JSON object."]
@@ -75,23 +157,23 @@ def _validate_manifest_payload(payload: object) -> list[str]:
             errors.append(f"{path} must be an object.")
             continue
 
-        missing_fields = _CONNECTOR_REQUIRED_FIELDS - set(connector)
+        missing_fields = connector_required_fields - set(connector)
         if missing_fields:
             missing_text = ", ".join(sorted(missing_fields))
             errors.append(f"{path} missing required fields: {missing_text}")
 
-        unknown_fields = set(connector) - _CONNECTOR_ALLOWED_FIELDS
+        unknown_fields = set(connector) - connector_allowed_fields
         if unknown_fields:
             unknown_text = ", ".join(sorted(unknown_fields))
             errors.append(f"{path} has unknown fields: {unknown_text}")
 
         source_name = connector.get("source_name")
         source_name_valid = isinstance(source_name, str) and (
-            _SOURCE_NAME_PATTERN.fullmatch(source_name) is not None
+            re.fullmatch(source_name_pattern, source_name) is not None
         )
         if not source_name_valid:
             errors.append(
-                f"{path}.source_name must match ^[a-zA-Z0-9_-]+$"
+                f"{path}.source_name must match {source_name_pattern}"
             )
 
         database_hostname = connector.get("database_hostname")
@@ -106,12 +188,12 @@ def _validate_manifest_payload(payload: object) -> list[str]:
         else:
             for table_index, table_name in enumerate(tables):
                 table_name_valid = isinstance(table_name, str) and (
-                    _TABLE_NAME_PATTERN.fullmatch(table_name) is not None
+                    re.fullmatch(table_name_pattern, table_name) is not None
                 )
                 if not table_name_valid:
                     errors.append(
                         f"{path}.tables[{table_index}] must match "
-                        "^[a-zA-Z0-9_-]+\\.[a-zA-Z0-9_-]+$"
+                        f"{table_name_pattern}"
                     )
 
         enabled = connector.get("enabled")

@@ -115,6 +115,76 @@ def test_derived_topics_from_manifest_logs_warning_for_invalid_schema(
     assert "unknown fields" in caplog.text
 
 
+def test_manifest_validation_uses_schema_file_rules(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Schema-file required fields should drive runtime validation."""
+    custom_schema_path = tmp_path / "sources.schema.json"
+    custom_schema_path.write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "properties": {
+                    "connectors": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": [
+                                "source_name",
+                                "database_hostname",
+                                "tables",
+                                "region",
+                            ],
+                            "properties": {
+                                "source_name": {
+                                    "type": "string",
+                                    "pattern": "^[a-z]+$",
+                                },
+                                "database_hostname": {
+                                    "type": "string",
+                                },
+                                "tables": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string",
+                                        "pattern": "^[a-z]+\\.[a-z]+$",
+                                    },
+                                },
+                                "region": {
+                                    "type": "string",
+                                },
+                            },
+                        },
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(
+        start_monitor,
+        "CONNECTOR_MANIFEST_SCHEMA",
+        custom_schema_path,
+    )
+
+    errors = start_monitor._validate_manifest_payload(
+        {
+            "connectors": [
+                {
+                    "source_name": "OrderDB",
+                    "database_hostname": "postgres-order",
+                    "tables": ["public.orders"],
+                }
+            ]
+        }
+    )
+
+    assert any("missing required fields: region" in err for err in errors)
+    assert any(
+        "source_name must match ^[a-z]+$" in err for err in errors
+    )
+
+
 class _FakeServer:
     """Minimal server stub used to validate shutdown callbacks."""
 

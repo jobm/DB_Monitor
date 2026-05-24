@@ -141,6 +141,9 @@ These are not committed backlog items yet.
 	state. `/readyz` commit-gate behavior is now stable: filtered events and
 	DLQ-handled failures are acknowledged and checkpointed so
 	`last_commit_at` advances and readiness does not remain stuck at 503.
+- Startup manifest validation now derives required fields/allowed keys and
+	regex patterns from `connectors/sources.schema.json` so runtime checks stay
+	aligned with the documented source contract.
 - Phase 3 kickoff: local dev and migration commands now call package-native
 	entry modules from Makefile and README workflows.
 - Active runtime route/config modules now import canonical `db_monitor`
