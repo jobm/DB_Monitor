@@ -617,6 +617,36 @@ AUDIT_LOG_FLUSH_INTERVAL_SECONDS = float(
 APP_SHUTDOWN_TIMEOUT_SECONDS = float(
     os.getenv("APP_SHUTDOWN_TIMEOUT_SECONDS", "45")
 )
+RETENTION_CLEANUP_ENABLED = (
+    os.getenv("RETENTION_CLEANUP_ENABLED", "false").lower() == "true"
+)
+RETENTION_CLEANUP_INTERVAL_SECONDS = int(
+    os.getenv("RETENTION_CLEANUP_INTERVAL_SECONDS", "3600")
+)
+RETENTION_CLEANUP_BATCH_SIZE = int(
+    os.getenv("RETENTION_CLEANUP_BATCH_SIZE", "1000")
+)
+RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE = int(
+    os.getenv("RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE", "10")
+)
+RETENTION_ARCHIVE_BEFORE_DELETE = (
+    os.getenv("RETENTION_ARCHIVE_BEFORE_DELETE", "false").lower()
+    == "true"
+)
+RETENTION_ARCHIVE_DIR = os.getenv(
+    "RETENTION_ARCHIVE_DIR",
+    "retention-archive",
+)
+EVENT_RETENTION_DAYS = int(os.getenv("EVENT_RETENTION_DAYS", "30"))
+COLUMN_CHANGES_RETENTION_DAYS = int(
+    os.getenv("COLUMN_CHANGES_RETENTION_DAYS", "30")
+)
+DEAD_LETTER_RETENTION_DAYS = int(
+    os.getenv("DEAD_LETTER_RETENTION_DAYS", "30")
+)
+API_AUDIT_LOG_RETENTION_DAYS = int(
+    os.getenv("API_AUDIT_LOG_RETENTION_DAYS", "90")
+)
 
 if APP_ENV in {"production", "prod"}:
     if DB_POOL_SIZE < 1:
@@ -736,3 +766,33 @@ if RABBITMQ_PREFETCH_COUNT <= 0:
         "RABBITMQ_PREFETCH_COUNT must be greater than zero.",
         hint="Set a positive prefetch value such as 100.",
     )
+
+if RETENTION_CLEANUP_INTERVAL_SECONDS <= 0:
+    _config_error(
+        "RETENTION_CLEANUP_INTERVAL_SECONDS must be greater than zero.",
+        hint="Use a positive cleanup interval in seconds.",
+    )
+
+if RETENTION_CLEANUP_BATCH_SIZE <= 0:
+    _config_error(
+        "RETENTION_CLEANUP_BATCH_SIZE must be greater than zero.",
+        hint="Use a positive retention cleanup batch size.",
+    )
+
+if RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE <= 0:
+    _config_error(
+        "RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE must be greater than zero.",
+        hint="Use at least one batch per cleanup cycle.",
+    )
+
+for retention_days_value, retention_days_name in (
+    (EVENT_RETENTION_DAYS, "EVENT_RETENTION_DAYS"),
+    (COLUMN_CHANGES_RETENTION_DAYS, "COLUMN_CHANGES_RETENTION_DAYS"),
+    (DEAD_LETTER_RETENTION_DAYS, "DEAD_LETTER_RETENTION_DAYS"),
+    (API_AUDIT_LOG_RETENTION_DAYS, "API_AUDIT_LOG_RETENTION_DAYS"),
+):
+    if retention_days_value < 0:
+        _config_error(
+            f"{retention_days_name} cannot be negative.",
+            hint="Use 0 to disable cleanup for one table or a positive integer.",
+        )

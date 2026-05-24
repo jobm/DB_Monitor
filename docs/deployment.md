@@ -109,6 +109,16 @@ authoritative variable list and naming.
 curl http://localhost:8000/readyz
 ```
 
+5. Enable and validate retention cleanup policy.
+
+Use the retention settings in `docs/configuration.md` to define cleanup
+windows and optional archival. For production-like deployments:
+
+- keep `RETENTION_CLEANUP_ENABLED=true`
+- set explicit per-table retention windows
+- if `RETENTION_ARCHIVE_BEFORE_DELETE=true`, mount
+	`RETENTION_ARCHIVE_DIR` to durable storage
+
 ## 4. Post-Deploy Validation
 
 Recommended order:

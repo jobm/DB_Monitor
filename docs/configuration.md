@@ -235,6 +235,42 @@ fanout.
 | `AUDIT_LOG_FLUSH_INTERVAL_SECONDS` | Audit flush cadence | `1.0` |
 | `APP_SHUTDOWN_TIMEOUT_SECONDS` | Graceful shutdown timeout | `45` |
 
+## Retention And Archival Settings
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `RETENTION_CLEANUP_ENABLED` | Enable background retention cleanup task | `false` |
+| `RETENTION_CLEANUP_INTERVAL_SECONDS` | Seconds between cleanup cycles | `3600` |
+| `RETENTION_CLEANUP_BATCH_SIZE` | Rows deleted per cleanup batch | `1000` |
+| `RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE` | Max batches per table in one cycle | `10` |
+| `RETENTION_ARCHIVE_BEFORE_DELETE` | Archive rows to JSONL before deleting | `false` |
+| `RETENTION_ARCHIVE_DIR` | Directory for JSONL archive files | `retention-archive` |
+| `EVENT_RETENTION_DAYS` | Retention window for `events` rows | `30` |
+| `COLUMN_CHANGES_RETENTION_DAYS` | Retention window for `column_changes` rows | `30` |
+| `DEAD_LETTER_RETENTION_DAYS` | Retention window for `dead_letter_events` rows | `30` |
+| `API_AUDIT_LOG_RETENTION_DAYS` | Retention window for `api_audit_logs` rows | `90` |
+
+Example production-like configuration:
+
+```env
+RETENTION_CLEANUP_ENABLED=true
+RETENTION_CLEANUP_INTERVAL_SECONDS=1800
+RETENTION_CLEANUP_BATCH_SIZE=1000
+RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE=20
+RETENTION_ARCHIVE_BEFORE_DELETE=true
+RETENTION_ARCHIVE_DIR=/var/lib/db-monitor/retention-archive
+EVENT_RETENTION_DAYS=30
+COLUMN_CHANGES_RETENTION_DAYS=60
+DEAD_LETTER_RETENTION_DAYS=30
+API_AUDIT_LOG_RETENTION_DAYS=90
+```
+
+Notes:
+
+- Set any `*_RETENTION_DAYS` value to `0` to disable cleanup for that table.
+- Archive output is written as JSONL files grouped by table and UTC date.
+- Mount `RETENTION_ARCHIVE_DIR` to durable storage when archival is enabled.
+
 ## Notes
 
 - In production, the app rejects the default Postgres URL and insecure default

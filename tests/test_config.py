@@ -359,3 +359,58 @@ def test_config_defaults_to_rabbitmq_cluster_when_requested(
             "dlq_destination": config.RABBITMQ_DLQ_QUEUE,
         }
     ]
+
+
+def test_config_loads_retention_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retention and archival settings should parse from environment."""
+    monkeypatch.setenv("RETENTION_CLEANUP_ENABLED", "true")
+    monkeypatch.setenv("RETENTION_CLEANUP_INTERVAL_SECONDS", "900")
+    monkeypatch.setenv("RETENTION_CLEANUP_BATCH_SIZE", "250")
+    monkeypatch.setenv("RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE", "7")
+    monkeypatch.setenv("RETENTION_ARCHIVE_BEFORE_DELETE", "true")
+    monkeypatch.setenv("RETENTION_ARCHIVE_DIR", "/tmp/db-monitor-archive")
+    monkeypatch.setenv("EVENT_RETENTION_DAYS", "14")
+    monkeypatch.setenv("COLUMN_CHANGES_RETENTION_DAYS", "21")
+    monkeypatch.setenv("DEAD_LETTER_RETENTION_DAYS", "45")
+    monkeypatch.setenv("API_AUDIT_LOG_RETENTION_DAYS", "120")
+
+    config = _load_config_module("config_retention_controls")
+
+    assert config.RETENTION_CLEANUP_ENABLED is True
+    assert config.RETENTION_CLEANUP_INTERVAL_SECONDS == 900
+    assert config.RETENTION_CLEANUP_BATCH_SIZE == 250
+    assert config.RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE == 7
+    assert config.RETENTION_ARCHIVE_BEFORE_DELETE is True
+    assert config.RETENTION_ARCHIVE_DIR == "/tmp/db-monitor-archive"
+    assert config.EVENT_RETENTION_DAYS == 14
+    assert config.COLUMN_CHANGES_RETENTION_DAYS == 21
+    assert config.DEAD_LETTER_RETENTION_DAYS == 45
+    assert config.API_AUDIT_LOG_RETENTION_DAYS == 120
+
+
+def test_config_rejects_non_positive_retention_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retention interval must be positive when cleanup is configured."""
+    monkeypatch.setenv("RETENTION_CLEANUP_INTERVAL_SECONDS", "0")
+
+    with pytest.raises(
+        ValueError,
+        match="RETENTION_CLEANUP_INTERVAL_SECONDS must be greater than zero",
+    ):
+        _load_config_module("config_invalid_retention_interval")
+
+
+def test_config_rejects_negative_event_retention_days(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retention day windows cannot be negative."""
+    monkeypatch.setenv("EVENT_RETENTION_DAYS", "-1")
+
+    with pytest.raises(
+        ValueError,
+        match="EVENT_RETENTION_DAYS cannot be negative",
+    ):
+        _load_config_module("config_invalid_event_retention_days")

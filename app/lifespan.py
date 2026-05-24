@@ -21,6 +21,8 @@ async def managed_lifespan(
     ws_manager: Any,
     broker_clusters: list[dict[str, object]],
     consumer_task: Callable[..., Awaitable[None]],
+    retention_cleanup_task: Callable[[], Awaitable[None]],
+    retention_cleanup_enabled: bool,
     dlq_enabled: bool,
     batch_enabled: bool,
     batch_size: int,
@@ -76,6 +78,13 @@ async def managed_lifespan(
                 name=f"kafka_consumer_{cluster_name}",
             )
             lifecycle_manager.register_task(task)
+
+        if retention_cleanup_enabled:
+            retention_task = asyncio.create_task(
+                retention_cleanup_task(),
+                name="retention_cleanup",
+            )
+            lifecycle_manager.register_task(retention_task)
 
         logger.info(
             "Consumer tasks started",

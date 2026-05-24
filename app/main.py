@@ -21,6 +21,7 @@ from db_monitor.core.config import (
     OTEL_EXPORTER_OTLP_HEADERS,
     OTEL_SERVICE_NAME,
     OTEL_TRACING_ENABLED,
+    RETENTION_CLEANUP_ENABLED,
 )
 from db_monitor.core.db import engine
 from db_monitor.core.lifecycle import lifecycle_manager
@@ -31,6 +32,7 @@ from db_monitor.metrics import (
     api_request_duration_seconds,
     failed_auth_attempts_total,
 )
+from db_monitor.retention import retention_cleanup_task
 from db_monitor.tracing import current_trace_context, initialize_tracing
 from db_monitor.ws_manager import ws_manager
 
@@ -101,6 +103,8 @@ async def lifespan_manager(app: FastAPI):
         ws_manager=ws_manager,
         broker_clusters=BROKER_CLUSTERS,
         consumer_task=consumer_task,
+        retention_cleanup_task=retention_cleanup_task,
+        retention_cleanup_enabled=RETENTION_CLEANUP_ENABLED,
         dlq_enabled=DLQ_ENABLED,
         batch_enabled=BATCH_ENABLED,
         batch_size=BATCH_SIZE,

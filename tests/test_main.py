@@ -414,6 +414,78 @@ async def test_lifespan_manager_passes_rabbitmq_cluster_args(
     ]
 
 
+@pytest.mark.anyio
+async def test_lifespan_manager_starts_retention_task_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """App startup should start the retention task when configured on."""
+    retention_started: list[bool] = []
+
+    async def fake_startup() -> None:
+        return None
+
+    async def fake_shutdown() -> None:
+        return None
+
+    def fake_setup_signal_handlers(_loop) -> None:
+        return None
+
+    def fake_register_task(_task) -> None:
+        return None
+
+    async def fake_audit_log_run() -> None:
+        return None
+
+    async def fake_start_schema_cache_listener():
+        return None
+
+    async def fake_consumer_task(**_kwargs):
+        return None
+
+    async def fake_start_backplane_listener():
+        return None
+
+    async def fake_retention_cleanup_task() -> None:
+        retention_started.append(True)
+        return None
+
+    monkeypatch.setattr(main.lifecycle_manager, "startup", fake_startup)
+    monkeypatch.setattr(main.lifecycle_manager, "shutdown", fake_shutdown)
+    monkeypatch.setattr(
+        main.lifecycle_manager,
+        "setup_signal_handlers",
+        fake_setup_signal_handlers,
+    )
+    monkeypatch.setattr(
+        main.lifecycle_manager,
+        "register_task",
+        fake_register_task,
+    )
+    monkeypatch.setattr(main, "consumer_task", fake_consumer_task)
+    monkeypatch.setattr(main.audit_log_writer, "run", fake_audit_log_run)
+    monkeypatch.setattr(
+        main.schema_cache_backplane,
+        "start_listener",
+        fake_start_schema_cache_listener,
+    )
+    monkeypatch.setattr(
+        main.ws_manager,
+        "start_backplane_listener",
+        fake_start_backplane_listener,
+    )
+    monkeypatch.setattr(
+        main,
+        "retention_cleanup_task",
+        fake_retention_cleanup_task,
+    )
+    monkeypatch.setattr(main, "RETENTION_CLEANUP_ENABLED", True)
+
+    async with main.lifespan_manager(main.app):
+        await asyncio.sleep(0)
+
+    assert retention_started == [True]
+
+
 def test_configure_tracing_skips_when_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
