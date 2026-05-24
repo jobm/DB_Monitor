@@ -241,38 +241,10 @@ Release automation is driven by GitHub Actions:
 3. The `Release Drafter` workflow continuously updates a draft changelog-based
    release note on `main`.
 
-Run the API locally:
-
-```bash
-cd app
-PYTHONPATH=../src:. uv run python -m db_monitor.start_monitor
-```
-
-Apply tracked migrations locally before startup when you want an explicit schema
-step:
-
-```bash
-make monitor-migrate
-```
-
-Validate that the database is already up to date without applying changes:
-
-```bash
-cd app
-PYTHONPATH=../src:. uv run python -m db_monitor.cli migrate validate
-```
-
-Run connector registration locally against the Docker Compose stack:
-
-```bash
-./register-connectors.sh
-```
-
-Preview rendered connector payloads without calling Kafka Connect:
-
-```bash
-DRY_RUN=true ./register-connectors.sh
-```
+For operational command flows (sandbox launch, local app run, migrations,
+bootstrap, and validation), use `docs/deployment.md` as the source of truth.
+Configuration details for those commands are documented in
+`docs/configuration.md`.
 
 Example-stack utilities live under `examples/sandbox/`. Compatibility wrappers
 remain in `scripts/`, but new automation should target `examples/sandbox/`.
@@ -294,34 +266,9 @@ make monitor-test-scale
 make monitor-tui
 ```
 
-The Textual dashboard now includes an admin console for admin credentials.
-After connecting with an admin API key, press `a` from the main dashboard to
-inspect readiness, API key inventory, consumer checkpoints, and DLQ entries.
-From the same console you can create viewer or admin keys, rotate or revoke a
-selected key, and replay either a single selected DLQ record or the current
-batch from inside the TUI.
-
-`monitor-test-integration` expects the stack to already be running on `localhost:8000`.
-It now validates the admin checkpoint and DLQ replay recovery endpoints in
-addition to the core viewer surfaces.
-GitHub Actions now runs both the unit suite and a live integration job that
-starts the infrastructure stack, launches the app locally against it, and runs
-the same integration script automatically on pushes and pull requests. That
-workflow now finishes with a smoke-load gate that exercises the mixed
-`events,stats,tables,checkpoints` profile and fails if it sees request errors,
-sub-100% success rate, or a p95 above 2000 ms.
-
-`monitor-test-smoke` expects `DB_MONITOR_ADMIN_API_KEY` to be set unless the
-stack is still in first-run bootstrap mode.
-
-`monitor-test-scale` launches two local FastAPI replicas on separate ports,
-subscribes to a websocket on one replica, triggers DLQ replay on the other,
-and fails unless the event crosses replicas through the Postgres websocket
-backplane. When `DB_MONITOR_ADMIN_API_KEY` is not set, the script can mint and
-revoke a short-lived admin key directly in the local monitor database for the
-duration of the validation. Use it after infrastructure or websocket changes
-when you need to confirm that horizontal scaling still preserves live event
-delivery.
+The Textual dashboard includes an admin console for credentials, readiness,
+API-key lifecycle, checkpoints, and DLQ replay. Launch it with
+`make monitor-tui`.
 
 Operational recovery and live-validation steps are documented in
 `docs/runbooks/recovery-and-validation.md`.
