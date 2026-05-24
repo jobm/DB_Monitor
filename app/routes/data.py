@@ -9,7 +9,7 @@ from db_monitor.core.db import AsyncSessionLocal
 from db_monitor.ingestion.changes import ChangeProcessor
 from db_monitor.ingestion.schema import SchemaDiscovery
 from db_monitor.repositories.events import EventQueryFilters, EventsRepository
-from response_models import (
+from core.responses import (
     ChangesResponse,
     EventsResponse,
     PointInTimeValueResponse,

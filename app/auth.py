@@ -7,7 +7,7 @@ from typing import Optional
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from config import (
+from core.config import (
     ACCESS_TOKEN_TTL_MINUTES,
     API_KEY_DEFAULT_TTL_DAYS,
     JWT_ALGORITHM,
@@ -15,12 +15,12 @@ from config import (
     JWT_SECRET_NEXT,
     WS_SESSION_TOKEN_TTL_SECONDS,
 )
-from extensions import AsyncSessionLocal
+from core.db import AsyncSessionLocal
 from fastapi import Depends, HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.security.api_key import APIKeyHeader
 from jwt import InvalidTokenError
-from models import ApiKey
+from core.models import ApiKey
 from sqlalchemy import select
 
 password_hasher = PasswordHasher()

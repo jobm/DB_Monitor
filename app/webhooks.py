@@ -10,7 +10,7 @@ import logging
 import time
 import urllib.request
 
-from config import (
+from core.config import (
     WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS,
     WEBHOOK_CIRCUIT_BREAKER_THRESHOLD,
     WEBHOOK_MAX_RETRIES,

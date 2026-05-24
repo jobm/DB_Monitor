@@ -19,8 +19,8 @@ from db_monitor.auth import (
 )
 from db_monitor.core.config import ALLOW_BOOTSTRAP, API_KEY_DEFAULT_TTL_DAYS
 from db_monitor.core.db import AsyncSessionLocal
-from models import ApiKey
-from response_models import (
+from core.models import ApiKey
+from core.responses import (
     AccessTokenExchangeResponse,
     WebSocketTokenExchangeResponse,
 )

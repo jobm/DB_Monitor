@@ -139,6 +139,10 @@ These are not committed backlog items yet.
 - Added thin compatibility facades under `app/api`, `app/core`, and
 	`app/ingestion` so the legacy app runtime has a clearer modular package
 	shape instead of empty namespace folders.
+- Migrated additional legacy imports to package facades by routing
+	`app/routes/*` and selected runtime modules (`auth`, `audit_log`,
+	`message_brokers`, `webhooks`) through `core.*` wrappers instead of
+	direct flat-module imports.
 - End-to-end compose startup validation now runs with package-native startup
 	entry commands (`python -m db_monitor...`) and reaches connected consumer
 	state. `/readyz` commit-gate behavior is now stable: filtered events and

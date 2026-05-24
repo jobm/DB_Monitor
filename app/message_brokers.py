@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer, TopicPartition
 
-from config import KAFKA_SECURITY_PROTOCOL, KAFKA_SSL_CONTEXT
+from core.config import KAFKA_SECURITY_PROTOCOL, KAFKA_SSL_CONTEXT
 
 logger = logging.getLogger(__name__)
 

@@ -6,18 +6,18 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from config import (
+from core.config import (
     AUDIT_LOG_BATCH_SIZE,
     AUDIT_LOG_FLUSH_INTERVAL_SECONDS,
     AUDIT_LOG_QUEUE_MAXSIZE,
 )
-from extensions import AsyncSessionLocal
+from core.db import AsyncSessionLocal
+from core.models import ApiAuditLog
 from metrics import (
     audit_log_flush_duration_seconds,
     audit_log_queue_size,
     audit_log_records_dropped_total,
 )
-from models import ApiAuditLog
 
 logger = logging.getLogger(__name__)
 

@@ -21,8 +21,8 @@ from db_monitor.ingestion.consumer import (
     replay_dead_letter_event_record,
     replay_dead_letter_event_records,
 )
-from models import ApiKey
-from response_models import AppInfoResponse, HealthResponse, ReadinessResponse
+from core.models import ApiKey
+from core.responses import AppInfoResponse, HealthResponse, ReadinessResponse
 from .utils import timestamp_age_seconds
 
 router = APIRouter()
