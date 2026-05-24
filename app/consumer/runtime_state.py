@@ -20,7 +20,7 @@ from metrics import (
     consumer_lag,
     consumer_last_successful_commit_timestamp_seconds,
 )
-from models import KafkaEvent
+from core.models import KafkaEvent
 
 logger = logging.getLogger(__name__)
 

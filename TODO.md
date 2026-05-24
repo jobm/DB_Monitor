@@ -113,6 +113,16 @@ These are not committed backlog items yet.
 	`last_commit_at` remains null under sandbox startup, causing persistent
 	`/readyz` 503 despite connected consumer and healthy DB/lifecycle.
 
+- [x] Reconcile `TODO.md` migration notes with current facade state so
+	completed-history comments do not claim removed modules that are present.
+- [x] Resolve canonical route namespace ambiguity in `src/db_monitor`
+	(`routes.py` module vs `routes/` package) by standardizing on one shape.
+- [x] Remove or repurpose empty `app/db_monitor/` placeholder directory.
+- [x] Finish remaining flat-import cleanup in `app/extensions.py`,
+	`app/core/config.py`, and `app/consumer/runtime_state.py`.
+- [x] Fix outstanding lint diagnostic in
+	`tests/test_package_namespace.py` (PEP8 line length).
+
 #### In Progress Notes
 
 - Added initial root and app script metadata for `db_monitor` entrypoints.
@@ -160,12 +170,13 @@ These are not committed backlog items yet.
 	entry modules from Makefile and README workflows.
 - Active runtime route/config modules now import canonical `db_monitor`
 	namespaces directly instead of app/core shim paths.
-- Removed obsolete `app/api` and `app/core` compatibility shim modules after
-	runtime rewiring; active tests pass without those shim packages.
+- Added maintained `app/api` and `app/core` compatibility facades to keep the
+	legacy runtime import surface modular while canonical code lives in
+	`src/db_monitor`.
 - Consolidated packaging metadata into root `pyproject.toml` and root
 	`uv.lock`; removed `app/pyproject.toml` and `app/uv.lock` duplicates.
-- Removed obsolete `app/ingestion` wrapper modules by pointing canonical
-	`src/db_monitor/ingestion/*` modules directly at runtime modules.
+- Added maintained `app/ingestion` compatibility facades so legacy runtime
+	modules map cleanly onto package-shaped ingestion namespaces.
 - Removed `app/_namespace_bridge.py` and switched `app/main.py` to direct
 	canonical `db_monitor.*` imports with no dynamic bridge bootstrap.
 - Broader core-marker validation now passes from `tests/` (`132 passed`).

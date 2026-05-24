@@ -1,6 +1,6 @@
 """Database engine, session, and DB initialization for DB Monitor Server."""
 
-from config import (
+from core.config import (
     DB_MAX_OVERFLOW,
     DB_POOL_PRE_PING,
     DB_POOL_RECYCLE_SECONDS,

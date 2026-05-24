@@ -5,7 +5,7 @@ import db_monitor.core.db as core_db
 
 
 def test_core_config_namespace_proxy_exposes_runtime_settings() -> None:
-    """Canonical core config namespace should expose legacy runtime settings."""
+    """Canonical core config namespace should expose runtime settings."""
     assert isinstance(core_config.APP_ENV, str)
     assert core_config.APP_ENV != ""
 
