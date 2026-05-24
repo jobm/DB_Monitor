@@ -118,7 +118,7 @@ The following areas currently encode demo assumptions and will need review:
 | `docs/architecture.md` | Lists demo databases as runtime components | Describe generic source systems and move demo topology to example docs |
 | `connectors/sources.json` | Checked-in demo manifest is treated as canonical | Treat as example manifest and allow user-owned manifests |
 | `docker-compose.yml` | Core and demo infrastructure are mixed together | Separate core services from example/demo overlays |
-| `init/*.sql` | Demo schema seeds live at top level | Move under example assets or clearly label as demo fixtures |
+| `examples/sandbox/init/*.sql` | Demo schema seeds live under examples | Keep them labeled as demo fixtures and separate from core runtime docs |
 | `scripts/*.py` | Some scripts assume the example topology | Split into product utilities versus example/demo tooling |
 | integration tests | Live flows rely on demo sources | Keep demo-backed tests, but classify them as example-stack integration coverage |
 
@@ -392,7 +392,7 @@ Expected files:
 
 - `docker-compose.yml`
 - example compose files or profiles
-- `init/` and `scripts/` assets
+- `examples/sandbox/init/` and `scripts/` assets
 
 ### Slice D: Test and CI split
 

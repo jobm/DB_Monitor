@@ -92,10 +92,8 @@ class KafkaEventLegacy(Base):
 class KafkaEvent(Base):
     """Structured event storage.
 
-    Implements High Priority TODO #1:
-    - event_type, event_time, user_id, service_name
-    - parsed JSON stored in event_data
-    - indexes for common query patterns
+    Stores structured CDC fields, parsed event JSON, and indexes
+    for common query patterns.
     """
 
     __tablename__ = "events"
