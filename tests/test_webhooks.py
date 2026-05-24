@@ -98,6 +98,72 @@ async def test_webhook_notifier_retries_until_success(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
+async def test_webhook_notifier_returns_failures_after_retries_exhausted(
+    monkeypatch,
+) -> None:
+    def fake_post_payload(self, url: str, payload_body: bytes) -> None:
+        del self
+        del url
+        del payload_body
+        raise RuntimeError("permanent failure")
+
+    monkeypatch.setattr(WebhookNotifier, "_post_payload", fake_post_payload)
+    monkeypatch.setattr(webhooks.time, "sleep", lambda _delay: None)
+
+    notifier = WebhookNotifier(
+        urls=["https://hooks.example/fail"],
+        timeout_seconds=5.0,
+        max_retries=1,
+        retry_backoff_seconds=0.01,
+        circuit_breaker_threshold=5,
+        circuit_breaker_recovery_seconds=30.0,
+    )
+
+    failures = await notifier.send_message({"type": "new_event"})
+
+    assert failures == [
+        {
+            "url": "https://hooks.example/fail",
+            "error": "permanent failure",
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_webhook_notifier_returns_short_circuit_failure(
+    monkeypatch,
+) -> None:
+    def fake_circuit_is_open(self, url: str) -> bool:
+        del self
+        del url
+        return True
+
+    monkeypatch.setattr(
+        WebhookNotifier,
+        "_circuit_is_open",
+        fake_circuit_is_open,
+    )
+
+    notifier = WebhookNotifier(
+        urls=["https://hooks.example/circuit"],
+        timeout_seconds=5.0,
+        max_retries=0,
+        retry_backoff_seconds=0.01,
+        circuit_breaker_threshold=1,
+        circuit_breaker_recovery_seconds=30.0,
+    )
+
+    failures = await notifier.send_message({"type": "new_event"})
+
+    assert failures == [
+        {
+            "url": "https://hooks.example/circuit",
+            "error": "circuit open",
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_webhook_notifier_opens_circuit_after_repeated_failures(
     monkeypatch,
 ) -> None:

@@ -1,5 +1,6 @@
 # Broker consumer logic for DB Monitor Server
 import asyncio
+import json
 import logging
 import random
 from collections.abc import Awaitable, Callable
@@ -1210,9 +1211,35 @@ async def _broadcast_event(event: KafkaEvent) -> None:
         logger.warning("Failed to broadcast event via WebSocket: %s", e)
 
     try:
-        await webhook_notifier.send_message(payload)
+        failed_deliveries = await webhook_notifier.send_message(payload)
     except Exception as exc:
         logger.warning("Failed to deliver event via webhook: %s", exc)
+        return
+
+    if not failed_deliveries:
+        return
+
+    raw_payload = event.raw_payload or json.dumps(
+        payload,
+        separators=(",", ":"),
+    )
+    for delivery in failed_deliveries:
+        try:
+            await _persist_dead_letter_event(
+                event,
+                raw_payload,
+                (
+                    "Webhook delivery to "
+                    f"{delivery['url']} failed: {delivery['error']}"
+                ),
+                broker_kind="webhook",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist webhook DLQ record for %s: %s",
+                delivery.get("url"),
+                exc,
+            )
 
 
 async def _process_single_event(

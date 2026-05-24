@@ -745,6 +745,83 @@ async def test_broadcast_event_delivers_webhooks(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_broadcast_event_persists_webhook_failures_to_dlq(
+    monkeypatch,
+):
+    event = KafkaEvent(
+        id=88,
+        event_type="UPDATE",
+        event_time=datetime.now(timezone.utc),
+        user_id="user-1",
+        service_name="orderdb",
+        kafka_topic="orders.events",
+        kafka_partition=0,
+        kafka_offset=10,
+        source_table_id=4,
+        row_identity={"id": 5},
+        event_data={"payload": {"after": {"id": 5}}},
+        raw_payload='{"payload":{"after":{"id":5}}}',
+        operation="UPDATE",
+    )
+    persisted: list[tuple[KafkaEvent, str, str, str]] = []
+
+    async def fake_broadcast(message, event_id=None):
+        del message
+        del event_id
+
+    class FakeWebhookNotifier:
+        async def send_message(self, payload):
+            del payload
+            return [
+                {
+                    "url": "https://hooks.example/fail",
+                    "error": "permanent failure",
+                }
+            ]
+
+    async def fake_persist_dead_letter_event(
+        event_obj,
+        raw_payload,
+        error,
+        broker_kind="kafka",
+        session_factory=None,
+    ):
+        del session_factory
+        persisted.append((event_obj, raw_payload, error, broker_kind))
+        return 12
+
+    monkeypatch.setattr(
+        consumer_service.ws_manager,
+        "broadcast",
+        fake_broadcast,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "webhook_notifier",
+        FakeWebhookNotifier(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_persist_dead_letter_event",
+        fake_persist_dead_letter_event,
+    )
+
+    await consumer_service._broadcast_event(event)
+
+    assert persisted == [
+        (
+            event,
+            event.raw_payload,
+            (
+                "Webhook delivery to https://hooks.example/fail failed: "
+                "permanent failure"
+            ),
+            "webhook",
+        )
+    ]
+
+
+@pytest.mark.anyio
 async def test_consumer_task_assigns_explicit_topic_partitions(monkeypatch):
     fake_consumer = None
 

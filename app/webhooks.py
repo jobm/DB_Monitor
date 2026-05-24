@@ -56,15 +56,18 @@ class WebhookNotifier:
         for url in self._urls:
             webhook_circuit_breaker_state.labels(url=url).set(0)
 
-    async def send_message(self, payload: dict[str, object]) -> None:
+    async def send_message(
+        self,
+        payload: dict[str, object],
+    ) -> list[dict[str, str]]:
         """Deliver one event payload to all configured webhook targets."""
         if not self._urls:
-            return
+            return []
 
         payload_body = json.dumps(payload, separators=(",", ":")).encode(
             "utf-8"
         )
-        await asyncio.gather(
+        delivery_results = await asyncio.gather(
             *[
                 asyncio.to_thread(
                     self._deliver_with_retries,
@@ -72,9 +75,9 @@ class WebhookNotifier:
                     payload_body,
                 )
                 for url in self._urls
-            ],
-            return_exceptions=True,
+            ]
         )
+        return [result for result in delivery_results if result is not None]
 
     def _circuit_is_open(self, url: str) -> bool:
         opened_at = self._circuit_opened_at.get(url)
@@ -100,7 +103,11 @@ class WebhookNotifier:
             self._circuit_opened_at[url] = time.monotonic()
             webhook_circuit_breaker_state.labels(url=url).set(1)
 
-    def _deliver_with_retries(self, url: str, payload_body: bytes) -> None:
+    def _deliver_with_retries(
+        self,
+        url: str,
+        payload_body: bytes,
+    ) -> dict[str, str] | None:
         if self._circuit_is_open(url):
             webhook_delivery_attempts_total.labels(
                 url=url,
@@ -110,7 +117,10 @@ class WebhookNotifier:
                 "Webhook delivery to %s skipped because the circuit is open",
                 url,
             )
-            return
+            return {
+                "url": url,
+                "error": "circuit open",
+            }
 
         last_exc: Exception | None = None
         for attempt in range(self._max_retries + 1):
@@ -125,7 +135,7 @@ class WebhookNotifier:
                     url=url,
                     result="success",
                 ).inc()
-                return
+                return None
             except Exception as exc:
                 last_exc = exc
                 self._record_failure(url)
@@ -143,6 +153,10 @@ class WebhookNotifier:
             self._max_retries + 1,
             last_exc,
         )
+        return {
+            "url": url,
+            "error": str(last_exc) if last_exc is not None else "unknown",
+        }
 
     def _build_headers(self, payload_body: bytes) -> dict[str, str]:
         headers = {
