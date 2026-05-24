@@ -1,0 +1,15 @@
+"""Compatibility wrapper for broker adapters."""
+
+from __future__ import annotations
+
+import message_brokers as _message_brokers
+
+BrokerMessage = _message_brokers.BrokerMessage
+DeadLetterPublisher = _message_brokers.DeadLetterPublisher
+KafkaConsumerAdapter = _message_brokers.KafkaConsumerAdapter
+KafkaDeadLetterPublisher = _message_brokers.KafkaDeadLetterPublisher
+MessageConsumerAdapter = _message_brokers.MessageConsumerAdapter
+RabbitMQConsumerAdapter = _message_brokers.RabbitMQConsumerAdapter
+RabbitMQDeadLetterPublisher = _message_brokers.RabbitMQDeadLetterPublisher
+build_dead_letter_publisher = _message_brokers.build_dead_letter_publisher
+build_message_consumer = _message_brokers.build_message_consumer

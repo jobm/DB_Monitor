@@ -136,6 +136,9 @@ These are not committed backlog items yet.
 - Added package-level namespace coverage in
 	`tests/test_package_phase2_surfaces.py` for auth, ingestion,
 	repositories, and routing module imports.
+- Added thin compatibility facades under `app/api`, `app/core`, and
+	`app/ingestion` so the legacy app runtime has a clearer modular package
+	shape instead of empty namespace folders.
 - End-to-end compose startup validation now runs with package-native startup
 	entry commands (`python -m db_monitor...`) and reaches connected consumer
 	state. `/readyz` commit-gate behavior is now stable: filtered events and
