@@ -729,3 +729,38 @@ async def test_replay_dead_letter_event_returns_404_when_missing(monkeypatch):
 
     assert exc_info.value.status_code == 404
     assert "GET /admin/dlq" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_get_slo_policy_returns_tenant_cohorts(monkeypatch):
+    monkeypatch.setattr(routes_ops, "SLO_ROLLING_WINDOW_DAYS", 30)
+    monkeypatch.setattr(
+        routes_ops,
+        "TENANT_COHORT_SLO_POLICIES",
+        [
+            {
+                "name": "small",
+                "max_sources": 10,
+                "availability_target": 99.9,
+                "error_budget_percent": 0.1,
+                "max_commit_age_seconds": 180,
+                "max_consumer_lag": 500,
+                "max_dlq_messages": 0,
+            },
+            {
+                "name": "medium",
+                "max_sources": 50,
+                "availability_target": 99.5,
+                "error_budget_percent": 0.5,
+                "max_commit_age_seconds": 300,
+                "max_consumer_lag": 1000,
+                "max_dlq_messages": 5,
+            },
+        ],
+    )
+
+    response = await routes_ops.get_slo_policy(admin_api_key=None)
+
+    assert response["window_days"] == 30
+    assert response["count"] == 2
+    assert response["cohorts"][0]["name"] == "small"

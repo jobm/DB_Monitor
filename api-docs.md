@@ -397,6 +397,31 @@ Response shape:
 Replays a persisted DLQ record through the normal ingestion path. The response
 status is typically `replayed` or `duplicate`.
 
+### `GET /admin/slo-policy`
+
+Returns the published tenant-cohort SLO and error-budget policy for operations
+and onboarding governance.
+
+Response shape:
+
+```json
+{
+  "window_days": 30,
+  "cohorts": [
+    {
+      "name": "small",
+      "max_sources": 10,
+      "availability_target": 99.9,
+      "error_budget_percent": 0.1,
+      "max_commit_age_seconds": 180,
+      "max_consumer_lag": 500,
+      "max_dlq_messages": 0
+    }
+  ],
+  "count": 1
+}
+```
+
 ## WebSocket endpoint
 
 ### `GET /ws/events?session_token=<token>`

@@ -481,3 +481,72 @@ def test_config_loads_ingestion_bulk_write_flag(
     config = _load_config_module("config_ingestion_bulk_write")
 
     assert config.INGESTION_BULK_WRITE_ENABLED is False
+
+
+def test_config_loads_tenant_cohort_slo_policies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tenant cohort SLO policies should parse from JSON config."""
+    monkeypatch.setenv("SLO_ROLLING_WINDOW_DAYS", "28")
+    monkeypatch.setenv(
+        "TENANT_COHORT_SLO_POLICIES",
+        (
+            "["
+            '{"name":"small","max_sources":10,'
+            '"availability_target":99.9,"error_budget_percent":0.1,'
+            '"max_commit_age_seconds":180,"max_consumer_lag":500,'
+            '"max_dlq_messages":0},'
+            '{"name":"large","max_sources":100,'
+            '"availability_target":99.0,"error_budget_percent":1.0,'
+            '"max_commit_age_seconds":600,"max_consumer_lag":5000,'
+            '"max_dlq_messages":20}'
+            "]"
+        ),
+    )
+
+    config = _load_config_module("config_slo_policy")
+
+    assert config.SLO_ROLLING_WINDOW_DAYS == 28
+    assert config.TENANT_COHORT_SLO_POLICIES == [
+        {
+            "name": "small",
+            "max_sources": 10,
+            "availability_target": 99.9,
+            "error_budget_percent": 0.1,
+            "max_commit_age_seconds": 180,
+            "max_consumer_lag": 500,
+            "max_dlq_messages": 0,
+        },
+        {
+            "name": "large",
+            "max_sources": 100,
+            "availability_target": 99.0,
+            "error_budget_percent": 1.0,
+            "max_commit_age_seconds": 600,
+            "max_consumer_lag": 5000,
+            "max_dlq_messages": 20,
+        },
+    ]
+
+
+def test_config_rejects_invalid_slo_availability_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SLO availability target must remain within percentage bounds."""
+    monkeypatch.setenv(
+        "TENANT_COHORT_SLO_POLICIES",
+        (
+            "["
+            '{"name":"small","max_sources":10,'
+            '"availability_target":120.0,"error_budget_percent":0.1,'
+            '"max_commit_age_seconds":180,"max_consumer_lag":500,'
+            '"max_dlq_messages":0}'
+            "]"
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"availability_target must be in \(0, 100\]",
+    ):
+        _load_config_module("config_invalid_slo_availability")

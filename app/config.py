@@ -714,12 +714,151 @@ def _load_ingestion_quota_overrides(
     return normalized
 
 
+def _default_tenant_cohort_slo_policies() -> list[dict[str, object]]:
+    """Return default SLO policy tiers for tenant cohorts."""
+    return [
+        {
+            "name": "small",
+            "max_sources": 10,
+            "availability_target": 99.9,
+            "error_budget_percent": 0.1,
+            "max_commit_age_seconds": 180,
+            "max_consumer_lag": 500,
+            "max_dlq_messages": 0,
+        },
+        {
+            "name": "medium",
+            "max_sources": 50,
+            "availability_target": 99.5,
+            "error_budget_percent": 0.5,
+            "max_commit_age_seconds": 300,
+            "max_consumer_lag": 1000,
+            "max_dlq_messages": 5,
+        },
+        {
+            "name": "large",
+            "max_sources": 100,
+            "availability_target": 99.0,
+            "error_budget_percent": 1.0,
+            "max_commit_age_seconds": 600,
+            "max_consumer_lag": 5000,
+            "max_dlq_messages": 20,
+        },
+    ]
+
+
+def _load_tenant_cohort_slo_policies() -> list[dict[str, object]]:
+    """Load and validate cohort SLO policy overrides from JSON."""
+    raw_value = os.getenv("TENANT_COHORT_SLO_POLICIES")
+    if not raw_value:
+        return _default_tenant_cohort_slo_policies()
+
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        _config_error(
+            "Invalid TENANT_COHORT_SLO_POLICIES format.",
+            hint=(
+                "Use a JSON array of cohort policy objects. "
+                f"Original error: {exc}"
+            ),
+        )
+
+    if not isinstance(parsed, list) or not parsed:
+        _config_error(
+            "Invalid TENANT_COHORT_SLO_POLICIES format.",
+            hint="Use a non-empty JSON array of cohort policy objects.",
+        )
+
+    normalized_policies: list[dict[str, object]] = []
+    cohort_names: set[str] = set()
+    for policy in parsed:
+        if not isinstance(policy, dict):
+            _config_error(
+                "Invalid TENANT_COHORT_SLO_POLICIES entry.",
+                hint="Each cohort policy must be a JSON object.",
+            )
+
+        name = str(policy.get("name") or "").strip().lower()
+        if not name:
+            _config_error(
+                "Invalid TENANT_COHORT_SLO_POLICIES entry.",
+                hint="Each cohort policy must include a non-empty name.",
+            )
+        if name in cohort_names:
+            _config_error(
+                f"Duplicate cohort name '{name}' in TENANT_COHORT_SLO_POLICIES.",
+                hint="Use unique cohort names.",
+            )
+        cohort_names.add(name)
+
+        try:
+            max_sources = int(policy.get("max_sources"))
+            max_commit_age_seconds = int(policy.get("max_commit_age_seconds"))
+            max_consumer_lag = int(policy.get("max_consumer_lag"))
+            max_dlq_messages = int(policy.get("max_dlq_messages"))
+            availability_target = float(policy.get("availability_target"))
+            error_budget_percent = float(policy.get("error_budget_percent"))
+        except (TypeError, ValueError):
+            _config_error(
+                f"Invalid numeric SLO values for cohort '{name}'.",
+                hint="Use numeric values for thresholds and percentages.",
+            )
+
+        if max_sources < 1:
+            _config_error(
+                f"max_sources must be at least 1 for cohort '{name}'.",
+                hint="Set max_sources to a positive integer.",
+            )
+        if not 0 < availability_target <= 100:
+            _config_error(
+                f"availability_target must be in (0, 100] for cohort '{name}'.",
+                hint="Use a percentage such as 99.9.",
+            )
+        if not 0 <= error_budget_percent <= 100:
+            _config_error(
+                f"error_budget_percent must be in [0, 100] for cohort '{name}'.",
+                hint="Use a percentage such as 0.1.",
+            )
+        if max_commit_age_seconds < 0:
+            _config_error(
+                f"max_commit_age_seconds cannot be negative for cohort '{name}'.",
+                hint="Use 0 or a positive integer.",
+            )
+        if max_consumer_lag < 0:
+            _config_error(
+                f"max_consumer_lag cannot be negative for cohort '{name}'.",
+                hint="Use 0 or a positive integer.",
+            )
+        if max_dlq_messages < 0:
+            _config_error(
+                f"max_dlq_messages cannot be negative for cohort '{name}'.",
+                hint="Use 0 or a positive integer.",
+            )
+
+        normalized_policies.append(
+            {
+                "name": name,
+                "max_sources": max_sources,
+                "availability_target": availability_target,
+                "error_budget_percent": error_budget_percent,
+                "max_commit_age_seconds": max_commit_age_seconds,
+                "max_consumer_lag": max_consumer_lag,
+                "max_dlq_messages": max_dlq_messages,
+            }
+        )
+
+    return sorted(normalized_policies, key=lambda policy: policy["max_sources"])
+
+
 INGESTION_SOURCE_QUOTAS = _load_ingestion_quota_overrides(
     "INGESTION_SOURCE_QUOTAS"
 )
 INGESTION_TENANT_QUOTAS = _load_ingestion_quota_overrides(
     "INGESTION_TENANT_QUOTAS"
 )
+SLO_ROLLING_WINDOW_DAYS = int(os.getenv("SLO_ROLLING_WINDOW_DAYS", "30"))
+TENANT_COHORT_SLO_POLICIES = _load_tenant_cohort_slo_policies()
 EVENT_RETENTION_DAYS = int(os.getenv("EVENT_RETENTION_DAYS", "30"))
 COLUMN_CHANGES_RETENTION_DAYS = int(
     os.getenv("COLUMN_CHANGES_RETENTION_DAYS", "30")
@@ -878,6 +1017,12 @@ if INGESTION_QUOTA_MAX_THROTTLE_SECONDS <= 0:
     _config_error(
         "INGESTION_QUOTA_MAX_THROTTLE_SECONDS must be greater than zero.",
         hint="Set a positive max throttle sleep such as 1.0.",
+    )
+
+if SLO_ROLLING_WINDOW_DAYS <= 0:
+    _config_error(
+        "SLO_ROLLING_WINDOW_DAYS must be greater than zero.",
+        hint="Use a positive rolling window such as 30.",
     )
 
 if RETENTION_CLEANUP_INTERVAL_SECONDS <= 0:

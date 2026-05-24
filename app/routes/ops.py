@@ -11,6 +11,8 @@ from db_monitor.core.config import (
     READINESS_MAX_COMMIT_AGE_SECONDS,
     READINESS_MAX_CONSUMER_LAG,
     READINESS_MAX_DLQ_MESSAGES,
+    SLO_ROLLING_WINDOW_DAYS,
+    TENANT_COHORT_SLO_POLICIES,
 )
 from db_monitor.core.db import AsyncSessionLocal
 from db_monitor.core.lifecycle import lifecycle_manager
@@ -234,3 +236,16 @@ async def replay_dead_letter_event(
                 "replay targets."
             ),
         ) from exc
+
+
+@router.get("/admin/slo-policy")
+async def get_slo_policy(
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Return published tenant-cohort SLO and error-budget policy."""
+    del admin_api_key
+    return {
+        "window_days": SLO_ROLLING_WINDOW_DAYS,
+        "cohorts": TENANT_COHORT_SLO_POLICIES,
+        "count": len(TENANT_COHORT_SLO_POLICIES),
+    }

@@ -269,6 +269,34 @@ fanout.
 | `AUDIT_LOG_FLUSH_INTERVAL_SECONDS` | Audit flush cadence | `1.0` |
 | `APP_SHUTDOWN_TIMEOUT_SECONDS` | Graceful shutdown timeout | `45` |
 
+## Tenant Cohort SLO Policy Settings
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `SLO_ROLLING_WINDOW_DAYS` | Rolling window used for SLO/error budget tracking | `30` |
+| `TENANT_COHORT_SLO_POLICIES` | JSON array of cohort SLO/error-budget policy objects | built-in small/medium/large defaults |
+
+Policy object fields:
+
+- `name`: cohort label such as `small`, `medium`, `large`
+- `max_sources`: max source DB count covered by the cohort
+- `availability_target`: target availability percentage
+- `error_budget_percent`: allowed error budget percentage
+- `max_commit_age_seconds`: staleness SLO for committed offsets
+- `max_consumer_lag`: lag SLO threshold
+- `max_dlq_messages`: DLQ backlog budget threshold
+
+Example:
+
+```env
+SLO_ROLLING_WINDOW_DAYS=30
+TENANT_COHORT_SLO_POLICIES=[
+  {"name":"small","max_sources":10,"availability_target":99.9,"error_budget_percent":0.1,"max_commit_age_seconds":180,"max_consumer_lag":500,"max_dlq_messages":0},
+  {"name":"medium","max_sources":50,"availability_target":99.5,"error_budget_percent":0.5,"max_commit_age_seconds":300,"max_consumer_lag":1000,"max_dlq_messages":5},
+  {"name":"large","max_sources":100,"availability_target":99.0,"error_budget_percent":1.0,"max_commit_age_seconds":600,"max_consumer_lag":5000,"max_dlq_messages":20}
+]
+```
+
 ## Retention And Archival Settings
 
 | Variable | Purpose | Default |
