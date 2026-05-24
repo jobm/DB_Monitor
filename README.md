@@ -66,7 +66,11 @@ In this sandbox deployment, the monitoring database runs on port `5437` and stor
 
 ## Quick start (using the Local Example Stack)
 
-The quickest way to evaluate DB Monitor is using the bundled docker-compose infrastructure, which launches the core monitoring services alongside three pre-seeded PostgreSQL databases acting as the source application stack:
+Use the bundled docker-compose stack for a fast local evaluation. Full sandbox
+setup, traffic simulation, and teardown steps live in
+`docs/example-sandbox.md`.
+
+Minimal bootstrap flow:
 
 1. Start the stack:
    ```bash
@@ -89,6 +93,9 @@ The quickest way to evaluate DB Monitor is using the bundled docker-compose infr
        -H "X-API-Key: <id.secret>" \
        http://localhost:8000/auth/token
     ```
+
+For traffic generation, websocket checks, and reset workflows, continue with
+the sandbox guide at `docs/example-sandbox.md`.
 
 ## Integrating with Custom Infrastructure (As a Study / Adopter)
 
@@ -267,10 +274,8 @@ Preview rendered connector payloads without calling Kafka Connect:
 DRY_RUN=true ./register-connectors.sh
 ```
 
-Example-stack utilities now live under `examples/sandbox/`. The older
-top-level demo scripts under `scripts/` are still available as compatibility
-entrypoints for existing automation, but new docs and workflows should use the
-`examples/sandbox/` paths.
+Example-stack utilities live under `examples/sandbox/`. Compatibility wrappers
+remain in `scripts/`, but new automation should target `examples/sandbox/`.
 
 Useful commands:
 
