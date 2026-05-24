@@ -1,5 +1,4 @@
 import json
-import importlib
 import logging
 import sys
 from contextlib import asynccontextmanager
@@ -8,50 +7,32 @@ from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from _namespace_bridge import ensure_src_namespace_path
-
-ensure_src_namespace_path()
-
-_api_factory = importlib.import_module("db_monitor.api.factory")
-_api_router = importlib.import_module("db_monitor.api.router")
-_audit_log = importlib.import_module("db_monitor.audit_log")
-_auth = importlib.import_module("db_monitor.auth")
-_core_config = importlib.import_module("db_monitor.core.config")
-_core_db = importlib.import_module("db_monitor.core.db")
-_core_lifecycle = importlib.import_module("db_monitor.core.lifecycle")
-_ingestion_consumer = importlib.import_module("db_monitor.ingestion.consumer")
-_ingestion_schema = importlib.import_module("db_monitor.ingestion.schema")
-_lifespan = importlib.import_module("db_monitor.lifespan")
-_metrics = importlib.import_module("db_monitor.metrics")
-_tracing = importlib.import_module("db_monitor.tracing")
-_ws_manager = importlib.import_module("db_monitor.ws_manager")
-
-create_application = _api_factory.create_application
-router = _api_router.router
-AuditLogEntry = _audit_log.AuditLogEntry
-audit_log_writer = _audit_log.audit_log_writer
-authenticate_credentials = _auth.authenticate_credentials
-
-BATCH_ENABLED = _core_config.BATCH_ENABLED
-BATCH_SIZE = _core_config.BATCH_SIZE
-BROKER_CLUSTERS = _core_config.BROKER_CLUSTERS
-DLQ_ENABLED = _core_config.DLQ_ENABLED
-OTEL_EXPORTER = _core_config.OTEL_EXPORTER
-OTEL_EXPORTER_OTLP_ENDPOINT = _core_config.OTEL_EXPORTER_OTLP_ENDPOINT
-OTEL_EXPORTER_OTLP_HEADERS = _core_config.OTEL_EXPORTER_OTLP_HEADERS
-OTEL_SERVICE_NAME = _core_config.OTEL_SERVICE_NAME
-OTEL_TRACING_ENABLED = _core_config.OTEL_TRACING_ENABLED
-
-engine = _core_db.engine
-lifecycle_manager = _core_lifecycle.lifecycle_manager
-consumer_task = _ingestion_consumer.consumer_task
-schema_cache_backplane = _ingestion_schema.schema_cache_backplane
-managed_lifespan = _lifespan.managed_lifespan
-api_request_duration_seconds = _metrics.api_request_duration_seconds
-failed_auth_attempts_total = _metrics.failed_auth_attempts_total
-current_trace_context = _tracing.current_trace_context
-initialize_tracing = _tracing.initialize_tracing
-ws_manager = _ws_manager.ws_manager
+from db_monitor.api.factory import create_application
+from db_monitor.api.router import router
+from db_monitor.audit_log import AuditLogEntry, audit_log_writer
+from db_monitor.auth import authenticate_credentials
+from db_monitor.core.config import (
+    BATCH_ENABLED,
+    BATCH_SIZE,
+    BROKER_CLUSTERS,
+    DLQ_ENABLED,
+    OTEL_EXPORTER,
+    OTEL_EXPORTER_OTLP_ENDPOINT,
+    OTEL_EXPORTER_OTLP_HEADERS,
+    OTEL_SERVICE_NAME,
+    OTEL_TRACING_ENABLED,
+)
+from db_monitor.core.db import engine
+from db_monitor.core.lifecycle import lifecycle_manager
+from db_monitor.ingestion.consumer import consumer_task
+from db_monitor.ingestion.schema import schema_cache_backplane
+from db_monitor.lifespan import managed_lifespan
+from db_monitor.metrics import (
+    api_request_duration_seconds,
+    failed_auth_attempts_total,
+)
+from db_monitor.tracing import current_trace_context, initialize_tracing
+from db_monitor.ws_manager import ws_manager
 
 
 class StructuredFormatter(logging.Formatter):

@@ -30,7 +30,24 @@ classifiers = [
   "Topic :: Database",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = []
+dependencies = [
+  "aiokafka>=0.13.0",
+  "aio-pika>=9.5.7",
+  "argon2-cffi>=25.1.0",
+  "asyncpg==0.29.0",
+  "confluent-kafka>=2.13.2",
+  "fastapi>=0.135.1",
+  "opentelemetry-api>=1.36.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.36.0",
+  "opentelemetry-instrumentation-fastapi>=0.57b0",
+  "opentelemetry-instrumentation-sqlalchemy>=0.57b0",
+  "opentelemetry-sdk>=1.36.0",
+  "prometheus-client>=0.24.1",
+  "PyJWT>=2.10.1",
+  "python-dotenv>=1.2.2",
+  "sqlalchemy[asyncio]==2.0.25",
+  "uvicorn[standard]>=0.41.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/jobm/DB_Monitor"
@@ -40,8 +57,17 @@ Issues = "https://github.com/jobm/DB_Monitor/issues"
 
 [project.scripts]
 db-monitor = "db_monitor.cli:main"
+db-monitor-serve = "db_monitor.cli:serve"
+db-monitor-migrate = "db_monitor.cli:migrate"
 
 [project.optional-dependencies]
+dev = [
+  "mypy>=1.11.0",
+  "pytest>=9.0.0",
+  "ruff>=0.6.0",
+]
+
+[dependency-groups]
 dev = [
   "mypy>=1.11.0",
   "pytest>=9.0.0",

@@ -1,4 +1,4 @@
-"""Canonical ingestion consumer namespace proxy."""
+"""Canonical ingestion consumer exports."""
 
 from __future__ import annotations
 
@@ -8,14 +8,26 @@ from db_monitor.legacy_runtime import ensure_legacy_path
 
 ensure_legacy_path()
 
-_legacy_module = importlib.import_module("ingestion.consumer")
+_consumer_service = importlib.import_module("consumer_service")
 
+consumer_task = _consumer_service.consumer_task
+get_consumer_health = _consumer_service.get_consumer_health
+list_consumer_checkpoints_snapshot = (
+    _consumer_service.list_consumer_checkpoints_snapshot
+)
+list_dead_letter_events = _consumer_service.list_dead_letter_events
+replay_dead_letter_event_record = (
+    _consumer_service.replay_dead_letter_event_record
+)
+replay_dead_letter_event_records = (
+    _consumer_service.replay_dead_letter_event_records
+)
 
-def __getattr__(name: str):
-    """Proxy attribute access to the legacy ingestion consumer module."""
-    return getattr(_legacy_module, name)
-
-
-def __dir__() -> list[str]:
-    """Expose proxied module attributes for introspection tools."""
-    return sorted(set(globals()) | set(dir(_legacy_module)))
+__all__ = [
+    "consumer_task",
+    "get_consumer_health",
+    "list_consumer_checkpoints_snapshot",
+    "list_dead_letter_events",
+    "replay_dead_letter_event_record",
+    "replay_dead_letter_event_records",
+]

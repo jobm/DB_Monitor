@@ -1,4 +1,4 @@
-"""Canonical ingestion runtime_state namespace proxy."""
+"""Canonical ingestion runtime-state exports."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ from db_monitor.legacy_runtime import ensure_legacy_path
 
 ensure_legacy_path()
 
-_legacy_module = importlib.import_module("ingestion.runtime_state")
+_runtime_state = importlib.import_module("consumer.runtime_state")
 
 
 def __getattr__(name: str):
-    """Proxy attribute access to the legacy ingestion runtime_state module."""
-    return getattr(_legacy_module, name)
+    """Proxy runtime-state attribute access to consumer runtime module."""
+    return getattr(_runtime_state, name)
 
 
 def __dir__() -> list[str]:
-    """Expose proxied module attributes for introspection tools."""
-    return sorted(set(globals()) | set(dir(_legacy_module)))
+    """Expose proxied runtime-state attributes for introspection tools."""
+    return sorted(set(globals()) | set(dir(_runtime_state)))

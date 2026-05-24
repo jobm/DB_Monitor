@@ -6,7 +6,7 @@ import json
 import os
 import ssl
 
-from core.config_loader import (
+from db_monitor.core.config_loader import (
     config_error as _config_error,
     default_schema_mode as _default_schema_mode,
     get_env_or_file as _get_env_or_file,

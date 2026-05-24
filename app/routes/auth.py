@@ -5,10 +5,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
 
-from auth import (
+from db_monitor.auth import (
     build_access_token as issue_access_token,
 )
-from auth import (
+from db_monitor.auth import (
     build_api_key_expiration,
     build_ws_session_token,
     generate_new_api_key,
@@ -17,8 +17,8 @@ from auth import (
     require_admin_role,
     require_viewer_role,
 )
-from core.config import ALLOW_BOOTSTRAP, API_KEY_DEFAULT_TTL_DAYS
-from core.db import AsyncSessionLocal
+from db_monitor.core.config import ALLOW_BOOTSTRAP, API_KEY_DEFAULT_TTL_DAYS
+from db_monitor.core.db import AsyncSessionLocal
 from models import ApiKey
 from response_models import (
     AccessTokenExchangeResponse,

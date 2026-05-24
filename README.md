@@ -99,7 +99,7 @@ To run DB Monitor as a framework against your own custom message brokers and Pos
    - `MESSAGE_BROKER=kafka` or `rabbitmq`
    - `KAFKA_BROKER` or `RABBITMQ_URL` pointing to your broker
 3. **Provide a Source Manifest**: Define the databases, tables, and streams you want to audit. Point DB Monitor to your manifest by setting the path in `CONNECTOR_SOURCES_FILE` (defaults to looking for `connectors/sources.json`).
-4. **Launch DB Monitor**: Run the core app outside of the example docker containers (e.g., in Kubernetes, an App Service, or locally using `uv run python start_monitor.py`).
+4. **Launch DB Monitor**: Run the core app outside of the example docker containers (e.g., in Kubernetes, an App Service, or locally using `PYTHONPATH=src:app uv run python -m db_monitor.start_monitor`).
 
 For full details on production deployments, refer to [docs/deployment.md](docs/deployment.md) and [docs/configuration.md](docs/configuration.md).
 
@@ -226,7 +226,7 @@ Run the API locally:
 
 ```bash
 cd app
-uv run python start_monitor.py
+PYTHONPATH=../src:. uv run python -m db_monitor.start_monitor
 ```
 
 Apply tracked migrations locally before startup when you want an explicit schema
@@ -240,7 +240,7 @@ Validate that the database is already up to date without applying changes:
 
 ```bash
 cd app
-uv run python migrate.py validate
+PYTHONPATH=../src:. uv run python -m db_monitor.cli migrate validate
 ```
 
 Run connector registration locally against the Docker Compose stack:
@@ -320,7 +320,7 @@ live under `docs/`.
 
 ## Known limitations
 
-- Production deployments should run `uv run python migrate.py apply` before app
+- Production deployments should run `PYTHONPATH=src:app uv run python -m db_monitor.cli migrate apply` before app
    startup and use `APP_ENV=production` or `DB_SCHEMA_MODE=validate` so the app
    fails fast when required migrations are missing.
 - When Debezium schema envelopes are disabled, column discovery falls back to inferring column names and coarse types from `before`/`after` payloads. Primary key and nullability metadata are therefore best-effort in that mode.

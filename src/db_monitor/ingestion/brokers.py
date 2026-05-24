@@ -1,4 +1,8 @@
-"""Canonical ingestion brokers namespace proxy."""
+"""Canonical ingestion brokers exports.
+
+This module now points directly at runtime broker adapters without routing
+through deprecated app/ingestion wrapper modules.
+"""
 
 from __future__ import annotations
 
@@ -8,14 +12,16 @@ from db_monitor.legacy_runtime import ensure_legacy_path
 
 ensure_legacy_path()
 
-_legacy_module = importlib.import_module("ingestion.brokers")
+_message_brokers = importlib.import_module("message_brokers")
 
+BrokerMessage = _message_brokers.BrokerMessage
+DeadLetterPublisher = _message_brokers.DeadLetterPublisher
+build_message_consumer = _message_brokers.build_message_consumer
+build_dead_letter_publisher = _message_brokers.build_dead_letter_publisher
 
-def __getattr__(name: str):
-    """Proxy attribute access to the legacy ingestion brokers module."""
-    return getattr(_legacy_module, name)
-
-
-def __dir__() -> list[str]:
-    """Expose proxied module attributes for introspection tools."""
-    return sorted(set(globals()) | set(dir(_legacy_module)))
+__all__ = [
+    "BrokerMessage",
+    "DeadLetterPublisher",
+    "build_message_consumer",
+    "build_dead_letter_publisher",
+]

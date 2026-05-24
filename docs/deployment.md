@@ -65,7 +65,7 @@ make monitor-migrate
 
 ```bash
 cd app
-uv run python start_monitor.py
+PYTHONPATH=../src:. uv run python -m db_monitor.start_monitor
 ```
 
 Expected local `.env` values are documented in [docs/configuration.md](docs/configuration.md).
@@ -89,7 +89,7 @@ Before booting the app in production or production-like environments:
 
 ```bash
 cd app
-uv run python migrate.py apply
+PYTHONPATH=../src:. uv run python -m db_monitor.cli migrate apply
 ```
 
 2. Confirm bootstrap is disabled.

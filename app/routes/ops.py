@@ -6,15 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from auth import require_admin_role, require_viewer_role
-from core.config import (
+from db_monitor.auth import require_admin_role, require_viewer_role
+from db_monitor.core.config import (
     READINESS_MAX_COMMIT_AGE_SECONDS,
     READINESS_MAX_CONSUMER_LAG,
     READINESS_MAX_DLQ_MESSAGES,
 )
-from core.db import AsyncSessionLocal
-from core.lifecycle import lifecycle_manager
-from ingestion.consumer import (
+from db_monitor.core.db import AsyncSessionLocal
+from db_monitor.core.lifecycle import lifecycle_manager
+from db_monitor.ingestion.consumer import (
     get_consumer_health,
     list_consumer_checkpoints_snapshot,
     list_dead_letter_events as list_dead_letter_records,

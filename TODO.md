@@ -76,7 +76,7 @@ These are not committed backlog items yet.
 
 - [x] Phase 1: Establish canonical package metadata and CLI entrypoints
 - [x] Phase 2: Migrate runtime imports to a canonical `db_monitor` namespace
-- [ ] Phase 3: Move package layout to `src/` and remove compatibility shims
+- [x] Phase 3: Move package layout to `src/` and remove compatibility shims
 - [ ] Phase 4: Define and document public API stability contracts
 - [ ] Phase 5: Harden quality gates (ruff, type checks, packaging smoke tests)
 - [ ] Phase 6: Add automated release workflows and signed/tagged distribution
@@ -89,12 +89,12 @@ These are not committed backlog items yet.
 - [x] Phase 2: Replace legacy flat imports in app/main.py with canonical package imports
 - [x] Phase 2: Add package-level import tests for auth, ingestion, repositories, and routing surfaces
 - [x] Phase 2: Validate docker compose startup using package-native entry commands end-to-end
-- [x] Phase 2: Re-sync app/uv.lock after all namespace migration edits stabilize
+- [x] Phase 2: Re-sync uv.lock after all namespace migration edits stabilize
 
-- [ ] Phase 3: Remove app compatibility shims after full src/db_monitor migration
-- [ ] Phase 3: Remove sys.path bridge helpers once legacy imports are eliminated
-- [ ] Phase 3: Collapse duplicate packaging metadata to one canonical pyproject
-- [ ] Phase 3: Update docs and make targets to use package-native module invocations only
+- [x] Phase 3: Remove app compatibility shims after full src/db_monitor migration
+- [x] Phase 3: Remove sys.path bridge helpers once legacy imports are eliminated
+- [x] Phase 3: Collapse duplicate packaging metadata to one canonical pyproject
+- [x] Phase 3: Update docs and make targets to use package-native module invocations only
 
 - [ ] Phase 4: Define supported public Python API modules and document stability guarantees
 - [ ] Phase 4: Define deprecation and removal policy with minimum grace window
@@ -140,5 +140,16 @@ These are not committed backlog items yet.
 	entry commands (`python -m db_monitor...`) and reaches connected consumer
 	state. Current `/readyz` remains not-ready due existing commit-gate logic
 	(`last_message_at` with null `last_commit_at`) tracked as follow-up.
-- Next implementation slice: migrate selected modules from `app/` into
-	`src/db_monitor` with import rewrites and compatibility shims.
+- Phase 3 kickoff: local dev and migration commands now call package-native
+	entry modules from Makefile and README workflows.
+- Active runtime route/config modules now import canonical `db_monitor`
+	namespaces directly instead of app/core shim paths.
+- Removed obsolete `app/api` and `app/core` compatibility shim modules after
+	runtime rewiring; active tests pass without those shim packages.
+- Consolidated packaging metadata into root `pyproject.toml` and root
+	`uv.lock`; removed `app/pyproject.toml` and `app/uv.lock` duplicates.
+- Removed obsolete `app/ingestion` wrapper modules by pointing canonical
+	`src/db_monitor/ingestion/*` modules directly at runtime modules.
+- Removed `app/_namespace_bridge.py` and switched `app/main.py` to direct
+	canonical `db_monitor.*` imports with no dynamic bridge bootstrap.
+- Broader core-marker validation now passes from `tests/` (`132 passed`).

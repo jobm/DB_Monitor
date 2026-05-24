@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /bin/
 
 # Copy dependencies first to leverage caching
-COPY app/pyproject.toml app/uv.lock ./
+COPY pyproject.toml uv.lock ./
 
 # Install dependencies (system-wide since it's a docker container)
 # Also prevent psycopg2 from being installed since asyncpg is used
@@ -22,6 +22,7 @@ RUN uv sync --frozen --no-install-project --no-dev && \
 # Copy application code
 COPY app/ ./
 COPY src/ ./src/
+COPY README.md ./README.md
 
 # Install the project itself
 RUN uv sync --frozen --no-dev

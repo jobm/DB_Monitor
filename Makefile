@@ -62,10 +62,10 @@ monitor-recovery: ## One-command recovery: start sandbox + register connectors +
 	docker compose ps monitor-server
 
 monitor-dev: ## Run FastAPI app locally for debugging (Docker handles this - prefer 'make monitor-up')
-	cd app && uv run uvicorn main:app --reload --port 8001
+	cd app && PYTHONPATH=../src:. uv run python -m uvicorn db_monitor.main:app --reload --port 8001
 
 monitor-migrate: ## Apply tracked database migrations locally
-	cd app && uv run python migrate.py apply
+	cd app && PYTHONPATH=../src:. uv run python -m db_monitor.cli migrate apply
 
 monitor-test: ## Run all core-platform tests
 	$(MAKE) monitor-test-core

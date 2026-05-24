@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from auth import require_viewer_role
-from core.db import AsyncSessionLocal
-from ingestion.changes import ChangeProcessor
-from repositories.events import EventQueryFilters, EventsRepository
+from db_monitor.auth import require_viewer_role
+from db_monitor.core.db import AsyncSessionLocal
+from db_monitor.ingestion.changes import ChangeProcessor
+from db_monitor.ingestion.schema import SchemaDiscovery
+from db_monitor.repositories.events import EventQueryFilters, EventsRepository
 from response_models import (
     ChangesResponse,
     EventsResponse,
@@ -16,7 +17,6 @@ from response_models import (
     TableListResponse,
 )
 from .utils import parse_json_object_query, parse_timestamp
-from ingestion.schema import SchemaDiscovery
 
 router = APIRouter()
 

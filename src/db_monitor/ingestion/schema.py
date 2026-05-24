@@ -1,4 +1,4 @@
-"""Canonical ingestion schema namespace proxy."""
+"""Canonical ingestion schema exports."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ from db_monitor.legacy_runtime import ensure_legacy_path
 
 ensure_legacy_path()
 
-_legacy_module = importlib.import_module("ingestion.schema")
+_schema_discovery = importlib.import_module("schema_discovery")
 
+SchemaDiscovery = _schema_discovery.SchemaDiscovery
+extract_operation = _schema_discovery.extract_operation
+schema_cache_backplane = _schema_discovery.schema_cache_backplane
 
-def __getattr__(name: str):
-    """Proxy attribute access to the legacy ingestion schema module."""
-    return getattr(_legacy_module, name)
-
-
-def __dir__() -> list[str]:
-    """Expose proxied module attributes for introspection tools."""
-    return sorted(set(globals()) | set(dir(_legacy_module)))
+__all__ = [
+    "SchemaDiscovery",
+    "extract_operation",
+    "schema_cache_backplane",
+]

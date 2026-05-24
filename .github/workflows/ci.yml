@@ -118,7 +118,7 @@ jobs:
           POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5437/postgres
           KAFKA_BROKER: localhost:9093
         run: |
-          nohup uv run python start_monitor.py > ../app-integration.log 2>&1 &
+          nohup PYTHONPATH=../src:. uv run python -m db_monitor.start_monitor > ../app-integration.log 2>&1 &
           echo $! > ../app-integration.pid
 
       - name: Wait for app readiness

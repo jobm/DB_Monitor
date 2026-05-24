@@ -92,8 +92,8 @@ Checks:
 
 ```bash
 cd app
-uv run python migrate.py validate
-uv run python migrate.py apply
+PYTHONPATH=src:app uv run python -m db_monitor.cli migrate validate
+PYTHONPATH=src:app uv run python -m db_monitor.cli migrate apply
 ```
 
 Notes:
@@ -112,6 +112,6 @@ Checks:
 If dependency sync fails, retry the app and TUI sync commands separately:
 
 ```bash
-cd app && uv sync --group dev
+uv sync --group dev
 cd tui && uv sync
 ```
