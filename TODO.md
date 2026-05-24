@@ -109,7 +109,7 @@ These are not committed backlog items yet.
 - [x] Phase 6: Add changelog automation and release-note generation
 - [x] Phase 6: Add signed release tags and artifact provenance checks
 
-- [ ] Investigate readiness gate where `last_message_at` is set but
+- [x] Investigate readiness gate where `last_message_at` is set but
 	`last_commit_at` remains null under sandbox startup, causing persistent
 	`/readyz` 503 despite connected consumer and healthy DB/lifecycle.
 
@@ -138,8 +138,9 @@ These are not committed backlog items yet.
 	repositories, and routing module imports.
 - End-to-end compose startup validation now runs with package-native startup
 	entry commands (`python -m db_monitor...`) and reaches connected consumer
-	state. Current `/readyz` remains not-ready due existing commit-gate logic
-	(`last_message_at` with null `last_commit_at`) tracked as follow-up.
+	state. `/readyz` commit-gate behavior is now stable: filtered events and
+	DLQ-handled failures are acknowledged and checkpointed so
+	`last_commit_at` advances and readiness does not remain stuck at 503.
 - Phase 3 kickoff: local dev and migration commands now call package-native
 	entry modules from Makefile and README workflows.
 - Active runtime route/config modules now import canonical `db_monitor`

@@ -492,6 +492,68 @@ async def test_process_single_event_commits_after_dlq_persist(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_process_single_event_acks_duplicates(monkeypatch):
+    event = KafkaEvent(
+        event_type="u",
+        event_time=datetime.now(timezone.utc),
+        user_id=None,
+        service_name="orderdb",
+        kafka_topic="orderdb.public.orders",
+        kafka_partition=0,
+        kafka_offset=55,
+        event_data={"after": {"id": 1}},
+        raw_payload="{}",
+        operation="UPDATE",
+    )
+    message = FakeBrokerMessage("orderdb.public.orders", event.raw_payload)
+    persisted: list[list[KafkaEvent]] = []
+    runtime = consumer_service._get_consumer_runtime("duplicate-cluster")
+    runtime["last_commit_at"] = None
+
+    async def fake_store(*_args, **_kwargs):
+        return False
+
+    async def fake_persist_consumer_checkpoints(
+        events,
+        consumer_group,
+        broker_kind="kafka",
+        session_factory=None,
+    ):
+        del consumer_group
+        del broker_kind
+        del session_factory
+        persisted.append(list(events))
+
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_event_graph_with_retries",
+        fake_store,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "persist_consumer_checkpoints",
+        fake_persist_consumer_checkpoints,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "kafka_commit_duration_seconds",
+        FakeTimerMetric(),
+    )
+
+    processed = await consumer_service._process_single_event(
+        event,
+        message,
+        runtime=runtime,
+        cluster_name="duplicate-cluster",
+    )
+
+    assert processed is True
+    assert message.acked == 1
+    assert persisted == [[event]]
+    assert runtime["last_commit_at"] is not None
+
+
+@pytest.mark.anyio
 async def test_handle_message_processing_error_continues_after_dlq(
     monkeypatch,
 ):
@@ -837,6 +899,93 @@ async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
     assert broker_message.acked == 1
     assert persisted_checkpoints[0][1] == "rabbit-group"
     assert runtime["broker_kind"] == "rabbitmq"
+
+
+@pytest.mark.anyio
+async def test_consumer_task_acks_filtered_events(monkeypatch):
+    runtime = consumer_service._get_consumer_runtime("rabbit-filtered")
+    runtime["last_commit_at"] = None
+    broker_message = FakeBrokerMessage(
+        "cdc.orders",
+        '{"event_type": "u", "after": {"id": 7}}',
+        offset=45,
+    )
+    consumer_adapter = FakeBrokerConsumerAdapter([broker_message])
+    persisted_checkpoints: list[tuple[list[KafkaEvent], str]] = []
+
+    async def fake_refresh_dead_letter_backlog_metric(*_args, **_kwargs):
+        return 0
+
+    async def fake_persist_consumer_checkpoints(
+        events,
+        consumer_group,
+        broker_kind="kafka",
+        session_factory=None,
+    ):
+        del broker_kind
+        del session_factory
+        persisted_checkpoints.append((list(events), consumer_group))
+
+    def fake_build_message_consumer(**kwargs):
+        assert kwargs["broker_kind"] == "rabbitmq"
+        return consumer_adapter
+
+    def fake_should_process(_event):
+        return False
+
+    async def fail_store_event_graph(*_args, **_kwargs):
+        raise AssertionError("Filtered events should not be persisted")
+
+    monkeypatch.setattr(
+        consumer_service,
+        "refresh_dead_letter_backlog_metric",
+        fake_refresh_dead_letter_backlog_metric,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "persist_consumer_checkpoints",
+        fake_persist_consumer_checkpoints,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "build_message_consumer",
+        fake_build_message_consumer,
+    )
+    monkeypatch.setattr(
+        consumer_service.event_pipeline,
+        "should_process",
+        fake_should_process,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_event_graph_with_retries",
+        fail_store_event_graph,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "events_consumed_total",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "kafka_commit_duration_seconds",
+        FakeTimerMetric(),
+    )
+
+    await consumer_service.consumer_task(
+        cluster_name="rabbit-filtered",
+        broker_kind="rabbitmq",
+        consumer_group="rabbit-group",
+        topics=["cdc.orders"],
+        connection_url="amqp://rabbit/",
+        queue_names=["cdc.orders"],
+        enable_dlq=False,
+        enable_batch=False,
+    )
+
+    assert broker_message.acked == 1
+    assert persisted_checkpoints[0][1] == "rabbit-group"
+    assert runtime["last_commit_at"] is not None
 
 
 @pytest.mark.anyio

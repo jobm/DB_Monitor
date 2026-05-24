@@ -655,6 +655,42 @@ async def _requeue_broker_messages(messages: list[BrokerMessage]) -> None:
             )
 
 
+async def _ack_message_and_record_progress(
+    *,
+    msg: BrokerMessage,
+    event: KafkaEvent,
+    runtime: dict[str, object],
+    cluster_name: str,
+    consumer_group: str,
+    broker_kind: str,
+) -> bool:
+    """Ack one broker message and persist checkpoint progress."""
+    try:
+        with kafka_commit_duration_seconds.time():
+            await msg.ack_callback()
+        await persist_consumer_checkpoints(
+            [event],
+            consumer_group=consumer_group,
+            broker_kind=broker_kind,
+        )
+        _record_committed_offsets(runtime, cluster_name, [event])
+        _record_successful_commit(runtime)
+    except Exception as exc:
+        nack_callback = getattr(msg, "nack_callback", None)
+        if nack_callback is not None:
+            await nack_callback()
+        logger.exception(
+            "Failed to acknowledge broker message %s/%s/%s: %s",
+            msg.destination,
+            msg.partition,
+            msg.offset,
+            exc,
+        )
+        return False
+
+    return True
+
+
 async def consumer_task(
     cluster_name: str = "default",
     broker_kind: str = "kafka",
@@ -829,6 +865,7 @@ async def consumer_task(
                 await asyncio.sleep(1.0)
                 continue
 
+            current_event: KafkaEvent | None = None
             try:
                 data = msg.value.decode("utf-8")
                 logger.debug(
@@ -865,6 +902,7 @@ async def consumer_task(
                     raw_payload=parsed.raw_payload,
                     operation=operation,
                 )
+                current_event = event
 
                 events_consumed_total.labels(
                     service=event.service_name or "unknown",
@@ -886,6 +924,21 @@ async def consumer_task(
                             "Event %s dropped by pipeline rules.",
                             parsed.event_type,
                         )
+                        acknowledged = await _ack_message_and_record_progress(
+                            msg=msg,
+                            event=event,
+                            runtime=runtime,
+                            cluster_name=cluster_name,
+                            consumer_group=consumer_group,
+                            broker_kind=broker_kind,
+                        )
+                        if not acknowledged:
+                            raise ConsumerStopRequested(
+                                (
+                                    "Filtered message could not be "
+                                    "acknowledged."
+                                )
+                            )
                         breaker.record_success()
                         continue
 
@@ -959,6 +1012,26 @@ async def consumer_task(
                 breaker.record_failure()
                 if not should_continue:
                     raise
+
+                fallback_event = (
+                    current_event
+                    if current_event is not None
+                    else _fallback_event_from_message(msg, raw_payload)
+                )
+                acknowledged = await _ack_message_and_record_progress(
+                    msg=msg,
+                    event=fallback_event,
+                    runtime=runtime,
+                    cluster_name=cluster_name,
+                    consumer_group=consumer_group,
+                    broker_kind=broker_kind,
+                )
+                if not acknowledged:
+                    raise ConsumerStopRequested(
+                        (
+                            "DLQ-handled message could not be acknowledged."
+                        )
+                    )
 
         if batch:
             batch_processed = await _process_batch(
@@ -1202,14 +1275,13 @@ async def _process_single_event(
                     event.kafka_partition,
                     event.kafka_offset,
                 )
-                return
+            else:
+                await _broadcast_event(event)
 
-            await _broadcast_event(event)
-
-            events_processed_total.labels(
-                service=event.service_name or "unknown",
-                operation=event.operation or "unknown",
-            ).inc()
+                events_processed_total.labels(
+                    service=event.service_name or "unknown",
+                    operation=event.operation or "unknown",
+                ).inc()
     except Exception as exc:
         logger.error("Failed to process event after retries: %s", exc)
         events_failed_total.labels(
