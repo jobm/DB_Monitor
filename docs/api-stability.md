@@ -52,7 +52,7 @@ DB Monitor uses semantic versioning (`MAJOR.MINOR.PATCH`) for package releases.
 
 | Package version | Python versions | Public API compatibility |
 | --- | --- | --- |
-| `0.1.x` | `3.11`, `3.12` | Compatibility guaranteed only for APIs listed in this document |
+| `0.0.x` | `3.11`, `3.12` | Compatibility guaranteed only for APIs listed in this document |
 | `0.y.z` (future pre-1.0 minors) | `3.11+` per release notes | Same: only listed public APIs are guaranteed |
 | `1.x` and later | declared per release | Full semver guarantees for listed public APIs |
 
