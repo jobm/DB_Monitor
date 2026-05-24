@@ -414,3 +414,59 @@ def test_config_rejects_negative_event_retention_days(
         match="EVENT_RETENTION_DAYS cannot be negative",
     ):
         _load_config_module("config_invalid_event_retention_days")
+
+
+def test_config_loads_ingestion_quota_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ingestion quota settings should parse from environment."""
+    monkeypatch.setenv("INGESTION_QUOTA_ENABLED", "true")
+    monkeypatch.setenv("INGESTION_QUOTA_WINDOW_SECONDS", "120")
+    monkeypatch.setenv(
+        "INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW",
+        "1500",
+    )
+    monkeypatch.setenv(
+        "INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW",
+        "300",
+    )
+    monkeypatch.setenv("INGESTION_QUOTA_MODE", "drop")
+    monkeypatch.setenv("INGESTION_QUOTA_MAX_THROTTLE_SECONDS", "2.5")
+    monkeypatch.setenv(
+        "INGESTION_SOURCE_QUOTAS",
+        '{"orderdb":1200,"shippingdb":600}',
+    )
+    monkeypatch.setenv(
+        "INGESTION_TENANT_QUOTAS",
+        '{"tenant-a":250,"tenant-b":100}',
+    )
+
+    config = _load_config_module("config_ingestion_quota")
+
+    assert config.INGESTION_QUOTA_ENABLED is True
+    assert config.INGESTION_QUOTA_WINDOW_SECONDS == 120
+    assert config.INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW == 1500
+    assert config.INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW == 300
+    assert config.INGESTION_QUOTA_MODE == "drop"
+    assert config.INGESTION_QUOTA_MAX_THROTTLE_SECONDS == 2.5
+    assert config.INGESTION_SOURCE_QUOTAS == {
+        "orderdb": 1200,
+        "shippingdb": 600,
+    }
+    assert config.INGESTION_TENANT_QUOTAS == {
+        "tenant-a": 250,
+        "tenant-b": 100,
+    }
+
+
+def test_config_rejects_invalid_ingestion_quota_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Quota mode must be one of the supported runtime actions."""
+    monkeypatch.setenv("INGESTION_QUOTA_MODE", "pause")
+
+    with pytest.raises(
+        ValueError,
+        match="Invalid INGESTION_QUOTA_MODE='pause'",
+    ):
+        _load_config_module("config_invalid_ingestion_quota_mode")

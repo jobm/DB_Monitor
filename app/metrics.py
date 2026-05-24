@@ -145,3 +145,20 @@ webhook_circuit_breaker_state = Gauge(
     "Webhook circuit breaker state (0=closed, 1=open)",
     ["url"],
 )
+
+ingestion_quota_dropped_total = Counter(
+    "db_monitor_ingestion_quota_dropped_total",
+    "Total number of events dropped by ingestion quota controls",
+    ["dimension", "identity"],
+)
+
+ingestion_quota_throttled_total = Counter(
+    "db_monitor_ingestion_quota_throttled_total",
+    "Total number of events delayed by ingestion quota controls",
+    ["dimension", "identity"],
+)
+
+ingestion_quota_sleep_seconds = Histogram(
+    "db_monitor_ingestion_quota_sleep_seconds",
+    "Time spent delaying events because of ingestion quotas",
+)

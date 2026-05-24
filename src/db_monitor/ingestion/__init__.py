@@ -5,6 +5,7 @@ __all__ = [
     "changes",
     "consumer",
     "pipeline",
+    "quota",
     "runtime_state",
     "schema",
 ]

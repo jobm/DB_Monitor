@@ -637,6 +637,86 @@ RETENTION_ARCHIVE_DIR = os.getenv(
     "RETENTION_ARCHIVE_DIR",
     "retention-archive",
 )
+INGESTION_QUOTA_ENABLED = (
+    os.getenv("INGESTION_QUOTA_ENABLED", "false").lower() == "true"
+)
+INGESTION_QUOTA_WINDOW_SECONDS = int(
+    os.getenv("INGESTION_QUOTA_WINDOW_SECONDS", "60")
+)
+INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW = int(
+    os.getenv("INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW", "0")
+)
+INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW = int(
+    os.getenv("INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW", "0")
+)
+INGESTION_QUOTA_MODE = os.getenv(
+    "INGESTION_QUOTA_MODE",
+    "throttle",
+).strip().lower()
+INGESTION_QUOTA_MAX_THROTTLE_SECONDS = float(
+    os.getenv("INGESTION_QUOTA_MAX_THROTTLE_SECONDS", "5.0")
+)
+
+
+def _load_ingestion_quota_overrides(
+    env_name: str,
+) -> dict[str, int]:
+    """Load per-identity ingestion quota overrides from JSON."""
+    raw_value = os.getenv(env_name)
+    if not raw_value:
+        return {}
+
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        _config_error(
+            f"Invalid {env_name} format.",
+            hint=(
+                "Use a JSON object mapping identity names to quotas. "
+                f"Original error: {exc}"
+            ),
+        )
+
+    if not isinstance(parsed, dict):
+        _config_error(
+            f"Invalid {env_name} format.",
+            hint="Use a JSON object like {'orderdb': 1200}.",
+        )
+
+    normalized: dict[str, int] = {}
+    for raw_name, raw_quota in parsed.items():
+        identity_name = str(raw_name).strip()
+        if not identity_name:
+            _config_error(
+                f"{env_name} contains an empty identity name.",
+                hint="Use non-empty identity names for each quota entry.",
+            )
+
+        try:
+            quota = int(raw_quota)
+        except (TypeError, ValueError):
+            _config_error(
+                f"{env_name} contains an invalid quota for '{identity_name}'.",
+                hint="Use integer quota values greater than or equal to zero.",
+            )
+
+        if quota < 0:
+            _config_error(
+                f"{env_name} contains a negative quota for '{identity_name}'.",
+                hint="Use 0 to disable one identity or a positive integer.",
+            )
+
+        normalized[identity_name] = quota
+
+    return normalized
+
+
+INGESTION_SOURCE_QUOTAS = _load_ingestion_quota_overrides(
+    "INGESTION_SOURCE_QUOTAS"
+)
+INGESTION_TENANT_QUOTAS = _load_ingestion_quota_overrides(
+    "INGESTION_TENANT_QUOTAS"
+)
 EVENT_RETENTION_DAYS = int(os.getenv("EVENT_RETENTION_DAYS", "30"))
 COLUMN_CHANGES_RETENTION_DAYS = int(
     os.getenv("COLUMN_CHANGES_RETENTION_DAYS", "30")
@@ -765,6 +845,36 @@ if RABBITMQ_PREFETCH_COUNT <= 0:
     _config_error(
         "RABBITMQ_PREFETCH_COUNT must be greater than zero.",
         hint="Set a positive prefetch value such as 100.",
+    )
+
+if INGESTION_QUOTA_WINDOW_SECONDS <= 0:
+    _config_error(
+        "INGESTION_QUOTA_WINDOW_SECONDS must be greater than zero.",
+        hint="Set a positive quota window in seconds.",
+    )
+
+if INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW < 0:
+    _config_error(
+        "INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW cannot be negative.",
+        hint="Use 0 to disable default source quotas or a positive integer.",
+    )
+
+if INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW < 0:
+    _config_error(
+        "INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW cannot be negative.",
+        hint="Use 0 to disable default tenant quotas or a positive integer.",
+    )
+
+if INGESTION_QUOTA_MODE not in {"throttle", "drop"}:
+    _config_error(
+        f"Invalid INGESTION_QUOTA_MODE='{INGESTION_QUOTA_MODE}'.",
+        hint="Use one of: throttle, drop.",
+    )
+
+if INGESTION_QUOTA_MAX_THROTTLE_SECONDS <= 0:
+    _config_error(
+        "INGESTION_QUOTA_MAX_THROTTLE_SECONDS must be greater than zero.",
+        hint="Set a positive max throttle sleep such as 1.0.",
     )
 
 if RETENTION_CLEANUP_INTERVAL_SECONDS <= 0:

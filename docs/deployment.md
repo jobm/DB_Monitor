@@ -119,6 +119,15 @@ windows and optional archival. For production-like deployments:
 - if `RETENTION_ARCHIVE_BEFORE_DELETE=true`, mount
 	`RETENTION_ARCHIVE_DIR` to durable storage
 
+6. Enable ingestion quota controls for burst protection.
+
+Use ingestion quota settings from `docs/configuration.md` when you need
+per-source or per-tenant protection during traffic spikes:
+
+- keep `INGESTION_QUOTA_ENABLED=true` for bounded ingestion
+- use `INGESTION_QUOTA_MODE=throttle` to absorb spikes gradually
+- use `INGESTION_QUOTA_MODE=drop` only for strict fail-fast pressure control
+
 ## 4. Post-Deploy Validation
 
 Recommended order:

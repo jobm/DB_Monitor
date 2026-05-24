@@ -9,6 +9,7 @@ from typing import Optional
 
 from change_processor import ChangeProcessor
 from core.config import (
+    INGESTION_QUOTA_ENABLED,
     KAFKA_BROKER,
     KAFKA_CONSUMER_GROUP,
     KAFKA_TOPIC,
@@ -21,6 +22,7 @@ from core.models import (
 )
 from event_parser import parse_event_payload
 from event_pipeline import event_pipeline
+from ingestion_quota import QuotaDecision, quota_limiter
 from consumer.runtime_state import (
     CircuitBreaker as RuntimeCircuitBreaker,
     ConsumerStopRequested,
@@ -49,6 +51,9 @@ from metrics import (
     events_consumed_total,
     events_failed_total,
     events_processed_total,
+    ingestion_quota_dropped_total,
+    ingestion_quota_sleep_seconds,
+    ingestion_quota_throttled_total,
     kafka_commit_duration_seconds,
 )
 from row_identity import extract_row_identity
@@ -944,6 +949,51 @@ async def consumer_task(
                         continue
 
                     event = event_pipeline.transform(event)
+
+                    if INGESTION_QUOTA_ENABLED:
+                        quota_decision = await quota_limiter.apply(event)
+                        if quota_decision.throttled:
+                            ingestion_quota_throttled_total.labels(
+                                dimension=quota_decision.dimension
+                                or "unknown",
+                                identity=quota_decision.key or "unknown",
+                            ).inc()
+                            ingestion_quota_sleep_seconds.observe(
+                                quota_decision.sleep_seconds
+                            )
+
+                        if not quota_decision.allowed:
+                            ingestion_quota_dropped_total.labels(
+                                dimension=quota_decision.dimension
+                                or "unknown",
+                                identity=quota_decision.key or "unknown",
+                            ).inc()
+                            logger.warning(
+                                (
+                                    "Dropping event due to quota limit "
+                                    "dimension=%s identity=%s limit=%s"
+                                ),
+                                quota_decision.dimension,
+                                quota_decision.key,
+                                quota_decision.limit,
+                            )
+                            acknowledged = await _ack_message_and_record_progress(
+                                msg=msg,
+                                event=event,
+                                runtime=runtime,
+                                cluster_name=cluster_name,
+                                consumer_group=consumer_group,
+                                broker_kind=broker_kind,
+                            )
+                            if not acknowledged:
+                                raise ConsumerStopRequested(
+                                    (
+                                        "Quota-dropped message could not be "
+                                        "acknowledged."
+                                    )
+                                )
+                            breaker.record_success()
+                            continue
 
                     if enable_batch:
                         if not batch:

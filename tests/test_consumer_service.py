@@ -28,6 +28,9 @@ class FakeTimerMetric:
     def set(self, value: int) -> None:
         self.value = value
 
+    def observe(self, value: float) -> None:
+        self.value += value
+
 
 class FakeTransaction:
     async def __aenter__(self):
@@ -1051,6 +1054,137 @@ async def test_consumer_task_acks_filtered_events(monkeypatch):
 
     await consumer_service.consumer_task(
         cluster_name="rabbit-filtered",
+        broker_kind="rabbitmq",
+        consumer_group="rabbit-group",
+        topics=["cdc.orders"],
+        connection_url="amqp://rabbit/",
+        queue_names=["cdc.orders"],
+        enable_dlq=False,
+        enable_batch=False,
+    )
+
+    assert broker_message.acked == 1
+    assert persisted_checkpoints[0][1] == "rabbit-group"
+    assert runtime["last_commit_at"] is not None
+
+
+@pytest.mark.anyio
+async def test_consumer_task_acks_quota_dropped_events(monkeypatch):
+    runtime = consumer_service._get_consumer_runtime("rabbit-quota")
+    runtime["last_commit_at"] = None
+    broker_message = FakeBrokerMessage(
+        "cdc.orders",
+        '{"event_type": "u", "after": {"id": 7}}',
+        offset=46,
+    )
+    consumer_adapter = FakeBrokerConsumerAdapter([broker_message])
+    persisted_checkpoints: list[tuple[list[KafkaEvent], str]] = []
+
+    async def fake_refresh_dead_letter_backlog_metric(*_args, **_kwargs):
+        return 0
+
+    async def fake_persist_consumer_checkpoints(
+        events,
+        consumer_group,
+        broker_kind="kafka",
+        session_factory=None,
+    ):
+        del broker_kind
+        del session_factory
+        persisted_checkpoints.append((list(events), consumer_group))
+
+    def fake_build_message_consumer(**kwargs):
+        assert kwargs["broker_kind"] == "rabbitmq"
+        return consumer_adapter
+
+    def fake_should_process(_event):
+        return True
+
+    def fake_transform(event):
+        return event
+
+    async def fail_store_event_graph(*_args, **_kwargs):
+        raise AssertionError("Quota-dropped events should not be persisted")
+
+    async def fake_apply_quota(_event):
+        return consumer_service.QuotaDecision(
+            allowed=False,
+            dropped=True,
+            throttled=False,
+            sleep_seconds=0.0,
+            dimension="source",
+            key="orderdb",
+            limit=1,
+        )
+
+    monkeypatch.setattr(
+        consumer_service,
+        "INGESTION_QUOTA_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "refresh_dead_letter_backlog_metric",
+        fake_refresh_dead_letter_backlog_metric,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "persist_consumer_checkpoints",
+        fake_persist_consumer_checkpoints,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "build_message_consumer",
+        fake_build_message_consumer,
+    )
+    monkeypatch.setattr(
+        consumer_service.event_pipeline,
+        "should_process",
+        fake_should_process,
+    )
+    monkeypatch.setattr(
+        consumer_service.event_pipeline,
+        "transform",
+        fake_transform,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_event_graph_with_retries",
+        fail_store_event_graph,
+    )
+    monkeypatch.setattr(
+        consumer_service.quota_limiter,
+        "apply",
+        fake_apply_quota,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "events_consumed_total",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "kafka_commit_duration_seconds",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "ingestion_quota_dropped_total",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "ingestion_quota_throttled_total",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "ingestion_quota_sleep_seconds",
+        FakeTimerMetric(),
+    )
+
+    await consumer_service.consumer_task(
+        cluster_name="rabbit-quota",
         broker_kind="rabbitmq",
         consumer_group="rabbit-group",
         topics=["cdc.orders"],

@@ -152,6 +152,39 @@ through `KAFKA_CLUSTERS`, or uses the single-cluster RabbitMQ defaults when
 | `READINESS_MAX_CONSUMER_LAG` | Readiness threshold for lag backlog | `1000` |
 | `READINESS_MAX_DLQ_MESSAGES` | Readiness threshold for pending DLQ rows | `0` |
 
+## Ingestion Quota And Throttling Settings
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `INGESTION_QUOTA_ENABLED` | Enable source/tenant ingestion quota checks | `false` |
+| `INGESTION_QUOTA_WINDOW_SECONDS` | Quota enforcement window size in seconds | `60` |
+| `INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW` | Default per-source event limit per window (`0` disables) | `0` |
+| `INGESTION_SOURCE_QUOTAS` | JSON source overrides for per-window limits | unset |
+| `INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW` | Default per-tenant event limit per window (`0` disables) | `0` |
+| `INGESTION_TENANT_QUOTAS` | JSON tenant overrides for per-window limits | unset |
+| `INGESTION_QUOTA_MODE` | Over-limit behavior: `throttle` or `drop` | `throttle` |
+| `INGESTION_QUOTA_MAX_THROTTLE_SECONDS` | Max sleep per throttle cycle before retry | `5.0` |
+
+Example:
+
+```env
+INGESTION_QUOTA_ENABLED=true
+INGESTION_QUOTA_WINDOW_SECONDS=60
+INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW=2000
+INGESTION_SOURCE_QUOTAS={"orderdb":1500,"shippingdb":900}
+INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW=500
+INGESTION_TENANT_QUOTAS={"tenant-a":350,"tenant-b":150}
+INGESTION_QUOTA_MODE=throttle
+INGESTION_QUOTA_MAX_THROTTLE_SECONDS=1.0
+```
+
+Notes:
+
+- Tenant quotas apply only when an event carries `tenant_id`, `tenant`, or
+  `tenantId` in the top-level payload (or nested `payload`).
+- In `drop` mode, over-limit events are acknowledged and skipped without DB
+  writes to protect downstream storage.
+
 ## Custom Event Processors
 
 Use `CUSTOM_EVENT_PROCESSORS` when you need project-specific event mutations
