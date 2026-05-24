@@ -9,6 +9,7 @@ from typing import Optional
 
 from change_processor import ChangeProcessor
 from core.config import (
+    INGESTION_BULK_WRITE_ENABLED,
     INGESTION_QUOTA_ENABLED,
     KAFKA_BROKER,
     KAFKA_CONSUMER_GROUP,
@@ -453,6 +454,197 @@ async def _store_event_graph_with_retries(
     if last_exc is None:
         raise RuntimeError("DB write retries exhausted")
     raise last_exc
+
+
+async def _store_batch_graph_with_retries(
+    session_factory: Callable,
+    events: list[KafkaEvent],
+    max_retries: int = 5,
+) -> set[tuple[str | None, int | None, int | None]]:
+    """Persist one batch via bulk event insert and per-event change extraction.
+
+    Returns a set of event-position keys for newly inserted rows.
+    """
+    if not events:
+        return set()
+
+    base_delay = 1.0
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            with db_write_duration_seconds.labels(operation="BATCH").time():
+                async with session_factory() as session:
+                    async with session.begin():
+                        for event_obj in events:
+                            table_id = await schema_discovery.process_event(
+                                event_obj,
+                                session=session,
+                            )
+                            if table_id:
+                                event_obj.source_table_id = table_id
+
+                            await _populate_row_identity(session, event_obj)
+
+                        values = [
+                            {
+                                "event_type": event_obj.event_type,
+                                "event_time": event_obj.event_time,
+                                "user_id": event_obj.user_id,
+                                "service_name": event_obj.service_name,
+                                "kafka_topic": event_obj.kafka_topic,
+                                "kafka_partition": event_obj.kafka_partition,
+                                "kafka_offset": event_obj.kafka_offset,
+                                "source_table_id": event_obj.source_table_id,
+                                "operation": event_obj.operation,
+                                "row_identity": event_obj.row_identity,
+                                "event_data": event_obj.event_data,
+                                "raw_payload": event_obj.raw_payload,
+                            }
+                            for event_obj in events
+                        ]
+                        insert_stmt = (
+                            pg_insert(KafkaEvent)
+                            .values(values)
+                            .on_conflict_do_nothing(
+                                index_elements=[
+                                    "kafka_topic",
+                                    "kafka_partition",
+                                    "kafka_offset",
+                                ]
+                            )
+                            .returning(
+                                KafkaEvent.id,
+                                KafkaEvent.kafka_topic,
+                                KafkaEvent.kafka_partition,
+                                KafkaEvent.kafka_offset,
+                            )
+                        )
+
+                        result = await session.execute(insert_stmt)
+                        inserted_rows = result.all()
+                        inserted_lookup = {
+                            (
+                                row.kafka_topic,
+                                row.kafka_partition,
+                                row.kafka_offset,
+                            ): row.id
+                            for row in inserted_rows
+                        }
+
+                        inserted_keys = set(inserted_lookup.keys())
+                        for event_obj in events:
+                            event_key = (
+                                event_obj.kafka_topic,
+                                event_obj.kafka_partition,
+                                event_obj.kafka_offset,
+                            )
+                            inserted_id = inserted_lookup.get(event_key)
+                            if inserted_id is None:
+                                continue
+
+                            event_obj.id = inserted_id
+                            if event_obj.source_table_id:
+                                await change_processor.process_event(
+                                    event_obj,
+                                    session=session,
+                                )
+
+                        return inserted_keys
+        except (OperationalError, DBAPIError) as exc:
+            wait = base_delay * (2 ** (attempt - 1)) + random.random() * 0.1
+            logger.warning(
+                "Transient DB error on batch attempt %d/%d: %s. "
+                "Retrying in %.2fs",
+                attempt,
+                max_retries,
+                exc,
+                wait,
+            )
+            await asyncio.sleep(wait)
+            last_exc = exc
+            continue
+        except SQLAlchemyError as exc:
+            logger.error("Non-retryable DB error when writing batch: %s", exc)
+            raise
+
+    logger.error(
+        "Exhausted DB batch write retries (%d). Raising last exception",
+        max_retries,
+    )
+    if last_exc is None:
+        raise RuntimeError("DB batch write retries exhausted")
+    raise last_exc
+
+
+async def _process_batch_individually(
+    batch: list[tuple[KafkaEvent, str, BrokerMessage]],
+    dlq_publisher: Optional[DeadLetterPublisher],
+    dlq_destination: str,
+    enable_dlq: bool,
+    broker_kind: str,
+) -> bool:
+    """Process one batch with per-event persistence fallback logic."""
+    for event, raw_data, _message in batch:
+        try:
+            inserted = await _store_event_graph_with_retries(
+                AsyncSessionLocal,
+                event,
+                max_retries=5,
+            )
+            if not inserted:
+                logger.info(
+                    (
+                        "Skipping duplicate Kafka event topic=%s "
+                        "partition=%s offset=%s"
+                    ),
+                    event.kafka_topic,
+                    event.kafka_partition,
+                    event.kafka_offset,
+                )
+                continue
+
+            await _broadcast_event(event)
+
+            events_processed_total.labels(
+                service=event.service_name or "unknown",
+                operation=event.operation or "unknown",
+            ).inc()
+        except Exception as exc:
+            logger.error("Failed to process event after retries: %s", exc)
+            events_failed_total.labels(
+                service=event.service_name or "unknown",
+                error_type=type(exc).__name__,
+            ).inc()
+            if enable_dlq:
+                handled = await send_to_dlq(
+                    dlq_publisher,
+                    event,
+                    str(exc),
+                    raw_data.encode(),
+                    dlq_destination=dlq_destination,
+                    broker_kind=broker_kind,
+                )
+                if not handled:
+                    logger.error(
+                        (
+                            "Skipping commit because DLQ persistence "
+                            "failed for %s/%s/%s"
+                        ),
+                        event.kafka_topic,
+                        event.kafka_partition,
+                        event.kafka_offset,
+                    )
+                    return False
+            else:
+                logger.error(
+                    "Skipping commit because DLQ is disabled for %s/%s/%s",
+                    event.kafka_topic,
+                    event.kafka_partition,
+                    event.kafka_offset,
+                )
+                return False
+
+    return True
 
 
 async def _insert_event_record(session, event_obj: KafkaEvent) -> bool:
@@ -1132,74 +1324,70 @@ async def _process_batch(
             "db_monitor.dlq_enabled": enable_dlq,
         },
     ):
-        for event, raw_data, _message in batch:
+        if INGESTION_BULK_WRITE_ENABLED:
             try:
-                inserted = await _store_event_graph_with_retries(
+                inserted_keys = await _store_batch_graph_with_retries(
                     AsyncSessionLocal,
-                    event,
+                    [event for event, _raw_data, _message in batch],
                     max_retries=5,
                 )
-                if not inserted:
-                    logger.info(
-                        (
-                            "Skipping duplicate Kafka event topic=%s "
-                            "partition=%s offset=%s"
-                        ),
-                        event.kafka_topic,
-                        event.kafka_partition,
-                        event.kafka_offset,
-                    )
-                    continue
-
-                await _broadcast_event(event)
-
-                events_processed_total.labels(
-                    service=event.service_name or "unknown",
-                    operation=event.operation or "unknown",
-                ).inc()
             except Exception as exc:
-                logger.error("Failed to process event after retries: %s", exc)
-                events_failed_total.labels(
-                    service=event.service_name or "unknown",
-                    error_type=type(exc).__name__,
-                ).inc()
-                if enable_dlq:
-                    handled = await send_to_dlq(
-                        dlq_publisher,
-                        event,
-                        str(exc),
-                        raw_data.encode(),
-                        dlq_destination=dlq_destination,
-                        broker_kind=broker_kind,
-                    )
-                    if not handled:
-                        logger.error(
-                            (
-                                "Skipping commit because DLQ persistence "
-                                "failed "
-                                "for %s/%s/%s"
-                            ),
-                            event.kafka_topic,
-                            event.kafka_partition,
-                            event.kafka_offset,
-                        )
-                        batch_messages = [
-                            message for _event, _raw_data, message in batch
-                        ]
-                        await _requeue_broker_messages(batch_messages)
-                        return False
-                else:
-                    logger.error(
-                        "Skipping commit because DLQ is disabled for %s/%s/%s",
-                        event.kafka_topic,
-                        event.kafka_partition,
-                        event.kafka_offset,
-                    )
+                logger.warning(
+                    "Bulk batch persistence failed, falling back to "
+                    "per-event writes: %s",
+                    exc,
+                )
+                processed = await _process_batch_individually(
+                    batch,
+                    dlq_publisher,
+                    dlq_destination,
+                    enable_dlq,
+                    broker_kind,
+                )
+                if not processed:
                     batch_messages = [
                         message for _event, _raw_data, message in batch
                     ]
                     await _requeue_broker_messages(batch_messages)
                     return False
+            else:
+                for event, _raw_data, _message in batch:
+                    event_key = (
+                        event.kafka_topic,
+                        event.kafka_partition,
+                        event.kafka_offset,
+                    )
+                    if event_key not in inserted_keys:
+                        logger.info(
+                            (
+                                "Skipping duplicate Kafka event topic=%s "
+                                "partition=%s offset=%s"
+                            ),
+                            event.kafka_topic,
+                            event.kafka_partition,
+                            event.kafka_offset,
+                        )
+                        continue
+
+                    await _broadcast_event(event)
+                    events_processed_total.labels(
+                        service=event.service_name or "unknown",
+                        operation=event.operation or "unknown",
+                    ).inc()
+        else:
+            processed = await _process_batch_individually(
+                batch,
+                dlq_publisher,
+                dlq_destination,
+                enable_dlq,
+                broker_kind,
+            )
+            if not processed:
+                batch_messages = [
+                    message for _event, _raw_data, message in batch
+                ]
+                await _requeue_broker_messages(batch_messages)
+                return False
 
     try:
         with kafka_commit_duration_seconds.time():

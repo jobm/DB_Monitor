@@ -1270,6 +1270,11 @@ async def test_process_batch_requeues_rabbitmq_messages_on_dlq_failure(
 
     monkeypatch.setattr(
         consumer_service,
+        "INGESTION_BULK_WRITE_ENABLED",
+        False,
+    )
+    monkeypatch.setattr(
+        consumer_service,
         "_store_event_graph_with_retries",
         fake_store,
     )
@@ -1289,6 +1294,203 @@ async def test_process_batch_requeues_rabbitmq_messages_on_dlq_failure(
     assert processed is False
     assert message.acked == 0
     assert message.nacked == 1
+
+
+@pytest.mark.anyio
+async def test_process_batch_uses_bulk_write_path(monkeypatch):
+    event = KafkaEvent(
+        event_type="u",
+        event_time=datetime.now(timezone.utc),
+        user_id=None,
+        service_name="orderdb",
+        kafka_topic="orderdb.public.orders",
+        kafka_partition=0,
+        kafka_offset=12,
+        event_data={"after": {"id": 3}},
+        raw_payload="{}",
+        operation="UPDATE",
+    )
+    event.id = 202
+    message = FakeBrokerMessage("orderdb.public.orders", event.raw_payload)
+    acked_batches: list[list[FakeBrokerMessage]] = []
+
+    async def fake_store_batch(*_args, **_kwargs):
+        return {
+            (
+                event.kafka_topic,
+                event.kafka_partition,
+                event.kafka_offset,
+            )
+        }
+
+    async def fail_individual_store(*_args, **_kwargs):
+        raise AssertionError("Bulk path should not call per-event store")
+
+    async def fake_ack(messages):
+        acked_batches.append(list(messages))
+        for broker_message in messages:
+            await broker_message.ack_callback()
+
+    async def fake_persist_checkpoints(
+        events,
+        consumer_group,
+        broker_kind="kafka",
+        session_factory=None,
+    ):
+        del events
+        del consumer_group
+        del broker_kind
+        del session_factory
+
+    async def fake_broadcast(_event):
+        return None
+
+    monkeypatch.setattr(
+        consumer_service,
+        "INGESTION_BULK_WRITE_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_batch_graph_with_retries",
+        fake_store_batch,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_event_graph_with_retries",
+        fail_individual_store,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "persist_consumer_checkpoints",
+        fake_persist_checkpoints,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_broadcast_event",
+        fake_broadcast,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "kafka_commit_duration_seconds",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "events_processed_total",
+        FakeTimerMetric(),
+    )
+
+    processed = await consumer_service._process_batch(
+        [(event, event.raw_payload, message)],
+        fake_ack,
+        dlq_publisher=FakeDeadLetterPublisher(),
+        dlq_destination="rabbit-dlq",
+        enable_dlq=True,
+        runtime=consumer_service.consumer_runtime,
+        consumer_group="rabbit-group",
+        broker_kind="rabbitmq",
+    )
+
+    assert processed is True
+    assert message.acked == 1
+    assert len(acked_batches) == 1
+
+
+@pytest.mark.anyio
+async def test_process_batch_falls_back_when_bulk_write_fails(monkeypatch):
+    event = KafkaEvent(
+        event_type="u",
+        event_time=datetime.now(timezone.utc),
+        user_id=None,
+        service_name="orderdb",
+        kafka_topic="orderdb.public.orders",
+        kafka_partition=0,
+        kafka_offset=13,
+        event_data={"after": {"id": 4}},
+        raw_payload="{}",
+        operation="UPDATE",
+    )
+    event.id = 303
+    message = FakeBrokerMessage("orderdb.public.orders", event.raw_payload)
+    fallback_store_calls = 0
+
+    async def fail_store_batch(*_args, **_kwargs):
+        raise RuntimeError("bulk failed")
+
+    async def fake_store(*_args, **_kwargs):
+        nonlocal fallback_store_calls
+        fallback_store_calls += 1
+        return True
+
+    async def fake_ack(messages):
+        for broker_message in messages:
+            await broker_message.ack_callback()
+
+    async def fake_persist_checkpoints(
+        events,
+        consumer_group,
+        broker_kind="kafka",
+        session_factory=None,
+    ):
+        del events
+        del consumer_group
+        del broker_kind
+        del session_factory
+
+    async def fake_broadcast(_event):
+        return None
+
+    monkeypatch.setattr(
+        consumer_service,
+        "INGESTION_BULK_WRITE_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_batch_graph_with_retries",
+        fail_store_batch,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_store_event_graph_with_retries",
+        fake_store,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "persist_consumer_checkpoints",
+        fake_persist_checkpoints,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "_broadcast_event",
+        fake_broadcast,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "kafka_commit_duration_seconds",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "events_processed_total",
+        FakeTimerMetric(),
+    )
+
+    processed = await consumer_service._process_batch(
+        [(event, event.raw_payload, message)],
+        fake_ack,
+        dlq_publisher=FakeDeadLetterPublisher(),
+        dlq_destination="rabbit-dlq",
+        enable_dlq=True,
+        runtime=consumer_service.consumer_runtime,
+        consumer_group="rabbit-group",
+        broker_kind="rabbitmq",
+    )
+
+    assert processed is True
+    assert fallback_store_calls == 1
+    assert message.acked == 1
 
 
 @pytest.mark.anyio

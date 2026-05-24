@@ -164,6 +164,7 @@ through `KAFKA_CLUSTERS`, or uses the single-cluster RabbitMQ defaults when
 | `INGESTION_TENANT_QUOTAS` | JSON tenant overrides for per-window limits | unset |
 | `INGESTION_QUOTA_MODE` | Over-limit behavior: `throttle` or `drop` | `throttle` |
 | `INGESTION_QUOTA_MAX_THROTTLE_SECONDS` | Max sleep per throttle cycle before retry | `5.0` |
+| `INGESTION_BULK_WRITE_ENABLED` | Enable bulk event insert path for batch ingestion | `true` |
 
 Example:
 

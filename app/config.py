@@ -656,6 +656,9 @@ INGESTION_QUOTA_MODE = os.getenv(
 INGESTION_QUOTA_MAX_THROTTLE_SECONDS = float(
     os.getenv("INGESTION_QUOTA_MAX_THROTTLE_SECONDS", "5.0")
 )
+INGESTION_BULK_WRITE_ENABLED = (
+    os.getenv("INGESTION_BULK_WRITE_ENABLED", "true").lower() == "true"
+)
 
 
 def _load_ingestion_quota_overrides(

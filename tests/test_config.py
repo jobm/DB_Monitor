@@ -470,3 +470,14 @@ def test_config_rejects_invalid_ingestion_quota_mode(
         match="Invalid INGESTION_QUOTA_MODE='pause'",
     ):
         _load_config_module("config_invalid_ingestion_quota_mode")
+
+
+def test_config_loads_ingestion_bulk_write_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bulk-write toggle should parse as a boolean feature flag."""
+    monkeypatch.setenv("INGESTION_BULK_WRITE_ENABLED", "false")
+
+    config = _load_config_module("config_ingestion_bulk_write")
+
+    assert config.INGESTION_BULK_WRITE_ENABLED is False
