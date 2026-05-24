@@ -7,6 +7,7 @@ Adopters can integrate DB Monitor as an audit-log platform around their own data
 ## Documentation
 
 - API reference: [api-docs.md](api-docs.md)
+- API stability policy: [docs/api-stability.md](docs/api-stability.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
 - Configuration: [docs/configuration.md](docs/configuration.md)
 - Deployment: [docs/deployment.md](docs/deployment.md)

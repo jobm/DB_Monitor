@@ -77,7 +77,7 @@ These are not committed backlog items yet.
 - [x] Phase 1: Establish canonical package metadata and CLI entrypoints
 - [x] Phase 2: Migrate runtime imports to a canonical `db_monitor` namespace
 - [x] Phase 3: Move package layout to `src/` and remove compatibility shims
-- [ ] Phase 4: Define and document public API stability contracts
+- [x] Phase 4: Define and document public API stability contracts
 - [ ] Phase 5: Harden quality gates (ruff, type checks, packaging smoke tests)
 - [ ] Phase 6: Add automated release workflows and signed/tagged distribution
 
@@ -96,9 +96,9 @@ These are not committed backlog items yet.
 - [x] Phase 3: Collapse duplicate packaging metadata to one canonical pyproject
 - [x] Phase 3: Update docs and make targets to use package-native module invocations only
 
-- [ ] Phase 4: Define supported public Python API modules and document stability guarantees
-- [ ] Phase 4: Define deprecation and removal policy with minimum grace window
-- [ ] Phase 4: Add versioning policy and release compatibility matrix
+- [x] Phase 4: Define supported public Python API modules and document stability guarantees
+- [x] Phase 4: Define deprecation and removal policy with minimum grace window
+- [x] Phase 4: Add versioning policy and release compatibility matrix
 
 - [ ] Phase 5: Add Ruff config and enforce lint gate in CI
 - [ ] Phase 5: Add static typing gate (mypy or pyright) for package namespace
@@ -153,3 +153,7 @@ These are not committed backlog items yet.
 - Removed `app/_namespace_bridge.py` and switched `app/main.py` to direct
 	canonical `db_monitor.*` imports with no dynamic bridge bootstrap.
 - Broader core-marker validation now passes from `tests/` (`132 passed`).
+- Added a formal API stability contract doc (`docs/api-stability.md`) with
+	public module/symbol list, deprecation window, and compatibility matrix.
+- Added machine-readable contract constants in
+	`src/db_monitor/public_api.py` plus import/symbol policy tests.
