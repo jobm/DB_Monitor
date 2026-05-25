@@ -166,10 +166,13 @@ class AuditLogWriter:
             try:
                 async with engine.begin() as conn:
                     for e in entries:
+                        insert_sql = (
+                            "INSERT INTO api_audit_log_spill (entry, error_message) "
+                            "VALUES (:entry::jsonb, :error_message)"
+                        )
+
                         await conn.execute(
-                            text(
-                                "INSERT INTO api_audit_log_spill (entry, error_message) VALUES (:entry::jsonb, :error_message)"
-                            ),
+                            text(insert_sql),
                             {
                                 "entry": json.dumps(
                                     {

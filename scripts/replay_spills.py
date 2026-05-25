@@ -25,9 +25,24 @@ async def main_async(limit: int, ids: Optional[list[int]], actor: Optional[str])
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Replay spilled audit log entries")
-    parser.add_argument("--limit", type=int, default=100, help="Max entries to replay")
-    parser.add_argument("--ids", type=str, default=None, help="Comma-separated spill ids to replay")
-    parser.add_argument("--actor", type=str, default=None, help="Actor name to record for the replay")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Max entries to replay",
+    )
+    parser.add_argument(
+        "--ids",
+        type=str,
+        default=None,
+        help="Comma-separated spill ids to replay",
+    )
+    parser.add_argument(
+        "--actor",
+        type=str,
+        default=None,
+        help="Actor name to record for the replay",
+    )
     args = parser.parse_args()
     ids = parse_ids(args.ids)
     asyncio.run(main_async(args.limit, ids=ids, actor=args.actor))

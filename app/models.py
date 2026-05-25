@@ -389,8 +389,16 @@ class ApiAuditLogSpill(Base):
     id = Column(Integer, primary_key=True, index=True)
     entry = Column(JSONB, nullable=False)
     error_message = Column(Text, nullable=True)
-    spilled_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
-    replayed = Column(Boolean, default=False, nullable=False)
+    spilled_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        index=True,
+    )
+    replayed = Column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
     replayed_by = Column(String(128), nullable=True)
     replayed_at = Column(DateTime(timezone=True), nullable=True, index=True)
 

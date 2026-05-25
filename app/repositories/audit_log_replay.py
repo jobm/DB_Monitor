@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
-
-from sqlalchemy import select, delete
+from sqlalchemy import select
 
 from core.db import AsyncSessionLocal
 from core.models import ApiAuditLog, ApiAuditLogSpill
 
 
-async def replay_spill_entries(limit: int = 100, *, ids: list[int] | None = None, actor: str | None = None) -> dict[str, int]:
+async def replay_spill_entries(
+    limit: int = 100,
+    *,
+    ids: list[int] | None = None,
+    actor: str | None = None,
+) -> dict[str, int]:
     """Replay spilled audit log entries into `api_audit_logs`.
 
     If `ids` is provided, replay only those spill rows. Otherwise replay up to
@@ -24,10 +27,15 @@ async def replay_spill_entries(limit: int = 100, *, ids: list[int] | None = None
     async with AsyncSessionLocal() as session:
         async with session.begin():
             if ids:
-                result = await session.execute(select(ApiAuditLogSpill).where(ApiAuditLogSpill.id.in_(ids)))
+                result = await session.execute(
+                    select(ApiAuditLogSpill).where(ApiAuditLogSpill.id.in_(ids))
+                )
             else:
                 result = await session.execute(
-                    select(ApiAuditLogSpill).where(ApiAuditLogSpill.replayed == False).order_by(ApiAuditLogSpill.spilled_at.desc()).limit(limit)
+                    select(ApiAuditLogSpill)
+                    .where(ApiAuditLogSpill.replayed.is_(False))
+                    .order_by(ApiAuditLogSpill.spilled_at.desc())
+                    .limit(limit)
                 )
 
             rows = result.scalars().all()
