@@ -23,7 +23,7 @@ from core.models import (
 )
 from event_parser import parse_event_payload
 from event_pipeline import event_pipeline
-from ingestion_quota import QuotaDecision, quota_limiter
+from ingestion_quota import quota_limiter
 from consumer.runtime_state import (
     CircuitBreaker as RuntimeCircuitBreaker,
     ConsumerStopRequested,
@@ -1169,13 +1169,15 @@ async def consumer_task(
                                 quota_decision.key,
                                 quota_decision.limit,
                             )
-                            acknowledged = await _ack_message_and_record_progress(
-                                msg=msg,
-                                event=event,
-                                runtime=runtime,
-                                cluster_name=cluster_name,
-                                consumer_group=consumer_group,
-                                broker_kind=broker_kind,
+                            acknowledged = await (
+                                _ack_message_and_record_progress(
+                                    msg=msg,
+                                    event=event,
+                                    runtime=runtime,
+                                    cluster_name=cluster_name,
+                                    consumer_group=consumer_group,
+                                    broker_kind=broker_kind,
+                                )
                             )
                             if not acknowledged:
                                 raise ConsumerStopRequested(

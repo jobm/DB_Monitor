@@ -3,6 +3,9 @@
 This guide covers the supported local and production-like deployment workflows
 for DB Monitor.
 
+For the pre-v1 customer isolation decision and rollout model, see
+`docs/pre-v1-tenant-isolation-strategy.md`.
+
 ## 1. Local Example Sandbox (Docker Compose)
 
 The easiest way to evaluate DB Monitor locally is to run the bundled Docker Compose sandbox stack, which includes simulated source databases, Debezium configurations, and test data generators.

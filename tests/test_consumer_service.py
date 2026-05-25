@@ -8,6 +8,7 @@ import pytest
 
 import consumer_service
 import message_brokers
+from ingestion_quota import QuotaDecision
 from models import KafkaEvent
 
 
@@ -1107,7 +1108,7 @@ async def test_consumer_task_acks_quota_dropped_events(monkeypatch):
         raise AssertionError("Quota-dropped events should not be persisted")
 
     async def fake_apply_quota(_event):
-        return consumer_service.QuotaDecision(
+        return QuotaDecision(
             allowed=False,
             dropped=True,
             throttled=False,

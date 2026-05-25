@@ -53,7 +53,9 @@ class EventsRepository:
 
             total: int | None = None
             if include_total:
-                count_query = select(func.count()).select_from(query.subquery())
+                count_query = select(func.count()).select_from(
+                    query.subquery()
+                )
                 total_result = await session.execute(count_query)
                 total = int(total_result.scalar() or 0)
 

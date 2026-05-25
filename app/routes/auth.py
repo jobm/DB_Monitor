@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import secrets
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import or_, select
 
 from db_monitor.auth import (
@@ -27,6 +30,7 @@ from core.responses import (
 from .utils import utc_now
 
 router = APIRouter()
+CUSTOMER_JWT_SECRET_STATE: dict[str, dict[str, object]] = {}
 
 
 def api_key_response(api_key: ApiKey, raw_key: str, message: str) -> dict:
@@ -78,6 +82,137 @@ def serialize_api_key_summary(
         "can_rotate": status == "active",
         "can_revoke": status == "active" and api_key.id != current_api_key_id,
     }
+
+
+def _utc_now_iso() -> str:
+    """Return the current UTC timestamp as an ISO-8601 string."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _require_customer_scope(
+    customer_id: str,
+    customer_header: str | None,
+) -> str:
+    """Validate and normalize customer scope for mutating admin actions."""
+    normalized_customer_id = customer_id.strip()
+    if not normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_id path parameter must not be empty.",
+        )
+
+    if customer_header is None or not customer_header.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-DBM-Customer-ID header is required for mutating "
+                "admin operations."
+            ),
+        )
+
+    normalized_scope = customer_header.strip()
+    if normalized_scope != normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-DBM-Customer-ID header must match the customer_id "
+                "path parameter."
+            ),
+        )
+
+    return normalized_scope
+
+
+def _new_customer_jwt_state() -> dict[str, object]:
+    """Create one customer JWT secret state record."""
+    return {
+        "active_secret": None,
+        "next_secret": None,
+        "previous_active_secret": None,
+        "generation": 0,
+        "last_rotated_at": None,
+        "last_recovered_at": None,
+        "audit": [],
+    }
+
+
+def _get_customer_jwt_state(customer_id: str) -> dict[str, object]:
+    """Return mutable JWT secret state for one customer scope."""
+    return CUSTOMER_JWT_SECRET_STATE.setdefault(
+        customer_id,
+        _new_customer_jwt_state(),
+    )
+
+
+def _secret_fingerprint(secret_value: str | None) -> str | None:
+    """Return a non-sensitive fingerprint for operator visibility."""
+    if secret_value is None:
+        return None
+    if len(secret_value) <= 8:
+        return secret_value
+    return f"{secret_value[:4]}...{secret_value[-4:]}"
+
+
+def _serialize_customer_jwt_state(
+    customer_id: str,
+    state: dict[str, object],
+) -> dict[str, object]:
+    """Render JWT state without exposing raw secret material."""
+    active_secret = state.get("active_secret")
+    next_secret = state.get("next_secret")
+    previous_active_secret = state.get("previous_active_secret")
+    audit_entries = list(state.get("audit") or [])
+    last_action = None
+    if audit_entries:
+        last_action = audit_entries[-1].get("action")
+    return {
+        "customer_id": customer_id,
+        "generation": int(state.get("generation") or 0),
+        "last_rotated_at": state.get("last_rotated_at"),
+        "last_recovered_at": state.get("last_recovered_at"),
+        "active_fingerprint": _secret_fingerprint(active_secret),
+        "next_fingerprint": _secret_fingerprint(next_secret),
+        "has_recovery_secret": previous_active_secret is not None,
+        "audit_count": len(audit_entries),
+        "last_action": last_action,
+    }
+
+
+def _append_jwt_audit(
+    state: dict[str, object],
+    action: str,
+    detail: str,
+) -> None:
+    """Append one customer JWT lifecycle audit event."""
+    audit_entries = list(state.get("audit") or [])
+    audit_entries.append(
+        {
+            "action": action,
+            "detail": detail,
+            "timestamp": _utc_now_iso(),
+        }
+    )
+    state["audit"] = audit_entries
+
+
+def _initialize_customer_jwt_secrets(
+    customer_id: str,
+) -> dict[str, object]:
+    """Initialize per-customer JWT active/next secret material."""
+    state = _get_customer_jwt_state(customer_id)
+    if state.get("active_secret") is None:
+        state["active_secret"] = secrets.token_urlsafe(48)
+        state["generation"] = 1
+    if state.get("next_secret") is None:
+        state["next_secret"] = secrets.token_urlsafe(48)
+    if state.get("last_rotated_at") is None:
+        state["last_rotated_at"] = _utc_now_iso()
+    _append_jwt_audit(
+        state,
+        action="bootstrap",
+        detail="Customer JWT active and next secrets initialized.",
+    )
+    return state
 
 
 @router.post("/auth/token", response_model=AccessTokenExchangeResponse)
@@ -321,3 +456,173 @@ async def bootstrap_admin_key(
             raw_key,
             "Store this ADMIN key securely. It cannot be retrieved again.",
         )
+
+
+@router.post("/admin/customers/{customer_id}/auth/bootstrap")
+async def bootstrap_customer_auth_scope(
+    customer_id: str,
+    owner_suffix: str = Query("bootstrap-admin"),
+    ttl_days: int = Query(API_KEY_DEFAULT_TTL_DAYS, ge=1, le=3650),
+    customer_header: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
+    creator_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Bootstrap one customer scope for API key and JWT secret lifecycle."""
+    del creator_api_key
+    scope = _require_customer_scope(customer_id, customer_header)
+
+    normalized_owner_suffix = owner_suffix.strip()
+    if not normalized_owner_suffix:
+        raise HTTPException(
+            status_code=400,
+            detail="owner_suffix query parameter must not be empty.",
+        )
+
+    raw_key = generate_new_api_key()
+    key_hash = get_api_key_hash(raw_key)
+    expires_at = build_api_key_expiration(ttl_days)
+
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            new_key = ApiKey(
+                key_hash=key_hash,
+                owner_name=f"{scope}:{normalized_owner_suffix}",
+                role="admin",
+                is_active=True,
+                expires_at=expires_at,
+            )
+            session.add(new_key)
+            await session.flush()
+
+            response = api_key_response(
+                new_key,
+                raw_key,
+                (
+                    "Store this customer admin key securely. "
+                    "It cannot be retrieved again."
+                ),
+            )
+            jwt_state = _initialize_customer_jwt_secrets(scope)
+            response["customer_id"] = scope
+            response["jwt_state"] = _serialize_customer_jwt_state(
+                scope,
+                jwt_state,
+            )
+            return response
+
+
+@router.get("/admin/customers/{customer_id}/auth/jwt")
+async def get_customer_jwt_state(
+    customer_id: str,
+    creator_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Return customer JWT secret lifecycle metadata for operators."""
+    del creator_api_key
+    normalized_customer_id = customer_id.strip()
+    if not normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_id path parameter must not be empty.",
+        )
+
+    state = _get_customer_jwt_state(normalized_customer_id)
+    if state.get("active_secret") is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Customer JWT secrets are not initialized. "
+                "Run POST /admin/customers/{customer_id}/auth/bootstrap "
+                "first."
+            ),
+        )
+
+    return _serialize_customer_jwt_state(normalized_customer_id, state)
+
+
+@router.post("/admin/customers/{customer_id}/auth/jwt/rotate")
+async def rotate_customer_jwt_secrets(
+    customer_id: str,
+    customer_header: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
+    creator_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Rotate JWT active/next secret material for one customer scope."""
+    del creator_api_key
+    scope = _require_customer_scope(customer_id, customer_header)
+    state = _get_customer_jwt_state(scope)
+
+    if state.get("active_secret") is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Customer JWT secrets are not initialized. "
+                "Run POST /admin/customers/{customer_id}/auth/bootstrap "
+                "first."
+            ),
+        )
+
+    previous_active_secret = state.get("active_secret")
+    promoted_secret = state.get("next_secret")
+    if promoted_secret is None:
+        promoted_secret = secrets.token_urlsafe(48)
+
+    state["previous_active_secret"] = previous_active_secret
+    state["active_secret"] = promoted_secret
+    state["next_secret"] = secrets.token_urlsafe(48)
+    state["generation"] = int(state.get("generation") or 0) + 1
+    state["last_rotated_at"] = _utc_now_iso()
+    _append_jwt_audit(
+        state,
+        action="rotate",
+        detail="Customer JWT active/next secret material rotated.",
+    )
+
+    return {
+        "customer_id": scope,
+        "message": "Customer JWT secrets rotated.",
+        "jwt_state": _serialize_customer_jwt_state(scope, state),
+    }
+
+
+@router.post("/admin/customers/{customer_id}/auth/jwt/recover")
+async def recover_customer_jwt_secrets(
+    customer_id: str,
+    customer_header: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
+    creator_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Recover prior active JWT secret material for one customer scope."""
+    del creator_api_key
+    scope = _require_customer_scope(customer_id, customer_header)
+    state = _get_customer_jwt_state(scope)
+
+    previous_active_secret = state.get("previous_active_secret")
+    if previous_active_secret is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No recovery secret is available for this customer scope."
+            ),
+        )
+
+    current_active_secret = state.get("active_secret")
+    state["active_secret"] = previous_active_secret
+    state["previous_active_secret"] = current_active_secret
+    state["last_recovered_at"] = _utc_now_iso()
+    _append_jwt_audit(
+        state,
+        action="recover",
+        detail="Customer JWT active secret recovered from prior state.",
+    )
+
+    return {
+        "customer_id": scope,
+        "message": "Customer JWT secret recovery completed.",
+        "jwt_state": _serialize_customer_jwt_state(scope, state),
+    }

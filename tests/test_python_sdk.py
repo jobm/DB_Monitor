@@ -116,7 +116,9 @@ def test_get_events_encodes_cursor(monkeypatch) -> None:
         del timeout
         captured["url"] = request.full_url
         captured["headers"] = dict(request.header_items())
-        return FakeResponse({"events": [], "total": None, "limit": 5, "offset": 0})
+        return FakeResponse(
+            {"events": [], "total": None, "limit": 5, "offset": 0}
+        )
 
     monkeypatch.setattr(
         "urllib.request.urlopen",

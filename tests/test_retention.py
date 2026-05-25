@@ -11,13 +11,22 @@ class _FakeColumn:
 
 
 class _FakeTable:
-    columns = [_FakeColumn("id"), _FakeColumn("captured_at"), _FakeColumn("payload")]
+    columns = [
+        _FakeColumn("id"),
+        _FakeColumn("captured_at"),
+        _FakeColumn("payload"),
+    ]
 
 
 class _FakeRow:
     __table__ = _FakeTable()
 
-    def __init__(self, row_id: int, captured_at: datetime, payload: dict[str, int]):
+    def __init__(
+        self,
+        row_id: int,
+        captured_at: datetime,
+        payload: dict[str, int],
+    ):
         self.id = row_id
         self.captured_at = captured_at
         self.payload = payload
@@ -28,8 +37,16 @@ def test_append_archive_rows_writes_jsonl(tmp_path, monkeypatch) -> None:
 
     now = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
     rows = [
-        _FakeRow(1, datetime(2026, 5, 20, 10, 0, tzinfo=timezone.utc), {"x": 1}),
-        _FakeRow(2, datetime(2026, 5, 20, 11, 0, tzinfo=timezone.utc), {"x": 2}),
+        _FakeRow(
+            1,
+            datetime(2026, 5, 20, 10, 0, tzinfo=timezone.utc),
+            {"x": 1},
+        ),
+        _FakeRow(
+            2,
+            datetime(2026, 5, 20, 11, 0, tzinfo=timezone.utc),
+            {"x": 2},
+        ),
     ]
 
     retention._append_archive_rows("events", rows, now)

@@ -72,6 +72,62 @@ These are not committed backlog items yet.
 
 ## Active Backlog
 
+### Pre-V1 Launch Execution (Shared Control Plane + Isolated Cells)
+
+#### Delivery Backlog
+
+- [x] Implement automated customer cell provisioning workflow
+	(namespace, secrets, DB target, broker namespace, deploy, migrate, verify)
+- [x] Implement customer-scoped bootstrap + rotation workflow for API/JWT
+	secrets
+- [x] Add deployable namespace guardrails (ResourceQuota, limits,
+	NetworkPolicy)
+- [x] Add customer lifecycle actions (suspend, resume, upgrade one customer
+	cell)
+- [x] Add per-customer observability labels and alert routing integration
+- [x] Add onboarding orchestration status tracking and audit trail
+- [x] Enforce customer scope for mutating operator APIs
+
+#### One-Go Closure Checklist
+
+- [x] Close provisioning workflow end-to-end
+	Done when namespace, secrets/config, DB target, broker namespace,
+	deployment, migrations, and verify adapters are implemented with real
+	provider hooks and integration tests.
+- [x] Close scoped bootstrap and rotation for API/JWT secrets
+	Done when per-customer secret bootstrap, rotation API, audit trail, and
+	recovery path tests are implemented.
+- [x] Close deployable namespace guardrails
+	Done when ResourceQuota, limits, and NetworkPolicy templates are generated
+	per customer with validation tests.
+- [x] Close per-customer observability and alert routing
+	Done when customer labels propagate to metrics/logs/traces and alert routing
+	rules are verified by tests.
+- [x] Close customer scope on all mutating operator APIs
+	Done when every mutating admin endpoint enforces customer scope and route
+	tests cover both allow and reject paths.
+
+#### Started
+
+- [x] Initial slice: require explicit customer scope on mutating
+	`/admin/dlq/*/replay` endpoints
+- [x] Initial slice: add customer lifecycle control-plane endpoints for
+	`/admin/customers/{customer_id}/(lifecycle|suspend|resume|upgrade)` with
+	customer scope validation
+- [x] Initial slice: add customer provisioning orchestration jobs with
+	step-level status and audit trail endpoints under
+	`/admin/customers/{customer_id}/provision-jobs*`
+- [x] Initial slice: add provisioning control-plane execution endpoint for
+	ordered step transitions (`/admin/customers/{customer_id}/provision-jobs/{job_id}/execute`)
+- [x] Initial slice: add execution idempotency key, failed-step retries,
+	attempt metadata, and provisioning step metrics hooks
+- [x] Initial slice: wire provisioning execution to concrete step adapters
+	(with stored per-step adapter result payloads and error mapping)
+- [x] Initial slice: run concrete DB migration/readiness verification during
+	provisioning and sync lifecycle state on bootstrap activation
+- [x] Initial slice: add provider-pluggable adapter registry for remaining
+	namespace/secrets/broker/deploy provisioning steps
+
 ### Package Standardization For OSS Release
 
 - [x] Phase 1: Establish canonical package metadata and CLI entrypoints

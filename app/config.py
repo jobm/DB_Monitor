@@ -787,7 +787,10 @@ def _load_tenant_cohort_slo_policies() -> list[dict[str, object]]:
             )
         if name in cohort_names:
             _config_error(
-                f"Duplicate cohort name '{name}' in TENANT_COHORT_SLO_POLICIES.",
+                (
+                    "Duplicate cohort name "
+                    f"'{name}' in TENANT_COHORT_SLO_POLICIES."
+                ),
                 hint="Use unique cohort names.",
             )
         cohort_names.add(name)
@@ -812,17 +815,26 @@ def _load_tenant_cohort_slo_policies() -> list[dict[str, object]]:
             )
         if not 0 < availability_target <= 100:
             _config_error(
-                f"availability_target must be in (0, 100] for cohort '{name}'.",
+                (
+                    "availability_target must be in (0, 100] "
+                    f"for cohort '{name}'."
+                ),
                 hint="Use a percentage such as 99.9.",
             )
         if not 0 <= error_budget_percent <= 100:
             _config_error(
-                f"error_budget_percent must be in [0, 100] for cohort '{name}'.",
+                (
+                    "error_budget_percent must be in [0, 100] "
+                    f"for cohort '{name}'."
+                ),
                 hint="Use a percentage such as 0.1.",
             )
         if max_commit_age_seconds < 0:
             _config_error(
-                f"max_commit_age_seconds cannot be negative for cohort '{name}'.",
+                (
+                    "max_commit_age_seconds cannot be negative "
+                    f"for cohort '{name}'."
+                ),
                 hint="Use 0 or a positive integer.",
             )
         if max_consumer_lag < 0:
@@ -848,7 +860,10 @@ def _load_tenant_cohort_slo_policies() -> list[dict[str, object]]:
             }
         )
 
-    return sorted(normalized_policies, key=lambda policy: policy["max_sources"])
+    return sorted(
+        normalized_policies,
+        key=lambda policy: policy["max_sources"],
+    )
 
 
 INGESTION_SOURCE_QUOTAS = _load_ingestion_quota_overrides(
@@ -1052,5 +1067,8 @@ for retention_days_value, retention_days_name in (
     if retention_days_value < 0:
         _config_error(
             f"{retention_days_name} cannot be negative.",
-            hint="Use 0 to disable cleanup for one table or a positive integer.",
+            hint=(
+                "Use 0 to disable cleanup for one table "
+                "or a positive integer."
+            ),
         )

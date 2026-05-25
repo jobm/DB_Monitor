@@ -162,3 +162,15 @@ ingestion_quota_sleep_seconds = Histogram(
     "db_monitor_ingestion_quota_sleep_seconds",
     "Time spent delaying events because of ingestion quotas",
 )
+
+provisioning_step_transitions_total = Counter(
+    "db_monitor_provisioning_step_transitions_total",
+    "Total provisioning step state transitions",
+    ["customer_id", "step", "status"],
+)
+
+provisioning_step_duration_seconds = Histogram(
+    "db_monitor_provisioning_step_duration_seconds",
+    "Execution duration for provisioning steps",
+    ["customer_id", "step", "outcome"],
+)

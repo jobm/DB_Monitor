@@ -75,7 +75,10 @@ class IngestionQuotaLimiter:
             (
                 "source",
                 source_name,
-                self.source_overrides.get(source_name, self.source_default_limit),
+                self.source_overrides.get(
+                    source_name,
+                    self.source_default_limit,
+                ),
             )
         ]
 

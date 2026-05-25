@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi.params import Param
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
@@ -16,6 +20,17 @@ from db_monitor.core.config import (
 )
 from db_monitor.core.db import AsyncSessionLocal
 from db_monitor.core.lifecycle import lifecycle_manager
+from db_monitor import metrics as monitor_metrics
+from db_monitor.provisioning import (
+    ProvisioningStepExecutionError,
+    execute_provisioning_step,
+)
+from db_monitor.provisioning_local import (
+    build_alert_routing_config,
+    build_namespace_guardrails,
+    build_observability_labels,
+    register_local_step_providers,
+)
 from db_monitor.ingestion.consumer import (
     get_consumer_health,
     list_consumer_checkpoints_snapshot,
@@ -28,6 +43,272 @@ from core.responses import AppInfoResponse, HealthResponse, ReadinessResponse
 from .utils import timestamp_age_seconds
 
 router = APIRouter()
+register_local_step_providers()
+CUSTOMER_LIFECYCLE_STATE: dict[str, dict[str, object]] = {}
+CUSTOMER_PROVISION_JOBS: dict[str, dict[str, dict[str, object]]] = {}
+PROVISIONING_STEPS = [
+    "register_customer",
+    "generate_namespace",
+    "provision_postgres",
+    "provision_broker_namespace",
+    "create_secrets_and_config",
+    "deploy_monitor_services",
+    "run_migrations_and_health_checks",
+    "bootstrap_and_activate",
+]
+
+
+def _require_customer_scope(
+    customer_id: str,
+    customer_header: str | None,
+) -> str:
+    """Validate and normalize customer scope for mutating admin actions."""
+    normalized_customer_id = customer_id.strip()
+    if not normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_id path parameter must not be empty.",
+        )
+
+    customer_scope = customer_header
+    if customer_scope is None or not customer_scope.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-DBM-Customer-ID header is required for mutating "
+                "admin operations."
+            ),
+        )
+
+    normalized_scope = customer_scope.strip()
+    if normalized_scope != normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-DBM-Customer-ID header must match the customer_id "
+                "path parameter."
+            ),
+        )
+
+    return normalized_scope
+
+
+def _get_customer_lifecycle_record(customer_id: str) -> dict[str, object]:
+    """Return existing lifecycle state or initialize a default record."""
+    existing = CUSTOMER_LIFECYCLE_STATE.get(customer_id)
+    if existing is not None:
+        return dict(existing)
+
+    return {
+        "customer_id": customer_id,
+        "status": "active",
+        "last_action": "none",
+        "target_version": None,
+        "reason": None,
+    }
+
+
+def _new_audit_entry(
+    action: str,
+    actor: str,
+    detail: str,
+) -> dict[str, str]:
+    """Build one timestamped provisioning audit entry."""
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "action": action,
+        "actor": actor,
+        "detail": detail,
+    }
+
+
+def _default_step_state(step_name: str) -> dict[str, object]:
+    """Return default provisioning step metadata."""
+    return {
+        "name": step_name,
+        "status": "pending",
+        "note": None,
+        "attempts": 0,
+        "started_at": None,
+        "completed_at": None,
+        "last_error": None,
+        "duration_seconds": None,
+        "result": None,
+        "updated_at": None,
+    }
+
+
+def _get_customer_provision_jobs(
+    customer_id: str,
+) -> dict[str, dict[str, object]]:
+    """Return the in-memory provisioning job map for one customer."""
+    return CUSTOMER_PROVISION_JOBS.setdefault(customer_id, {})
+
+
+def _update_step_state(
+    job: dict[str, object],
+    step_name: str,
+    step_status: str,
+    note: str | None,
+) -> None:
+    """Update one provisioning step and recalculate overall job state."""
+    steps = list(job["steps"])
+    found_step = False
+    duration_seconds: float | None = None
+    for step in steps:
+        if step["name"] != step_name:
+            continue
+        started_at_raw = step.get("started_at")
+        started_at = None
+        if isinstance(started_at_raw, str) and started_at_raw:
+            started_at = datetime.fromisoformat(started_at_raw)
+
+        step["status"] = step_status
+        step["note"] = note
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        step["updated_at"] = datetime.now(timezone.utc).isoformat()
+        if step_status == "in_progress":
+            attempts = int(step.get("attempts") or 0)
+            step["attempts"] = attempts + 1
+            step["started_at"] = now_iso
+            step["completed_at"] = None
+            step["last_error"] = None
+            step["duration_seconds"] = None
+            step["result"] = None
+        elif step_status == "completed":
+            step["completed_at"] = now_iso
+            step["last_error"] = None
+            if started_at is not None:
+                duration_seconds = max(
+                    0.0,
+                    (now - started_at).total_seconds(),
+                )
+                step["duration_seconds"] = duration_seconds
+        elif step_status == "failed":
+            step["completed_at"] = now_iso
+            step["last_error"] = note
+            if started_at is not None:
+                duration_seconds = max(
+                    0.0,
+                    (now - started_at).total_seconds(),
+                )
+                step["duration_seconds"] = duration_seconds
+
+        try:
+            monitor_metrics.provisioning_step_transitions_total.labels(
+                customer_id=str(job["customer_id"]),
+                step=step_name,
+                status=step_status,
+            ).inc()
+            if duration_seconds is not None:
+                outcome = (
+                    "success" if step_status == "completed" else "failure"
+                )
+                monitor_metrics.provisioning_step_duration_seconds.labels(
+                    customer_id=str(job["customer_id"]),
+                    step=step_name,
+                    outcome=outcome,
+                ).observe(duration_seconds)
+        except Exception:
+            pass
+
+        found_step = True
+        break
+
+    if not found_step:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Provisioning step '{step_name}' was not found.",
+        )
+
+    failed_steps = [
+        step for step in steps if step["status"] == "failed"
+    ]
+    if failed_steps:
+        job["status"] = "failed"
+    elif all(step["status"] == "completed" for step in steps):
+        job["status"] = "completed"
+    else:
+        job["status"] = "in_progress"
+
+    job["steps"] = steps
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def _append_job_audit(
+    job: dict[str, object],
+    action: str,
+    detail: str,
+    actor: str = "system",
+) -> None:
+    """Append one audit entry to a provisioning job."""
+    audit_entries = list(job["audit"])
+    audit_entries.append(
+        _new_audit_entry(
+            action=action,
+            actor=actor,
+            detail=detail,
+        )
+    )
+    job["audit"] = audit_entries
+
+
+def _set_step_result(
+    job: dict[str, object],
+    step_name: str,
+    result: dict[str, object],
+) -> None:
+    """Store adapter execution output on one provisioning step."""
+    for step in list(job["steps"]):
+        if step["name"] == step_name:
+            step["result"] = dict(result)
+            step["updated_at"] = datetime.now(timezone.utc).isoformat()
+            return
+
+
+def _mark_customer_bootstrap_active(customer_id: str) -> None:
+    """Mark lifecycle state active once bootstrap step is completed."""
+    record = _get_customer_lifecycle_record(customer_id)
+    record.update(
+        {
+            "status": "active",
+            "last_action": "bootstrap_activate",
+            "reason": None,
+        }
+    )
+    CUSTOMER_LIFECYCLE_STATE[customer_id] = dict(record)
+
+
+def _merge_job_control_plane_metadata(
+    job: dict[str, object],
+    step_result: dict[str, object],
+) -> None:
+    """Persist guardrail/observability/alert metadata from step outputs."""
+    labels = step_result.get("observability_labels")
+    if isinstance(labels, dict):
+        job["observability_labels"] = dict(labels)
+
+    alert_routing = step_result.get("alert_routing")
+    if isinstance(alert_routing, dict):
+        job["alert_routing"] = dict(alert_routing)
+
+    guardrails = step_result.get("guardrails")
+    if isinstance(guardrails, dict):
+        job["guardrails"] = dict(guardrails)
+
+
+def _next_executable_step(
+    job: dict[str, object],
+    retry_failed: bool,
+) -> dict[str, object] | None:
+    """Return the next provisioning step that can be executed."""
+    for step in list(job["steps"]):
+        if step["status"] in {"pending", "in_progress"}:
+            return step
+        if retry_failed and step["status"] == "failed":
+            return step
+    return None
 
 
 def readiness_payload() -> dict[str, object]:
@@ -209,25 +490,59 @@ async def get_dead_letter_events(
 async def replay_dead_letter_events(
     limit: int = Query(100, ge=1, le=1000),
     include_replayed: bool = False,
+    customer_id: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
     admin_api_key: ApiKey = Depends(require_admin_role),
 ):
     """Replay multiple persisted DLQ records through ingestion."""
     del admin_api_key
-    return await replay_dead_letter_event_records(
+    customer_scope = None if isinstance(customer_id, Param) else customer_id
+    if customer_scope is None or not customer_scope.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-DBM-Customer-ID header is required for mutating "
+                "admin operations."
+            ),
+        )
+
+    customer_scope = customer_scope.strip()
+    result = await replay_dead_letter_event_records(
         limit=limit,
         include_replayed=include_replayed,
     )
+    result["customer_id"] = customer_scope
+    return result
 
 
 @router.post("/admin/dlq/{dlq_event_id}/replay")
 async def replay_dead_letter_event(
     dlq_event_id: int,
+    customer_id: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
     admin_api_key: ApiKey = Depends(require_admin_role),
 ):
     """Replay a persisted DLQ record back through ingestion."""
     del admin_api_key
+    customer_scope = None if isinstance(customer_id, Param) else customer_id
+    if customer_scope is None or not customer_scope.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-DBM-Customer-ID header is required for mutating "
+                "admin operations."
+            ),
+        )
+
+    customer_scope = customer_scope.strip()
     try:
-        return await replay_dead_letter_event_record(dlq_event_id)
+        result = await replay_dead_letter_event_record(dlq_event_id)
+        result["customer_id"] = customer_scope
+        return result
     except LookupError as exc:
         raise HTTPException(
             status_code=404,
@@ -236,6 +551,450 @@ async def replay_dead_letter_event(
                 "replay targets."
             ),
         ) from exc
+
+
+@router.get("/admin/customers/{customer_id}/lifecycle")
+async def get_customer_lifecycle_state(
+    customer_id: str,
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Return lifecycle state for one customer cell."""
+    del admin_api_key
+    normalized_customer_id = customer_id.strip()
+    if not normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_id path parameter must not be empty.",
+        )
+
+    return _get_customer_lifecycle_record(normalized_customer_id)
+
+
+@router.post("/admin/customers/{customer_id}/suspend")
+async def suspend_customer_cell(
+    customer_id: str,
+    reason: str | None = Query(None),
+    customer_header: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Suspend one customer cell in the control plane."""
+    del admin_api_key
+    scope = _require_customer_scope(customer_id, customer_header)
+    record = _get_customer_lifecycle_record(scope)
+    record.update(
+        {
+            "status": "suspended",
+            "last_action": "suspend",
+            "reason": reason,
+        }
+    )
+    CUSTOMER_LIFECYCLE_STATE[scope] = dict(record)
+    return record
+
+
+@router.post("/admin/customers/{customer_id}/resume")
+async def resume_customer_cell(
+    customer_id: str,
+    customer_header: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Resume one suspended customer cell in the control plane."""
+    del admin_api_key
+    scope = _require_customer_scope(customer_id, customer_header)
+    record = _get_customer_lifecycle_record(scope)
+    record.update(
+        {
+            "status": "active",
+            "last_action": "resume",
+            "reason": None,
+        }
+    )
+    CUSTOMER_LIFECYCLE_STATE[scope] = dict(record)
+    return record
+
+
+@router.post("/admin/customers/{customer_id}/upgrade")
+async def upgrade_customer_cell(
+    customer_id: str,
+    target_version: str = Query(...),
+    customer_header: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Register an upgrade target for one customer cell."""
+    del admin_api_key
+    scope = _require_customer_scope(customer_id, customer_header)
+    normalized_version = target_version.strip()
+    if not normalized_version:
+        raise HTTPException(
+            status_code=400,
+            detail="target_version query parameter must not be empty.",
+        )
+
+    record = _get_customer_lifecycle_record(scope)
+    record.update(
+        {
+            "last_action": "upgrade",
+            "target_version": normalized_version,
+        }
+    )
+    CUSTOMER_LIFECYCLE_STATE[scope] = dict(record)
+    return record
+
+
+@router.post("/admin/customers/{customer_id}/provision-jobs")
+async def start_customer_provision_job(
+    customer_id: str,
+    customer_header: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Create a provisioning orchestration job for one customer cell."""
+    del admin_api_key
+    scope = _require_customer_scope(customer_id, customer_header)
+
+    job_id = str(uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    job = {
+        "job_id": job_id,
+        "customer_id": scope,
+        "status": "in_progress",
+        "steps": [
+            _default_step_state(step_name) for step_name in PROVISIONING_STEPS
+        ],
+        "audit": [
+            _new_audit_entry(
+                action="job_started",
+                actor="admin",
+                detail="Provisioning job created.",
+            )
+        ],
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    jobs = _get_customer_provision_jobs(scope)
+    jobs[job_id] = job
+    return job
+
+
+@router.get("/admin/customers/{customer_id}/provision-jobs")
+async def list_customer_provision_jobs(
+    customer_id: str,
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """List provisioning orchestration jobs for one customer."""
+    del admin_api_key
+    normalized_customer_id = customer_id.strip()
+    if not normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_id path parameter must not be empty.",
+        )
+
+    jobs = _get_customer_provision_jobs(normalized_customer_id)
+    sorted_jobs = sorted(
+        jobs.values(),
+        key=lambda job: str(job["created_at"]),
+        reverse=True,
+    )
+    return {
+        "customer_id": normalized_customer_id,
+        "jobs": sorted_jobs,
+        "count": len(sorted_jobs),
+    }
+
+
+@router.get("/admin/customers/{customer_id}/provision-jobs/{job_id}")
+async def get_customer_provision_job(
+    customer_id: str,
+    job_id: str,
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Return one provisioning orchestration job by ID."""
+    del admin_api_key
+    normalized_customer_id = customer_id.strip()
+    if not normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_id path parameter must not be empty.",
+        )
+
+    jobs = _get_customer_provision_jobs(normalized_customer_id)
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Provisioning job '{job_id}' was not found.",
+        )
+    return job
+
+
+@router.post(
+    "/admin/customers/{customer_id}/provision-jobs/{job_id}/steps/{step_name}"
+)
+async def update_customer_provision_step(
+    customer_id: str,
+    job_id: str,
+    step_name: str,
+    step_status: str = Query(..., alias="status"),
+    note: str | None = Query(None),
+    customer_header: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Update one provisioning step and append an audit event."""
+    del admin_api_key
+    scope = _require_customer_scope(customer_id, customer_header)
+
+    normalized_status = step_status.strip().lower()
+    if normalized_status not in {"in_progress", "completed", "failed"}:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "status query parameter must be one of: "
+                "in_progress, completed, failed."
+            ),
+        )
+
+    jobs = _get_customer_provision_jobs(scope)
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Provisioning job '{job_id}' was not found.",
+        )
+
+    _update_step_state(job, step_name, normalized_status, note)
+    detail_note = note or ""
+    _append_job_audit(
+        job,
+        action="step_updated",
+        actor="admin",
+        detail=(
+            f"Step '{step_name}' marked '{normalized_status}'. "
+            f"{detail_note}".strip()
+        ),
+    )
+    return job
+
+
+@router.post("/admin/customers/{customer_id}/provision-jobs/{job_id}/execute")
+async def execute_customer_provision_job(
+    customer_id: str,
+    job_id: str,
+    max_steps: int = Query(1, ge=1, le=20),
+    retry_failed: bool = Query(False),
+    execution_id: str | None = Query(None),
+    fail_step: str | None = Query(None),
+    note: str | None = Query(None),
+    customer_header: str | None = Header(
+        default=None,
+        alias="X-DBM-Customer-ID",
+    ),
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Execute up to N provisioning steps in sequence for one job."""
+    del admin_api_key
+    scope = _require_customer_scope(customer_id, customer_header)
+    retry_failed_value = False if isinstance(retry_failed, Param) else bool(
+        retry_failed
+    )
+    execution_id_value = (
+        None if isinstance(execution_id, Param) else execution_id
+    )
+
+    jobs = _get_customer_provision_jobs(scope)
+    job = jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Provisioning job '{job_id}' was not found.",
+        )
+
+    normalized_execution_id = None
+    if execution_id_value is not None:
+        normalized_execution_id = execution_id_value.strip()
+        if not normalized_execution_id:
+            raise HTTPException(
+                status_code=400,
+                detail="execution_id query parameter must not be empty.",
+            )
+
+    if normalized_execution_id and (
+        normalized_execution_id == job.get("last_execution_id")
+    ):
+        return {
+            "job": job,
+            "executed_steps": 0,
+            "idempotent_replay": True,
+        }
+
+    is_retrying_failed_job = (
+        job["status"] == "failed" and retry_failed_value
+    )
+    if job["status"] == "completed" or (
+        job["status"] == "failed" and not is_retrying_failed_job
+    ):
+        _append_job_audit(
+            job,
+            action="execution_skipped",
+            actor="system",
+            detail=(
+                "Execution skipped because the job is terminal "
+                f"('{job['status']}')."
+            ),
+        )
+        return {
+            "job": job,
+            "executed_steps": 0,
+            "idempotent_replay": False,
+        }
+
+    if normalized_execution_id:
+        job["last_execution_id"] = normalized_execution_id
+        job["last_execution_at"] = datetime.now(timezone.utc).isoformat()
+
+    executed_steps = 0
+    while executed_steps < max_steps:
+        step = _next_executable_step(
+            job,
+            retry_failed=retry_failed_value,
+        )
+        if step is None:
+            break
+
+        step_name = str(step["name"])
+        _update_step_state(
+            job,
+            step_name,
+            "in_progress",
+            note,
+        )
+        _append_job_audit(
+            job,
+            action="step_started",
+            actor="system",
+            detail=f"Step '{step_name}' entered in_progress.",
+        )
+
+        if fail_step is not None and fail_step.strip() == step_name:
+            _update_step_state(
+                job,
+                step_name,
+                "failed",
+                note or "Execution failed by control-plane simulation.",
+            )
+            _append_job_audit(
+                job,
+                action="step_failed",
+                actor="system",
+                detail=f"Step '{step_name}' failed during execution.",
+            )
+            executed_steps += 1
+            break
+
+        try:
+            step_result = await execute_provisioning_step(
+                step_name=step_name,
+                customer_id=scope,
+                job_id=job_id,
+                note=note,
+            )
+        except ProvisioningStepExecutionError as exc:
+            _update_step_state(
+                job,
+                step_name,
+                "failed",
+                str(exc),
+            )
+            _append_job_audit(
+                job,
+                action="step_failed",
+                actor="system",
+                detail=f"Step '{step_name}' failed during execution: {exc}",
+            )
+            executed_steps += 1
+            break
+
+        _update_step_state(
+            job,
+            step_name,
+            "completed",
+            str(step_result.get("detail") or note or "completed"),
+        )
+        _set_step_result(job, step_name, step_result)
+        _merge_job_control_plane_metadata(job, step_result)
+        if step_name == "bootstrap_and_activate":
+            _mark_customer_bootstrap_active(scope)
+        _append_job_audit(
+            job,
+            action="step_completed",
+            actor="system",
+            detail=f"Step '{step_name}' completed during execution.",
+        )
+        executed_steps += 1
+
+    return {
+        "job": job,
+        "executed_steps": executed_steps,
+        "idempotent_replay": False,
+    }
+
+
+@router.get("/admin/customers/{customer_id}/guardrails")
+async def get_customer_guardrails(
+    customer_id: str,
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Return generated namespace guardrail templates for one customer."""
+    del admin_api_key
+    normalized_customer_id = customer_id.strip()
+    if not normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_id path parameter must not be empty.",
+        )
+
+    return {
+        "customer_id": normalized_customer_id,
+        "guardrails": build_namespace_guardrails(normalized_customer_id),
+    }
+
+
+@router.get("/admin/customers/{customer_id}/observability")
+async def get_customer_observability_profile(
+    customer_id: str,
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Return observability labels and alert routing for one customer."""
+    del admin_api_key
+    normalized_customer_id = customer_id.strip()
+    if not normalized_customer_id:
+        raise HTTPException(
+            status_code=400,
+            detail="customer_id path parameter must not be empty.",
+        )
+
+    return {
+        "customer_id": normalized_customer_id,
+        "labels": build_observability_labels(normalized_customer_id),
+        "alert_routing": build_alert_routing_config(
+            normalized_customer_id
+        ),
+    }
 
 
 @router.get("/admin/slo-policy")

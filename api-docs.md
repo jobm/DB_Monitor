@@ -127,6 +127,53 @@ Query parameters:
 
 Revokes an existing key. Requires an admin key.
 
+## Customer-scoped auth bootstrap and JWT lifecycle
+
+### `POST /admin/customers/{customer_id}/auth/bootstrap`
+
+Bootstraps one customer scope with a customer-admin API key and initializes
+JWT active/next secret lifecycle state.
+
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Must match `{customer_id}` path value |
+
+Query parameters:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `owner_suffix` | No | Owner label suffix, default `bootstrap-admin` |
+| `ttl_days` | No | Expiration window for the customer admin key |
+
+### `GET /admin/customers/{customer_id}/auth/jwt`
+
+Returns customer JWT lifecycle metadata (fingerprints, generation, audit
+counts) without exposing raw secret material.
+
+### `POST /admin/customers/{customer_id}/auth/jwt/rotate`
+
+Promotes `next` JWT secret to active, generates a new `next` secret, and
+records an audit event.
+
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Must match `{customer_id}` path value |
+
+### `POST /admin/customers/{customer_id}/auth/jwt/recover`
+
+Recovers prior active JWT secret material as an emergency rollback path and
+records an audit event.
+
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Must match `{customer_id}` path value |
+
 ## Public endpoints
 
 ### `GET /health`
@@ -365,6 +412,12 @@ Response shape:
 
 Replays multiple persisted DLQ records through the normal ingestion path.
 
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Customer scope identifier for mutating admin operations |
+
 Query parameters:
 
 | Name | Required | Description |
@@ -397,6 +450,12 @@ Response shape:
 Replays a persisted DLQ record through the normal ingestion path. The response
 status is typically `replayed` or `duplicate`.
 
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Customer scope identifier for mutating admin operations |
+
 ### `GET /admin/slo-policy`
 
 Returns the published tenant-cohort SLO and error-budget policy for operations
@@ -421,6 +480,137 @@ Response shape:
   "count": 1
 }
 ```
+
+## Admin customer lifecycle endpoints
+
+### `GET /admin/customers/{customer_id}/lifecycle`
+
+Returns the current lifecycle state for one customer cell.
+
+### `POST /admin/customers/{customer_id}/suspend`
+
+Marks one customer cell as suspended.
+
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Must match `{customer_id}` path value |
+
+Query parameters:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `reason` | No | Free-text operator reason for suspension |
+
+### `POST /admin/customers/{customer_id}/resume`
+
+Marks one customer cell as active again.
+
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Must match `{customer_id}` path value |
+
+### `POST /admin/customers/{customer_id}/upgrade`
+
+Registers an upgrade target for one customer cell.
+
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Must match `{customer_id}` path value |
+
+Query parameters:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `target_version` | Yes | Target version identifier such as `v0.2.0` |
+
+## Admin provisioning orchestration endpoints
+
+### `POST /admin/customers/{customer_id}/provision-jobs`
+
+Creates a provisioning orchestration job with standard onboarding steps.
+
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Must match `{customer_id}` path value |
+
+### `GET /admin/customers/{customer_id}/provision-jobs`
+
+Lists provisioning jobs for one customer.
+
+### `GET /admin/customers/{customer_id}/provision-jobs/{job_id}`
+
+Returns one provisioning job with steps and audit events.
+
+### `POST /admin/customers/{customer_id}/provision-jobs/{job_id}/steps/{step_name}`
+
+Updates one provisioning step state and appends an audit entry.
+
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Must match `{customer_id}` path value |
+
+Query parameters:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `status` | Yes | One of: `in_progress`, `completed`, `failed` |
+| `note` | No | Optional operator note appended to audit detail |
+
+### `POST /admin/customers/{customer_id}/provision-jobs/{job_id}/execute`
+
+Executes provisioning orchestration steps in order for a job.
+Each step now calls the provisioning adapter layer and stores adapter output
+in step `result` metadata when successful.
+The `run_migrations_and_health_checks` adapter performs DB initialization
+and a direct database readiness probe. Completing `bootstrap_and_activate`
+sets lifecycle state to `active` with `last_action=bootstrap_activate`.
+For production, step adapters are provider-pluggable so deployment-specific
+implementations can be registered per step without changing route semantics.
+
+Execution responses may include control-plane metadata propagated from step
+results:
+
+- `guardrails`: customer namespace quota/limit/network-policy templates
+- `observability_labels`: per-customer labels for metrics/logs/traces
+- `alert_routing`: per-customer alert routing matcher and receiver profile
+
+Requires header:
+
+| Header | Required | Description |
+| --- | --- | --- |
+| `X-DBM-Customer-ID` | Yes | Must match `{customer_id}` path value |
+
+Query parameters:
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `max_steps` | No | Number of steps to execute (default `1`, max `20`) |
+| `retry_failed` | No | If `true`, failed steps become eligible for re-execution |
+| `execution_id` | No | Idempotency key for execution requests; replayed key is a no-op |
+| `fail_step` | No | Step name to fail intentionally for operator simulation |
+| `note` | No | Optional note attached to executed step updates |
+
+### `GET /admin/customers/{customer_id}/guardrails`
+
+Returns generated per-customer namespace guardrails:
+
+- `ResourceQuota`
+- `LimitRange`
+- `NetworkPolicy`
+
+### `GET /admin/customers/{customer_id}/observability`
+
+Returns per-customer observability labels and alert routing profile.
 
 ## WebSocket endpoint
 

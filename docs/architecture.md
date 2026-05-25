@@ -93,5 +93,6 @@ The bundled docker-compose stack provides three PostgreSQL applications to simul
 - API reference: `../api-docs.md`
 - Configuration reference: `configuration.md`
 - Deployment guide: `deployment.md`
+- Pre-v1 tenant isolation strategy: `pre-v1-tenant-isolation-strategy.md`
 - Troubleshooting guide: `troubleshooting.md`
 - Recovery runbook: `runbooks/recovery-and-validation.md`
