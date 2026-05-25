@@ -93,7 +93,7 @@ These are not committed backlog items yet.
 - [x] Persist customer JWT secret lifecycle state in the database
 - [x] Persist customer lifecycle and provisioning orchestration state in the
 	control plane store
-- [ ] Make ingestion quota enforcement consistent across replicas and
+- [x] Make ingestion quota enforcement consistent across replicas and
 	restarts
 
 #### One-Go Closure Checklist

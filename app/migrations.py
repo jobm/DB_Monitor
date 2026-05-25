@@ -427,6 +427,43 @@ async def _apply_customer_control_plane_state(
         await connection.execute(text(statement))
 
 
+async def _apply_ingestion_quota_windows(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Create shared quota window storage for replica-consistent limits."""
+    del session_factory
+    await connection.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS ingestion_quota_windows (
+                id SERIAL PRIMARY KEY,
+                dimension VARCHAR(32) NOT NULL,
+                identity VARCHAR(256) NOT NULL,
+                window_start TIMESTAMPTZ NOT NULL,
+                event_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+    )
+    statements = [
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "ux_ingestion_quota_windows_dimension_identity_window_start "
+            "ON ingestion_quota_windows "
+            "(dimension, identity, window_start)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_ingestion_quota_windows_dimension_identity "
+            "ON ingestion_quota_windows (dimension, identity)"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version="0001_base_schema",
@@ -479,6 +516,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version="0010_customer_control_plane_state",
         description="Persist customer lifecycle and job orchestration state",
         apply=_apply_customer_control_plane_state,
+    ),
+    Migration(
+        version="0011_ingestion_quota_windows",
+        description="Persist shared ingestion quota windows",
+        apply=_apply_ingestion_quota_windows,
     ),
 )
 

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
-from time import monotonic
+from datetime import datetime, timedelta, timezone
 
+from core.db import AsyncSessionLocal
 from core.config import (
     INGESTION_QUOTA_ENABLED,
     INGESTION_QUOTA_MAX_THROTTLE_SECONDS,
@@ -16,7 +18,8 @@ from core.config import (
     INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW,
     INGESTION_TENANT_QUOTAS,
 )
-from core.models import KafkaEvent
+from core.models import IngestionQuotaWindow, KafkaEvent
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from source_metadata import extract_source_service_name
 
 
@@ -34,7 +37,7 @@ class QuotaDecision:
 
 
 class IngestionQuotaLimiter:
-    """Apply in-memory quota windows for source and tenant dimensions."""
+    """Apply shared quota windows for source and tenant dimensions."""
 
     def __init__(
         self,
@@ -47,6 +50,7 @@ class IngestionQuotaLimiter:
         tenant_overrides: dict[str, int],
         mode: str,
         max_throttle_seconds: float,
+        session_factory: Callable = AsyncSessionLocal,
     ) -> None:
         self.enabled = enabled
         self.window_seconds = window_seconds
@@ -56,8 +60,7 @@ class IngestionQuotaLimiter:
         self.tenant_overrides = dict(tenant_overrides)
         self.mode = mode
         self.max_throttle_seconds = max_throttle_seconds
-        self._lock = asyncio.Lock()
-        self._window_usage: dict[tuple[str, str], tuple[float, int]] = {}
+        self.session_factory = session_factory
 
     async def apply(self, event: KafkaEvent) -> QuotaDecision:
         """Check quotas and optionally throttle or drop one event."""
@@ -101,57 +104,107 @@ class IngestionQuotaLimiter:
             if limit <= 0:
                 continue
 
-            while True:
-                now = monotonic()
-                should_wait = 0.0
+            allowed, dimension_throttled, sleep_seconds = (
+                await self._apply_dimension_quota(
+                    dimension=dimension,
+                    key=key,
+                    limit=limit,
+                )
+            )
+            throttled = throttled or dimension_throttled
+            total_sleep_seconds += sleep_seconds
 
-                async with self._lock:
-                    window_start, count = self._window_usage.get(
-                        (dimension, key),
-                        (now, 0),
-                    )
-
-                    if now - window_start >= self.window_seconds:
-                        window_start = now
-                        count = 0
-
-                    if count < limit:
-                        self._window_usage[(dimension, key)] = (
-                            window_start,
-                            count + 1,
-                        )
-                        break
-
-                    if self.mode == "drop":
-                        return QuotaDecision(
-                            allowed=False,
-                            dropped=True,
-                            throttled=False,
-                            sleep_seconds=total_sleep_seconds,
-                            dimension=dimension,
-                            key=key,
-                            limit=limit,
-                        )
-
-                    window_end = window_start + self.window_seconds
-                    wait_until_reset = max(window_end - now, 0.0)
-                    should_wait = min(
-                        wait_until_reset,
-                        self.max_throttle_seconds,
-                    )
-
-                if should_wait <= 0:
-                    continue
-
-                throttled = True
-                total_sleep_seconds += should_wait
-                await asyncio.sleep(should_wait)
+            if not allowed:
+                return QuotaDecision(
+                    allowed=False,
+                    dropped=True,
+                    throttled=throttled,
+                    sleep_seconds=total_sleep_seconds,
+                    dimension=dimension,
+                    key=key,
+                    limit=limit,
+                )
 
         return QuotaDecision(
             allowed=True,
             dropped=False,
             throttled=throttled,
             sleep_seconds=total_sleep_seconds,
+        )
+
+    async def _apply_dimension_quota(
+        self,
+        *,
+        dimension: str,
+        key: str,
+        limit: int,
+    ) -> tuple[bool, bool, float]:
+        """Reserve one quota slot, optionally sleeping until the window resets."""
+        total_sleep_seconds = 0.0
+        throttled = False
+
+        while True:
+            now = datetime.now(timezone.utc)
+            window_start = self._window_start_for(now)
+            statement = (
+                pg_insert(IngestionQuotaWindow)
+                .values(
+                    dimension=dimension,
+                    identity=key,
+                    window_start=window_start,
+                    event_count=1,
+                    updated_at=now,
+                )
+                .on_conflict_do_update(
+                    index_elements=[
+                        IngestionQuotaWindow.dimension,
+                        IngestionQuotaWindow.identity,
+                        IngestionQuotaWindow.window_start,
+                    ],
+                    set_={
+                        "event_count": IngestionQuotaWindow.event_count + 1,
+                        "updated_at": now,
+                    },
+                    where=IngestionQuotaWindow.event_count < limit,
+                )
+                .returning(IngestionQuotaWindow.event_count)
+            )
+
+            async with self.session_factory() as session:
+                async with session.begin():
+                    result = await session.execute(statement)
+                    event_count = result.scalar_one_or_none()
+
+            if event_count is not None:
+                return True, throttled, total_sleep_seconds
+
+            if self.mode == "drop":
+                return False, throttled, total_sleep_seconds
+
+            throttled = True
+            wait_seconds = self._sleep_seconds_until_reset(window_start, now)
+            if wait_seconds <= 0:
+                continue
+
+            total_sleep_seconds += wait_seconds
+            await asyncio.sleep(wait_seconds)
+
+    def _window_start_for(self, moment: datetime) -> datetime:
+        """Round one timestamp down to the current quota window boundary."""
+        window_seconds = float(self.window_seconds)
+        window_epoch = (moment.timestamp() // window_seconds) * window_seconds
+        return datetime.fromtimestamp(window_epoch, tz=timezone.utc)
+
+    def _sleep_seconds_until_reset(
+        self,
+        window_start: datetime,
+        moment: datetime,
+    ) -> float:
+        """Return the throttle delay until the shared window can reset."""
+        window_end = window_start + timedelta(seconds=self.window_seconds)
+        return min(
+            max((window_end - moment).total_seconds(), 0.0),
+            self.max_throttle_seconds,
         )
 
     def _source_name(self, event: KafkaEvent) -> str:

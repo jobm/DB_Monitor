@@ -13,6 +13,7 @@ Base = _models.Base
 ColumnChange = _models.ColumnChange
 ConsumerCheckpoint = _models.ConsumerCheckpoint
 DeadLetterEvent = _models.DeadLetterEvent
+IngestionQuotaWindow = _models.IngestionQuotaWindow
 KafkaEvent = _models.KafkaEvent
 KafkaEventLegacy = _models.KafkaEventLegacy
 MonitoredColumn = _models.MonitoredColumn

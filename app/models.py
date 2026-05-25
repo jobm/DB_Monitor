@@ -323,6 +323,38 @@ class CustomerProvisionJob(Base):
     )
 
 
+class IngestionQuotaWindow(Base):
+    """Persist one shared quota window for a source or tenant identity."""
+
+    __tablename__ = "ingestion_quota_windows"
+
+    id = Column(Integer, primary_key=True, index=True)
+    dimension = Column(String(32), nullable=False)
+    identity = Column(String(256), nullable=False)
+    window_start = Column(DateTime(timezone=True), nullable=False, index=True)
+    event_count = Column(Integer, nullable=False, default=0)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index(
+            "ux_ingestion_quota_windows_dimension_identity_window_start",
+            "dimension",
+            "identity",
+            "window_start",
+            unique=True,
+        ),
+        Index(
+            "ix_ingestion_quota_windows_dimension_identity",
+            "dimension",
+            "identity",
+        ),
+    )
+
+
 class ApiAuditLog(Base):
     """Audit logs for API access."""
 
