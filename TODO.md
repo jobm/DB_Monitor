@@ -88,6 +88,14 @@ These are not committed backlog items yet.
 - [x] Add onboarding orchestration status tracking and audit trail
 - [x] Enforce customer scope for mutating operator APIs
 
+#### Must-Fix Now
+
+- [x] Persist customer JWT secret lifecycle state in the database
+- [ ] Persist customer lifecycle and provisioning orchestration state in the
+	control plane store
+- [ ] Make ingestion quota enforcement consistent across replicas and
+	restarts
+
 #### One-Go Closure Checklist
 
 - [x] Close provisioning workflow end-to-end

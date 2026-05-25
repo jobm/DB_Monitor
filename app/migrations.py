@@ -377,6 +377,25 @@ async def _apply_broker_recovery_metadata(
         await connection.execute(text(statement))
 
 
+async def _apply_customer_jwt_secret_state(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Create durable customer JWT secret lifecycle storage."""
+    del session_factory
+    await connection.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS customer_jwt_secret_state (
+                customer_id VARCHAR(128) PRIMARY KEY,
+                state JSONB NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version="0001_base_schema",
@@ -419,6 +438,11 @@ MIGRATIONS: tuple[Migration, ...] = (
             "Add broker-neutral checkpoint and dead-letter metadata"
         ),
         apply=_apply_broker_recovery_metadata,
+    ),
+    Migration(
+        version="0009_customer_jwt_secret_state",
+        description="Persist customer JWT secret lifecycle state",
+        apply=_apply_customer_jwt_secret_state,
     ),
 )
 

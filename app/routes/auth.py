@@ -22,7 +22,7 @@ from db_monitor.auth import (
 )
 from db_monitor.core.config import ALLOW_BOOTSTRAP, API_KEY_DEFAULT_TTL_DAYS
 from db_monitor.core.db import AsyncSessionLocal
-from core.models import ApiKey
+from core.models import ApiKey, CustomerJWTSecretState
 from core.responses import (
     AccessTokenExchangeResponse,
     WebSocketTokenExchangeResponse,
@@ -178,6 +178,50 @@ def _serialize_customer_jwt_state(
     }
 
 
+def _sync_customer_jwt_state_cache(
+    customer_id: str,
+    state: dict[str, object],
+) -> dict[str, object]:
+    """Mirror durable JWT state into the local compatibility cache."""
+    cached_state = dict(state)
+    CUSTOMER_JWT_SECRET_STATE[customer_id] = cached_state
+    return cached_state
+
+
+def _row_to_customer_jwt_state(record: CustomerJWTSecretState) -> dict[str, object]:
+    """Normalize one persisted JWT state row into a mutable dictionary."""
+    return dict(record.state or _new_customer_jwt_state())
+
+
+async def _load_customer_jwt_state_row(
+    session,
+    customer_id: str,
+) -> CustomerJWTSecretState | None:
+    """Load one persisted customer JWT state row."""
+    result = await session.execute(
+        select(CustomerJWTSecretState).where(
+            CustomerJWTSecretState.customer_id == customer_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _persist_customer_jwt_state(
+    session,
+    customer_id: str,
+    state: dict[str, object],
+) -> CustomerJWTSecretState:
+    """Persist one customer JWT state payload and return the row."""
+    record = await _load_customer_jwt_state_row(session, customer_id)
+    payload = dict(state)
+    if record is None:
+        record = CustomerJWTSecretState(customer_id=customer_id, state=payload)
+        session.add(record)
+    else:
+        record.state = payload
+    return record
+
+
 def _append_jwt_audit(
     state: dict[str, object],
     action: str,
@@ -212,7 +256,7 @@ def _initialize_customer_jwt_secrets(
         action="bootstrap",
         detail="Customer JWT active and next secrets initialized.",
     )
-    return state
+    return _sync_customer_jwt_state_cache(customer_id, state)
 
 
 @router.post("/auth/token", response_model=AccessTokenExchangeResponse)
@@ -496,6 +540,27 @@ async def bootstrap_customer_auth_scope(
             session.add(new_key)
             await session.flush()
 
+            record = await _load_customer_jwt_state_row(session, scope)
+            state = (
+                _row_to_customer_jwt_state(record)
+                if record is not None
+                else _new_customer_jwt_state()
+            )
+            if state.get("active_secret") is None:
+                state["active_secret"] = secrets.token_urlsafe(48)
+                state["generation"] = 1
+            if state.get("next_secret") is None:
+                state["next_secret"] = secrets.token_urlsafe(48)
+            if state.get("last_rotated_at") is None:
+                state["last_rotated_at"] = _utc_now_iso()
+            _append_jwt_audit(
+                state,
+                action="bootstrap",
+                detail="Customer JWT active and next secrets initialized.",
+            )
+            await _persist_customer_jwt_state(session, scope, state)
+            _sync_customer_jwt_state_cache(scope, state)
+
             response = api_key_response(
                 new_key,
                 raw_key,
@@ -504,11 +569,10 @@ async def bootstrap_customer_auth_scope(
                     "It cannot be retrieved again."
                 ),
             )
-            jwt_state = _initialize_customer_jwt_secrets(scope)
             response["customer_id"] = scope
             response["jwt_state"] = _serialize_customer_jwt_state(
                 scope,
-                jwt_state,
+                state,
             )
             return response
 
@@ -527,7 +591,23 @@ async def get_customer_jwt_state(
             detail="customer_id path parameter must not be empty.",
         )
 
-    state = _get_customer_jwt_state(normalized_customer_id)
+    async with AsyncSessionLocal() as session:
+        record = await _load_customer_jwt_state_row(
+            session,
+            normalized_customer_id,
+        )
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Customer JWT secrets are not initialized. "
+                "Run POST /admin/customers/{customer_id}/auth/bootstrap "
+                "first."
+            ),
+        )
+
+    state = _row_to_customer_jwt_state(record)
     if state.get("active_secret") is None:
         raise HTTPException(
             status_code=404,
@@ -538,6 +618,7 @@ async def get_customer_jwt_state(
             ),
         )
 
+    _sync_customer_jwt_state_cache(normalized_customer_id, state)
     return _serialize_customer_jwt_state(normalized_customer_id, state)
 
 
@@ -553,33 +634,47 @@ async def rotate_customer_jwt_secrets(
     """Rotate JWT active/next secret material for one customer scope."""
     del creator_api_key
     scope = _require_customer_scope(customer_id, customer_header)
-    state = _get_customer_jwt_state(scope)
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            record = await _load_customer_jwt_state_row(session, scope)
+            if record is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Customer JWT secrets are not initialized. "
+                        "Run POST /admin/customers/{customer_id}/auth/bootstrap "
+                        "first."
+                    ),
+                )
 
-    if state.get("active_secret") is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Customer JWT secrets are not initialized. "
-                "Run POST /admin/customers/{customer_id}/auth/bootstrap "
-                "first."
-            ),
-        )
+            state = _row_to_customer_jwt_state(record)
+            if state.get("active_secret") is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Customer JWT secrets are not initialized. "
+                        "Run POST /admin/customers/{customer_id}/auth/bootstrap "
+                        "first."
+                    ),
+                )
 
-    previous_active_secret = state.get("active_secret")
-    promoted_secret = state.get("next_secret")
-    if promoted_secret is None:
-        promoted_secret = secrets.token_urlsafe(48)
+            previous_active_secret = state.get("active_secret")
+            promoted_secret = state.get("next_secret")
+            if promoted_secret is None:
+                promoted_secret = secrets.token_urlsafe(48)
 
-    state["previous_active_secret"] = previous_active_secret
-    state["active_secret"] = promoted_secret
-    state["next_secret"] = secrets.token_urlsafe(48)
-    state["generation"] = int(state.get("generation") or 0) + 1
-    state["last_rotated_at"] = _utc_now_iso()
-    _append_jwt_audit(
-        state,
-        action="rotate",
-        detail="Customer JWT active/next secret material rotated.",
-    )
+            state["previous_active_secret"] = previous_active_secret
+            state["active_secret"] = promoted_secret
+            state["next_secret"] = secrets.token_urlsafe(48)
+            state["generation"] = int(state.get("generation") or 0) + 1
+            state["last_rotated_at"] = _utc_now_iso()
+            _append_jwt_audit(
+                state,
+                action="rotate",
+                detail="Customer JWT active/next secret material rotated.",
+            )
+            await _persist_customer_jwt_state(session, scope, state)
+            _sync_customer_jwt_state_cache(scope, state)
 
     return {
         "customer_id": scope,
@@ -600,26 +695,41 @@ async def recover_customer_jwt_secrets(
     """Recover prior active JWT secret material for one customer scope."""
     del creator_api_key
     scope = _require_customer_scope(customer_id, customer_header)
-    state = _get_customer_jwt_state(scope)
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            record = await _load_customer_jwt_state_row(session, scope)
+            if record is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        "Customer JWT secrets are not initialized. "
+                        "Run POST /admin/customers/{customer_id}/auth/bootstrap "
+                        "first."
+                    ),
+                )
 
-    previous_active_secret = state.get("previous_active_secret")
-    if previous_active_secret is None:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "No recovery secret is available for this customer scope."
-            ),
-        )
+            state = _row_to_customer_jwt_state(record)
+            previous_active_secret = state.get("previous_active_secret")
+            if previous_active_secret is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "No recovery secret is available for this "
+                        "customer scope."
+                    ),
+                )
 
-    current_active_secret = state.get("active_secret")
-    state["active_secret"] = previous_active_secret
-    state["previous_active_secret"] = current_active_secret
-    state["last_recovered_at"] = _utc_now_iso()
-    _append_jwt_audit(
-        state,
-        action="recover",
-        detail="Customer JWT active secret recovered from prior state.",
-    )
+            current_active_secret = state.get("active_secret")
+            state["active_secret"] = previous_active_secret
+            state["previous_active_secret"] = current_active_secret
+            state["last_recovered_at"] = _utc_now_iso()
+            _append_jwt_audit(
+                state,
+                action="recover",
+                detail="Customer JWT active secret recovered from prior state.",
+            )
+            await _persist_customer_jwt_state(session, scope, state)
+            _sync_customer_jwt_state_cache(scope, state)
 
     return {
         "customer_id": scope,

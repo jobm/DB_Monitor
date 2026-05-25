@@ -6,6 +6,7 @@ import models as _models
 
 ApiAuditLog = _models.ApiAuditLog
 ApiKey = _models.ApiKey
+CustomerJWTSecretState = _models.CustomerJWTSecretState
 Base = _models.Base
 ColumnChange = _models.ColumnChange
 ConsumerCheckpoint = _models.ConsumerCheckpoint

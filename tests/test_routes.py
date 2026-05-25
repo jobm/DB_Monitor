@@ -10,7 +10,7 @@ from fastapi import HTTPException
 import routes.auth as routes_auth
 import routes.data as routes_data
 import routes.ops as routes_ops
-from models import ApiKey, KafkaEvent
+from models import ApiKey, CustomerJWTSecretState, KafkaEvent
 
 
 class FakeSession:
@@ -42,6 +42,9 @@ class FakeExecuteResult:
 
     def scalars(self):
         return FakeScalarResult(self._scalars)
+
+    def scalar_one_or_none(self):
+        return self._scalar_value
 
 
 class FakeEventsSession:
@@ -85,6 +88,7 @@ class FakeWriteSession:
         self.statements = []
         self.added = []
         self._next_id = 1
+        self.customer_jwt_records: dict[str, CustomerJWTSecretState] = {}
 
     async def __aenter__(self):
         return self
@@ -97,6 +101,8 @@ class FakeWriteSession:
 
     def add(self, model):
         self.added.append(model)
+        if isinstance(model, CustomerJWTSecretState):
+            self.customer_jwt_records[model.customer_id] = model
 
     async def flush(self):
         for model in self.added:
@@ -106,6 +112,9 @@ class FakeWriteSession:
 
     async def execute(self, statement):
         self.statements.append(statement)
+        if "customer_jwt_secret_state" in str(statement):
+            record = next(iter(self.customer_jwt_records.values()), None)
+            return FakeExecuteResult(scalar_value=record)
         return FakeExecuteResult()
 
 
@@ -431,8 +440,15 @@ async def test_rotate_customer_jwt_secrets_requires_matching_scope() -> None:
 
 
 @pytest.mark.anyio
-async def test_get_customer_jwt_state_requires_bootstrap_first() -> None:
+async def test_get_customer_jwt_state_requires_bootstrap_first(
+    monkeypatch,
+) -> None:
     routes_auth.CUSTOMER_JWT_SECRET_STATE.clear()
+    monkeypatch.setattr(
+        routes_auth,
+        "AsyncSessionLocal",
+        lambda: FakeWriteSession(),
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await routes_auth.get_customer_jwt_state(

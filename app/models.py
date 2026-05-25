@@ -276,6 +276,20 @@ class ApiKey(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class CustomerJWTSecretState(Base):
+    """Persist customer JWT secret lifecycle state."""
+
+    __tablename__ = "customer_jwt_secret_state"
+
+    customer_id = Column(String(128), primary_key=True)
+    state = Column(JSONB, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class ApiAuditLog(Base):
     """Audit logs for API access."""
 
