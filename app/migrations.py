@@ -396,6 +396,37 @@ async def _apply_customer_jwt_secret_state(
     )
 
 
+async def _apply_customer_control_plane_state(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Create durable customer lifecycle and job state tables."""
+    del session_factory
+    statements = [
+        """
+        CREATE TABLE IF NOT EXISTS customer_lifecycle_state (
+            customer_id VARCHAR(128) PRIMARY KEY,
+            state JSONB NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS customer_provision_jobs (
+            job_id VARCHAR(64) PRIMARY KEY,
+            customer_id VARCHAR(128) NOT NULL,
+            state JSONB NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+        (
+            "CREATE INDEX IF NOT EXISTS ix_customer_provision_jobs_customer_id "
+            "ON customer_provision_jobs (customer_id)"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version="0001_base_schema",
@@ -443,6 +474,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version="0009_customer_jwt_secret_state",
         description="Persist customer JWT secret lifecycle state",
         apply=_apply_customer_jwt_secret_state,
+    ),
+    Migration(
+        version="0010_customer_control_plane_state",
+        description="Persist customer lifecycle and job orchestration state",
+        apply=_apply_customer_control_plane_state,
     ),
 )
 

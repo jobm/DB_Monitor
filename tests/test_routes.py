@@ -10,7 +10,13 @@ from fastapi import HTTPException
 import routes.auth as routes_auth
 import routes.data as routes_data
 import routes.ops as routes_ops
-from models import ApiKey, CustomerJWTSecretState, KafkaEvent
+from models import (
+    ApiKey,
+    CustomerJWTSecretState,
+    CustomerLifecycleState,
+    CustomerProvisionJob,
+    KafkaEvent,
+)
 
 
 class FakeSession:
@@ -89,6 +95,8 @@ class FakeWriteSession:
         self.added = []
         self._next_id = 1
         self.customer_jwt_records: dict[str, CustomerJWTSecretState] = {}
+        self.customer_lifecycle_records: dict[str, CustomerLifecycleState] = {}
+        self.customer_provision_jobs: dict[str, CustomerProvisionJob] = {}
 
     async def __aenter__(self):
         return self
@@ -103,6 +111,10 @@ class FakeWriteSession:
         self.added.append(model)
         if isinstance(model, CustomerJWTSecretState):
             self.customer_jwt_records[model.customer_id] = model
+        if isinstance(model, CustomerLifecycleState):
+            self.customer_lifecycle_records[model.customer_id] = model
+        if isinstance(model, CustomerProvisionJob):
+            self.customer_provision_jobs[model.job_id] = model
 
     async def flush(self):
         for model in self.added:
@@ -112,10 +124,31 @@ class FakeWriteSession:
 
     async def execute(self, statement):
         self.statements.append(statement)
-        if "customer_jwt_secret_state" in str(statement):
+        statement_text = str(statement)
+        if "customer_jwt_secret_state" in statement_text:
             record = next(iter(self.customer_jwt_records.values()), None)
             return FakeExecuteResult(scalar_value=record)
+        if "customer_lifecycle_state" in statement_text:
+            record = next(iter(self.customer_lifecycle_records.values()), None)
+            return FakeExecuteResult(scalar_value=record)
+        if "customer_provision_jobs" in statement_text:
+            if "customer_id" in statement_text:
+                customer_records = [
+                    record
+                    for record in self.customer_provision_jobs.values()
+                    if record.customer_id
+                ]
+                return FakeExecuteResult(scalars=customer_records)
+            job = next(iter(self.customer_provision_jobs.values()), None)
+            return FakeExecuteResult(scalar_value=job)
         return FakeExecuteResult()
+
+
+@pytest.fixture(autouse=True)
+def control_plane_session(monkeypatch):
+    session = FakeWriteSession()
+    monkeypatch.setattr(routes_ops, "AsyncSessionLocal", lambda: session)
+    yield session
 
 
 @pytest.mark.anyio

@@ -290,6 +290,39 @@ class CustomerJWTSecretState(Base):
     )
 
 
+class CustomerLifecycleState(Base):
+    """Persist customer lifecycle control-plane state."""
+
+    __tablename__ = "customer_lifecycle_state"
+
+    customer_id = Column(String(128), primary_key=True)
+    state = Column(JSONB, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class CustomerProvisionJob(Base):
+    """Persist one customer provisioning orchestration job."""
+
+    __tablename__ = "customer_provision_jobs"
+
+    job_id = Column(String(64), primary_key=True)
+    customer_id = Column(String(128), nullable=False, index=True)
+    state = Column(JSONB, nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_customer_provision_jobs_customer_id", "customer_id"),
+    )
+
+
 class ApiAuditLog(Base):
     """Audit logs for API access."""
 

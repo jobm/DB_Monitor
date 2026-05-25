@@ -91,7 +91,7 @@ These are not committed backlog items yet.
 #### Must-Fix Now
 
 - [x] Persist customer JWT secret lifecycle state in the database
-- [ ] Persist customer lifecycle and provisioning orchestration state in the
+- [x] Persist customer lifecycle and provisioning orchestration state in the
 	control plane store
 - [ ] Make ingestion quota enforcement consistent across replicas and
 	restarts

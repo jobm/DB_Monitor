@@ -38,7 +38,7 @@ from db_monitor.ingestion.consumer import (
     replay_dead_letter_event_record,
     replay_dead_letter_event_records,
 )
-from core.models import ApiKey
+from core.models import ApiKey, CustomerLifecycleState, CustomerProvisionJob
 from core.responses import AppInfoResponse, HealthResponse, ReadinessResponse
 from .utils import timestamp_age_seconds
 
@@ -143,6 +143,132 @@ def _get_customer_provision_jobs(
 ) -> dict[str, dict[str, object]]:
     """Return the in-memory provisioning job map for one customer."""
     return CUSTOMER_PROVISION_JOBS.setdefault(customer_id, {})
+
+
+async def _load_customer_lifecycle_state(
+    customer_id: str,
+) -> dict[str, object] | None:
+    """Load one durable lifecycle record and refresh the compatibility cache."""
+    cached = CUSTOMER_LIFECYCLE_STATE.get(customer_id)
+    if cached is not None:
+        return dict(cached)
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(CustomerLifecycleState).where(
+                CustomerLifecycleState.customer_id == customer_id,
+            )
+        )
+        record = result.scalar_one_or_none()
+
+    if record is None:
+        return None
+
+    state = dict(record.state or {})
+    CUSTOMER_LIFECYCLE_STATE[customer_id] = dict(state)
+    return state
+
+
+async def _persist_customer_lifecycle_state(
+    state: dict[str, object],
+) -> dict[str, object]:
+    """Persist one lifecycle record and refresh the compatibility cache."""
+    customer_id = str(state["customer_id"])
+    payload = dict(state)
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            result = await session.execute(
+                select(CustomerLifecycleState).where(
+                    CustomerLifecycleState.customer_id == customer_id,
+                )
+            )
+            record = result.scalar_one_or_none()
+            if record is None:
+                session.add(
+                    CustomerLifecycleState(
+                        customer_id=customer_id,
+                        state=payload,
+                    )
+                )
+            else:
+                record.state = payload
+
+    CUSTOMER_LIFECYCLE_STATE[customer_id] = dict(payload)
+    return payload
+
+
+async def _load_customer_provision_jobs_snapshot(
+    customer_id: str,
+) -> dict[str, dict[str, object]]:
+    """Load all durable provisioning jobs for one customer."""
+    cached = CUSTOMER_PROVISION_JOBS.get(customer_id)
+    if cached:
+        return {job_id: dict(job) for job_id, job in cached.items()}
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(CustomerProvisionJob).where(
+                CustomerProvisionJob.customer_id == customer_id,
+            )
+        )
+        records = result.scalars().all()
+
+    jobs: dict[str, dict[str, object]] = {}
+    for record in records:
+        state = dict(record.state or {})
+        if state:
+            jobs[str(record.job_id)] = state
+
+    if jobs:
+        CUSTOMER_PROVISION_JOBS[customer_id] = {
+            job_id: dict(job) for job_id, job in jobs.items()
+        }
+
+    return jobs
+
+
+async def _load_customer_provision_job(
+    customer_id: str,
+    job_id: str,
+) -> dict[str, object] | None:
+    """Load one durable provisioning job and refresh the cache."""
+    jobs = await _load_customer_provision_jobs_snapshot(customer_id)
+    job = jobs.get(job_id)
+    if job is not None:
+        return dict(job)
+    return None
+
+
+async def _persist_customer_provision_job(
+    job: dict[str, object],
+) -> dict[str, object]:
+    """Persist one provisioning job and refresh the compatibility cache."""
+    customer_id = str(job["customer_id"])
+    job_id = str(job["job_id"])
+    payload = dict(job)
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            result = await session.execute(
+                select(CustomerProvisionJob).where(
+                    CustomerProvisionJob.job_id == job_id,
+                )
+            )
+            record = result.scalar_one_or_none()
+            if record is None:
+                session.add(
+                    CustomerProvisionJob(
+                        job_id=job_id,
+                        customer_id=customer_id,
+                        state=payload,
+                    )
+                )
+            else:
+                record.customer_id = customer_id
+                record.state = payload
+
+    jobs = CUSTOMER_PROVISION_JOBS.setdefault(customer_id, {})
+    jobs[job_id] = dict(payload)
+    return payload
 
 
 def _update_step_state(
@@ -278,6 +404,7 @@ def _mark_customer_bootstrap_active(customer_id: str) -> None:
         }
     )
     CUSTOMER_LIFECYCLE_STATE[customer_id] = dict(record)
+    return record
 
 
 def _merge_job_control_plane_metadata(
@@ -567,7 +694,10 @@ async def get_customer_lifecycle_state(
             detail="customer_id path parameter must not be empty.",
         )
 
-    return _get_customer_lifecycle_record(normalized_customer_id)
+    record = await _load_customer_lifecycle_state(normalized_customer_id)
+    if record is None:
+        record = _get_customer_lifecycle_record(normalized_customer_id)
+    return record
 
 
 @router.post("/admin/customers/{customer_id}/suspend")
@@ -583,7 +713,9 @@ async def suspend_customer_cell(
     """Suspend one customer cell in the control plane."""
     del admin_api_key
     scope = _require_customer_scope(customer_id, customer_header)
-    record = _get_customer_lifecycle_record(scope)
+    record = await _load_customer_lifecycle_state(scope)
+    if record is None:
+        record = _get_customer_lifecycle_record(scope)
     record.update(
         {
             "status": "suspended",
@@ -591,7 +723,7 @@ async def suspend_customer_cell(
             "reason": reason,
         }
     )
-    CUSTOMER_LIFECYCLE_STATE[scope] = dict(record)
+    await _persist_customer_lifecycle_state(record)
     return record
 
 
@@ -607,7 +739,9 @@ async def resume_customer_cell(
     """Resume one suspended customer cell in the control plane."""
     del admin_api_key
     scope = _require_customer_scope(customer_id, customer_header)
-    record = _get_customer_lifecycle_record(scope)
+    record = await _load_customer_lifecycle_state(scope)
+    if record is None:
+        record = _get_customer_lifecycle_record(scope)
     record.update(
         {
             "status": "active",
@@ -615,7 +749,7 @@ async def resume_customer_cell(
             "reason": None,
         }
     )
-    CUSTOMER_LIFECYCLE_STATE[scope] = dict(record)
+    await _persist_customer_lifecycle_state(record)
     return record
 
 
@@ -639,14 +773,16 @@ async def upgrade_customer_cell(
             detail="target_version query parameter must not be empty.",
         )
 
-    record = _get_customer_lifecycle_record(scope)
+    record = await _load_customer_lifecycle_state(scope)
+    if record is None:
+        record = _get_customer_lifecycle_record(scope)
     record.update(
         {
             "last_action": "upgrade",
             "target_version": normalized_version,
         }
     )
-    CUSTOMER_LIFECYCLE_STATE[scope] = dict(record)
+    await _persist_customer_lifecycle_state(record)
     return record
 
 
@@ -683,8 +819,7 @@ async def start_customer_provision_job(
         "updated_at": now,
     }
 
-    jobs = _get_customer_provision_jobs(scope)
-    jobs[job_id] = job
+    await _persist_customer_provision_job(job)
     return job
 
 
@@ -702,7 +837,7 @@ async def list_customer_provision_jobs(
             detail="customer_id path parameter must not be empty.",
         )
 
-    jobs = _get_customer_provision_jobs(normalized_customer_id)
+    jobs = await _load_customer_provision_jobs_snapshot(normalized_customer_id)
     sorted_jobs = sorted(
         jobs.values(),
         key=lambda job: str(job["created_at"]),
@@ -730,7 +865,7 @@ async def get_customer_provision_job(
             detail="customer_id path parameter must not be empty.",
         )
 
-    jobs = _get_customer_provision_jobs(normalized_customer_id)
+    jobs = await _load_customer_provision_jobs_snapshot(normalized_customer_id)
     job = jobs.get(job_id)
     if job is None:
         raise HTTPException(
@@ -769,7 +904,7 @@ async def update_customer_provision_step(
             ),
         )
 
-    jobs = _get_customer_provision_jobs(scope)
+    jobs = await _load_customer_provision_jobs_snapshot(scope)
     job = jobs.get(job_id)
     if job is None:
         raise HTTPException(
@@ -788,6 +923,7 @@ async def update_customer_provision_step(
             f"{detail_note}".strip()
         ),
     )
+    await _persist_customer_provision_job(job)
     return job
 
 
@@ -816,7 +952,7 @@ async def execute_customer_provision_job(
         None if isinstance(execution_id, Param) else execution_id
     )
 
-    jobs = _get_customer_provision_jobs(scope)
+    jobs = await _load_customer_provision_jobs_snapshot(scope)
     job = jobs.get(job_id)
     if job is None:
         raise HTTPException(
@@ -857,6 +993,7 @@ async def execute_customer_provision_job(
                 f"('{job['status']}')."
             ),
         )
+        await _persist_customer_provision_job(job)
         return {
             "job": job,
             "executed_steps": 0,
@@ -889,6 +1026,7 @@ async def execute_customer_provision_job(
             actor="system",
             detail=f"Step '{step_name}' entered in_progress.",
         )
+        await _persist_customer_provision_job(job)
 
         if fail_step is not None and fail_step.strip() == step_name:
             _update_step_state(
@@ -903,6 +1041,7 @@ async def execute_customer_provision_job(
                 actor="system",
                 detail=f"Step '{step_name}' failed during execution.",
             )
+            await _persist_customer_provision_job(job)
             executed_steps += 1
             break
 
@@ -926,6 +1065,7 @@ async def execute_customer_provision_job(
                 actor="system",
                 detail=f"Step '{step_name}' failed during execution: {exc}",
             )
+            await _persist_customer_provision_job(job)
             executed_steps += 1
             break
 
@@ -939,14 +1079,19 @@ async def execute_customer_provision_job(
         _merge_job_control_plane_metadata(job, step_result)
         if step_name == "bootstrap_and_activate":
             _mark_customer_bootstrap_active(scope)
+            await _persist_customer_lifecycle_state(
+                _get_customer_lifecycle_record(scope)
+            )
         _append_job_audit(
             job,
             action="step_completed",
             actor="system",
             detail=f"Step '{step_name}' completed during execution.",
         )
+        await _persist_customer_provision_job(job)
         executed_steps += 1
 
+    await _persist_customer_provision_job(job)
     return {
         "job": job,
         "executed_steps": executed_steps,
