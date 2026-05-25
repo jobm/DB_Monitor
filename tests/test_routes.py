@@ -80,6 +80,35 @@ class FakeApiKeysSession:
         return FakeExecuteResult(scalars=self._api_keys)
 
 
+class FakeWriteSession:
+    def __init__(self):
+        self.statements = []
+        self.added = []
+        self._next_id = 1
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    def begin(self):
+        return self
+
+    def add(self, model):
+        self.added.append(model)
+
+    async def flush(self):
+        for model in self.added:
+            if getattr(model, "id", None) is None:
+                setattr(model, "id", self._next_id)
+                self._next_id += 1
+
+    async def execute(self, statement):
+        self.statements.append(statement)
+        return FakeExecuteResult()
+
+
 @pytest.mark.anyio
 async def test_get_changes_parses_service_and_timestamps(monkeypatch):
     captured: dict[str, object] = {}
@@ -307,6 +336,155 @@ async def test_bootstrap_admin_key_rejects_when_disabled(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_bootstrap_customer_auth_scope_creates_admin_key_and_jwt_state(
+    monkeypatch,
+) -> None:
+    routes_auth.CUSTOMER_JWT_SECRET_STATE.clear()
+    fake_session = FakeWriteSession()
+    monkeypatch.setattr(
+        routes_auth,
+        "AsyncSessionLocal",
+        lambda: fake_session,
+    )
+
+    response = await routes_auth.bootstrap_customer_auth_scope(
+        "customer-a",
+        owner_suffix="ops-admin",
+        ttl_days=30,
+        customer_header="customer-a",
+        creator_api_key=None,
+    )
+
+    assert response["customer_id"] == "customer-a"
+    assert response["owner_name"] == "customer-a:ops-admin"
+    assert response["api_key"].startswith("1.")
+    assert response["jwt_state"]["generation"] == 1
+    assert response["jwt_state"]["active_fingerprint"] is not None
+    assert response["jwt_state"]["audit_count"] == 1
+    assert response["jwt_state"]["last_action"] == "bootstrap"
+
+
+@pytest.mark.anyio
+async def test_rotate_and_recover_customer_jwt_secrets(monkeypatch) -> None:
+    routes_auth.CUSTOMER_JWT_SECRET_STATE.clear()
+    fake_session = FakeWriteSession()
+    monkeypatch.setattr(
+        routes_auth,
+        "AsyncSessionLocal",
+        lambda: fake_session,
+    )
+
+    await routes_auth.bootstrap_customer_auth_scope(
+        "customer-a",
+        owner_suffix="ops-admin",
+        ttl_days=30,
+        customer_header="customer-a",
+        creator_api_key=None,
+    )
+    initial_active = routes_auth.CUSTOMER_JWT_SECRET_STATE[
+        "customer-a"
+    ]["active_secret"]
+
+    rotated = await routes_auth.rotate_customer_jwt_secrets(
+        "customer-a",
+        customer_header="customer-a",
+        creator_api_key=None,
+    )
+    rotated_state = routes_auth.CUSTOMER_JWT_SECRET_STATE["customer-a"]
+    assert rotated["jwt_state"]["generation"] == 2
+    assert rotated["jwt_state"]["last_action"] == "rotate"
+    assert rotated_state["active_secret"] != initial_active
+    assert rotated_state["previous_active_secret"] == initial_active
+
+    recovered = await routes_auth.recover_customer_jwt_secrets(
+        "customer-a",
+        customer_header="customer-a",
+        creator_api_key=None,
+    )
+    recovered_state = routes_auth.CUSTOMER_JWT_SECRET_STATE["customer-a"]
+    assert recovered_state["active_secret"] == initial_active
+    assert recovered["jwt_state"]["has_recovery_secret"] is True
+    assert recovered["jwt_state"]["last_action"] == "recover"
+
+
+@pytest.mark.anyio
+async def test_rotate_customer_jwt_secrets_requires_matching_scope() -> None:
+    routes_auth.CUSTOMER_JWT_SECRET_STATE.clear()
+    routes_auth.CUSTOMER_JWT_SECRET_STATE["customer-a"] = {
+        "active_secret": "active-secret",
+        "next_secret": "next-secret",
+        "previous_active_secret": None,
+        "generation": 1,
+        "last_rotated_at": "2024-01-01T00:00:00+00:00",
+        "last_recovered_at": None,
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_auth.rotate_customer_jwt_secrets(
+            "customer-a",
+            customer_header="customer-b",
+            creator_api_key=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "must match" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_get_customer_jwt_state_requires_bootstrap_first() -> None:
+    routes_auth.CUSTOMER_JWT_SECRET_STATE.clear()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_auth.get_customer_jwt_state(
+            "customer-a",
+            creator_api_key=None,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "auth/bootstrap" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_bootstrap_customer_auth_scope_requires_customer_scope(
+) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_auth.bootstrap_customer_auth_scope(
+            "customer-a",
+            owner_suffix="ops-admin",
+            ttl_days=30,
+            customer_header=None,
+            creator_api_key=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "X-DBM-Customer-ID" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_recover_customer_jwt_secrets_requires_matching_scope() -> None:
+    routes_auth.CUSTOMER_JWT_SECRET_STATE.clear()
+    routes_auth.CUSTOMER_JWT_SECRET_STATE["customer-a"] = {
+        "active_secret": "active-secret",
+        "next_secret": "next-secret",
+        "previous_active_secret": "previous-secret",
+        "generation": 2,
+        "last_rotated_at": "2024-01-01T00:00:00+00:00",
+        "last_recovered_at": None,
+        "audit": [],
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_auth.recover_customer_jwt_secrets(
+            "customer-a",
+            customer_header="customer-b",
+            creator_api_key=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "must match" in exc_info.value.detail
+
+
+@pytest.mark.anyio
 async def test_get_events_rejects_invalid_start_time():
     with pytest.raises(HTTPException) as exc_info:
         await routes_data.get_events(start_time="not-a-timestamp")
@@ -426,7 +604,14 @@ async def test_get_events_supports_cursor_pagination(monkeypatch):
 
     captured: dict[str, object] = {}
 
-    async def fake_list_events(*, filters, limit, offset, cursor_id, include_total):
+    async def fake_list_events(
+        *,
+        filters,
+        limit,
+        offset,
+        cursor_id,
+        include_total,
+    ):
         del filters
         captured["limit"] = limit
         captured["offset"] = offset
@@ -678,12 +863,14 @@ async def test_replay_dead_letter_events_returns_batch_summary(monkeypatch):
     response = await routes_ops.replay_dead_letter_events(
         limit=10,
         include_replayed=True,
+        customer_id="customer-a",
         admin_api_key=None,
     )
 
     assert response["count"] == 1
     assert response["replayed_count"] == 1
     assert response["results"][0]["status"] == "replayed"
+    assert response["customer_id"] == "customer-a"
 
 
 @pytest.mark.anyio
@@ -705,11 +892,13 @@ async def test_replay_dead_letter_event_returns_replay_result(monkeypatch):
 
     response = await routes_ops.replay_dead_letter_event(
         9,
+        customer_id="customer-a",
         admin_api_key=None,
     )
 
     assert response["status"] == "replayed"
     assert response["event_id"] == 100
+    assert response["customer_id"] == "customer-a"
 
 
 @pytest.mark.anyio
@@ -725,10 +914,28 @@ async def test_replay_dead_letter_event_returns_404_when_missing(monkeypatch):
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await routes_ops.replay_dead_letter_event(9, admin_api_key=None)
+        await routes_ops.replay_dead_letter_event(
+            9,
+            customer_id="customer-a",
+            admin_api_key=None,
+        )
 
     assert exc_info.value.status_code == 404
     assert "GET /admin/dlq" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_replay_dead_letter_events_requires_customer_scope() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_ops.replay_dead_letter_events(
+            limit=10,
+            include_replayed=False,
+            customer_id="",
+            admin_api_key=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "X-DBM-Customer-ID" in exc_info.value.detail
 
 
 @pytest.mark.anyio
@@ -764,3 +971,519 @@ async def test_get_slo_policy_returns_tenant_cohorts(monkeypatch):
     assert response["window_days"] == 30
     assert response["count"] == 2
     assert response["cohorts"][0]["name"] == "small"
+
+
+@pytest.mark.anyio
+async def test_customer_lifecycle_suspend_resume_upgrade_flow(
+) -> None:
+    routes_ops.CUSTOMER_LIFECYCLE_STATE.clear()
+
+    suspended = await routes_ops.suspend_customer_cell(
+        "customer-a",
+        reason="maintenance",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    assert suspended["status"] == "suspended"
+    assert suspended["last_action"] == "suspend"
+    assert suspended["reason"] == "maintenance"
+
+    upgraded = await routes_ops.upgrade_customer_cell(
+        "customer-a",
+        target_version="v0.2.0",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    assert upgraded["last_action"] == "upgrade"
+    assert upgraded["target_version"] == "v0.2.0"
+
+    resumed = await routes_ops.resume_customer_cell(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    assert resumed["status"] == "active"
+    assert resumed["last_action"] == "resume"
+    assert resumed["reason"] is None
+
+
+@pytest.mark.anyio
+async def test_customer_lifecycle_mutations_require_matching_scope() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_ops.suspend_customer_cell(
+            "customer-a",
+            reason=None,
+            customer_header="customer-b",
+            admin_api_key=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "must match" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_get_customer_lifecycle_state_returns_default_when_missing(
+) -> None:
+    routes_ops.CUSTOMER_LIFECYCLE_STATE.clear()
+
+    response = await routes_ops.get_customer_lifecycle_state(
+        "customer-z",
+        admin_api_key=None,
+    )
+
+    assert response["customer_id"] == "customer-z"
+    assert response["status"] == "active"
+    assert response["last_action"] == "none"
+
+
+@pytest.mark.anyio
+async def test_customer_provision_job_tracks_steps_and_audit() -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    assert created["customer_id"] == "customer-a"
+    assert created["status"] == "in_progress"
+    assert created["steps"][0]["name"] == "register_customer"
+    assert created["audit"][0]["action"] == "job_started"
+
+    updated = await routes_ops.update_customer_provision_step(
+        "customer-a",
+        created["job_id"],
+        "register_customer",
+        step_status="completed",
+        note="customer metadata persisted",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    assert updated["steps"][0]["status"] == "completed"
+    assert updated["audit"][-1]["action"] == "step_updated"
+
+    listed = await routes_ops.list_customer_provision_jobs(
+        "customer-a",
+        admin_api_key=None,
+    )
+
+    assert listed["count"] == 1
+    assert listed["jobs"][0]["job_id"] == created["job_id"]
+
+
+@pytest.mark.anyio
+async def test_customer_provision_step_rejects_unknown_status() -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_ops.update_customer_provision_step(
+            "customer-a",
+            created["job_id"],
+            "register_customer",
+            step_status="done",
+            note=None,
+            customer_header="customer-a",
+            admin_api_key=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "must be one of" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_customer_provision_step_requires_matching_scope() -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_ops.update_customer_provision_step(
+            "customer-a",
+            created["job_id"],
+            "register_customer",
+            step_status="completed",
+            note=None,
+            customer_header="customer-b",
+            admin_api_key=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "must match" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_customer_provision_execute_advances_steps_in_order() -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    response = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=2,
+        fail_step=None,
+        note="runner-execution",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    job = response["job"]
+    assert response["executed_steps"] == 2
+    assert job["steps"][0]["status"] == "completed"
+    assert job["steps"][1]["status"] == "completed"
+    assert job["status"] == "in_progress"
+    assert job["audit"][-1]["action"] == "step_completed"
+
+
+@pytest.mark.anyio
+async def test_customer_provision_execute_supports_failure_simulation(
+) -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    response = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=1,
+        fail_step="register_customer",
+        note="simulated failure",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    job = response["job"]
+    assert response["executed_steps"] == 1
+    assert job["steps"][0]["status"] == "failed"
+    assert job["status"] == "failed"
+    assert job["audit"][-1]["action"] == "step_failed"
+
+
+@pytest.mark.anyio
+async def test_customer_provision_execute_requires_matching_scope() -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await routes_ops.execute_customer_provision_job(
+            "customer-a",
+            created["job_id"],
+            max_steps=1,
+            fail_step=None,
+            note=None,
+            customer_header="customer-b",
+            admin_api_key=None,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "must match" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_customer_provision_execute_is_idempotent_by_execution_id(
+) -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    first = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=1,
+        retry_failed=False,
+        execution_id="exec-1",
+        fail_step=None,
+        note="first run",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+    assert first["executed_steps"] == 1
+    assert first["idempotent_replay"] is False
+
+    second = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=1,
+        retry_failed=False,
+        execution_id="exec-1",
+        fail_step=None,
+        note="duplicate run",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+    assert second["executed_steps"] == 0
+    assert second["idempotent_replay"] is True
+
+
+@pytest.mark.anyio
+async def test_customer_provision_execute_can_retry_failed_step() -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    failed_run = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=1,
+        retry_failed=False,
+        execution_id="exec-fail",
+        fail_step="register_customer",
+        note="simulated failure",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+    assert failed_run["job"]["steps"][0]["status"] == "failed"
+    assert failed_run["job"]["steps"][0]["attempts"] == 1
+
+    retried = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=1,
+        retry_failed=True,
+        execution_id="exec-retry",
+        fail_step=None,
+        note="retry after fix",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    retried_step = retried["job"]["steps"][0]
+    assert retried_step["status"] == "completed"
+    assert retried_step["attempts"] == 2
+    assert retried_step["last_error"] is None
+    assert retried_step["duration_seconds"] is not None
+
+
+@pytest.mark.anyio
+async def test_customer_provision_execute_persists_adapter_result(
+    monkeypatch,
+) -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+
+    calls: list[str] = []
+
+    async def fake_execute_provisioning_step(
+        step_name: str,
+        customer_id: str,
+        job_id: str,
+        note: str | None = None,
+    ) -> dict[str, object]:
+        del customer_id, job_id
+        calls.append(step_name)
+        return {
+            "detail": f"{step_name} done",
+            "adapter": "fake",
+            "note": note,
+        }
+
+    monkeypatch.setattr(
+        routes_ops,
+        "execute_provisioning_step",
+        fake_execute_provisioning_step,
+    )
+
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    response = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=2,
+        retry_failed=False,
+        execution_id="adapter-success",
+        fail_step=None,
+        note="adapter-note",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    assert response["executed_steps"] == 2
+    assert calls == ["register_customer", "generate_namespace"]
+    assert response["job"]["steps"][0]["result"]["adapter"] == "fake"
+    assert response["job"]["steps"][0]["note"] == "register_customer done"
+
+
+@pytest.mark.anyio
+async def test_customer_provision_execute_maps_adapter_error_to_step_failure(
+    monkeypatch,
+) -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+
+    async def fake_execute_provisioning_step(
+        step_name: str,
+        customer_id: str,
+        job_id: str,
+        note: str | None = None,
+    ) -> dict[str, object]:
+        del customer_id, job_id, note
+        raise routes_ops.ProvisioningStepExecutionError(
+            f"adapter failure at {step_name}"
+        )
+
+    monkeypatch.setattr(
+        routes_ops,
+        "execute_provisioning_step",
+        fake_execute_provisioning_step,
+    )
+
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    response = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=1,
+        retry_failed=False,
+        execution_id="adapter-failure",
+        fail_step=None,
+        note=None,
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    failed_step = response["job"]["steps"][0]
+    assert response["executed_steps"] == 1
+    assert response["job"]["status"] == "failed"
+    assert failed_step["status"] == "failed"
+    assert "adapter failure" in str(failed_step["last_error"])
+    assert response["job"]["audit"][-1]["action"] == "step_failed"
+
+
+@pytest.mark.anyio
+async def test_customer_provision_execute_adds_guardrail_and_observability(
+) -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    response = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=6,
+        retry_failed=False,
+        execution_id="control-plane-metadata",
+        fail_step=None,
+        note=None,
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    job = response["job"]
+    assert response["executed_steps"] == 6
+    assert job["guardrails"]["resource_quota"]["kind"] == "ResourceQuota"
+    assert job["guardrails"]["network_policy"]["kind"] == "NetworkPolicy"
+    assert job["observability_labels"]["customer_id"] == "customer-a"
+    assert job["alert_routing"]["matchers"]["customer_id"] == "customer-a"
+
+
+@pytest.mark.anyio
+async def test_get_customer_guardrails_returns_templates() -> None:
+    response = await routes_ops.get_customer_guardrails(
+        "customer-a",
+        admin_api_key=None,
+    )
+
+    guardrails = response["guardrails"]
+    assert response["customer_id"] == "customer-a"
+    assert guardrails["resource_quota"]["kind"] == "ResourceQuota"
+    assert guardrails["limit_range"]["kind"] == "LimitRange"
+    assert guardrails["network_policy"]["kind"] == "NetworkPolicy"
+
+
+@pytest.mark.anyio
+async def test_get_customer_observability_profile_returns_route() -> None:
+    response = await routes_ops.get_customer_observability_profile(
+        "customer-a",
+        admin_api_key=None,
+    )
+
+    assert response["customer_id"] == "customer-a"
+    assert response["labels"]["customer_id"] == "customer-a"
+    assert response["alert_routing"]["matchers"]["customer_id"] == "customer-a"
+
+
+@pytest.mark.anyio
+async def test_customer_bootstrap_step_marks_lifecycle_active(
+    monkeypatch,
+) -> None:
+    routes_ops.CUSTOMER_PROVISION_JOBS.clear()
+    routes_ops.CUSTOMER_LIFECYCLE_STATE.clear()
+
+    async def fake_execute_provisioning_step(
+        step_name: str,
+        customer_id: str,
+        job_id: str,
+        note: str | None = None,
+    ) -> dict[str, object]:
+        del customer_id, job_id, note
+        return {
+            "detail": f"{step_name} done",
+        }
+
+    monkeypatch.setattr(
+        routes_ops,
+        "execute_provisioning_step",
+        fake_execute_provisioning_step,
+    )
+
+    created = await routes_ops.start_customer_provision_job(
+        "customer-a",
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    response = await routes_ops.execute_customer_provision_job(
+        "customer-a",
+        created["job_id"],
+        max_steps=8,
+        retry_failed=False,
+        execution_id="bootstrap-complete",
+        fail_step=None,
+        note=None,
+        customer_header="customer-a",
+        admin_api_key=None,
+    )
+
+    assert response["job"]["status"] == "completed"
+    lifecycle = routes_ops.CUSTOMER_LIFECYCLE_STATE["customer-a"]
+    assert lifecycle["status"] == "active"
+    assert lifecycle["last_action"] == "bootstrap_activate"
