@@ -379,3 +379,21 @@ class ApiAuditLog(Base):
     __table_args__ = (
         Index("ix_api_audit_logs_api_key_time", "api_key_id", "timestamp"),
     )
+
+
+class ApiAuditLogSpill(Base):
+    """Persistent spill table for audit log entries that couldn't be flushed."""
+
+    __tablename__ = "api_audit_log_spill"
+
+    id = Column(Integer, primary_key=True, index=True)
+    entry = Column(JSONB, nullable=False)
+    error_message = Column(Text, nullable=True)
+    spilled_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    replayed = Column(Boolean, default=False, nullable=False)
+    replayed_by = Column(String(128), nullable=True)
+    replayed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        Index("ix_api_audit_log_spill_spilled_at", "spilled_at"),
+    )

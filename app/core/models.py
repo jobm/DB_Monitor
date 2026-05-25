@@ -18,3 +18,4 @@ KafkaEvent = _models.KafkaEvent
 KafkaEventLegacy = _models.KafkaEventLegacy
 MonitoredColumn = _models.MonitoredColumn
 MonitoredTable = _models.MonitoredTable
+ApiAuditLogSpill = _models.ApiAuditLogSpill

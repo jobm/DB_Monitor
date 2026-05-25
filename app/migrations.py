@@ -427,6 +427,31 @@ async def _apply_customer_control_plane_state(
         await connection.execute(text(statement))
 
 
+async def _apply_api_audit_log_spill(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Create the persistent spill table for audit logs."""
+    del session_factory
+    await connection.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS api_audit_log_spill (
+                id SERIAL PRIMARY KEY,
+                entry JSONB NOT NULL,
+                error_message TEXT NULL,
+                spilled_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+    )
+    await connection.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_api_audit_log_spill_spilled_at ON api_audit_log_spill (spilled_at)"
+        )
+    )
+
+
 async def _apply_ingestion_quota_windows(
     connection: AsyncConnection,
     session_factory: Callable,
@@ -521,6 +546,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version="0011_ingestion_quota_windows",
         description="Persist shared ingestion quota windows",
         apply=_apply_ingestion_quota_windows,
+    ),
+    Migration(
+        version="0012_api_audit_log_spill",
+        description="Create durable spill table for audit log entries",
+        apply=_apply_api_audit_log_spill,
     ),
 )
 

@@ -40,17 +40,19 @@ async def managed_lifespan(
             audit_log_writer.run(),
             name="audit_log_writer",
         )
-        lifecycle_manager.register_task(audit_log_task)
+        lifecycle_manager.register_task(audit_log_task, critical=False)
 
         schema_cache_backplane_task = (
             await schema_cache_backplane.start_listener()
         )
         if schema_cache_backplane_task is not None:
-            lifecycle_manager.register_task(schema_cache_backplane_task)
+            lifecycle_manager.register_task(
+                schema_cache_backplane_task, critical=False
+            )
 
         ws_backplane_task = await ws_manager.start_backplane_listener()
         if ws_backplane_task is not None:
-            lifecycle_manager.register_task(ws_backplane_task)
+            lifecycle_manager.register_task(ws_backplane_task, critical=False)
 
         for cluster in broker_clusters:
             cluster_name = str(cluster["name"])
@@ -84,7 +86,7 @@ async def managed_lifespan(
                 retention_cleanup_task(),
                 name="retention_cleanup",
             )
-            lifecycle_manager.register_task(retention_task)
+            lifecycle_manager.register_task(retention_task, critical=False)
 
         logger.info(
             "Consumer tasks started",

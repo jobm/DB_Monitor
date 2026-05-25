@@ -41,6 +41,9 @@ from db_monitor.ingestion.consumer import (
 from core.models import ApiKey, CustomerLifecycleState, CustomerProvisionJob
 from core.responses import AppInfoResponse, HealthResponse, ReadinessResponse
 from .utils import timestamp_age_seconds
+from db_monitor.audit_log import audit_log_writer
+from repositories.audit_log_spill import list_audit_log_spill_snapshot
+from repositories.audit_log_replay import replay_spill_entries
 
 router = APIRouter()
 register_local_step_providers()
@@ -484,6 +487,11 @@ def readiness_payload() -> dict[str, object]:
                 "status": "healthy" if lifecycle_ready else "unhealthy",
                 "shutting_down": lifecycle_manager.is_shutting_down,
             },
+            "audit_log": {
+                "status": "healthy" if not audit_log_writer.has_flush_failure else "unhealthy",
+                "has_flush_failure": audit_log_writer.has_flush_failure,
+                "last_flush_error": audit_log_writer.last_flush_error,
+            },
         },
     }
 
@@ -523,6 +531,11 @@ async def health_check():
             "database": {
                 "status": database_status,
                 "error": database_error,
+            },
+            "audit_log": {
+                "status": "healthy" if not audit_log_writer.has_flush_failure else "unhealthy",
+                "has_flush_failure": audit_log_writer.has_flush_failure,
+                "last_flush_error": audit_log_writer.last_flush_error,
             },
             "consumer": consumer_health,
             "lifecycle": {
@@ -593,6 +606,34 @@ async def get_consumer_checkpoints(
         "checkpoints": checkpoints,
         "count": len(checkpoints),
     }
+
+
+@router.get("/admin/audit-log/spill")
+async def get_audit_log_spill(
+    limit: int = Query(100, ge=1, le=1000),
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Return recent persisted spilled audit log entries for operator inspection."""
+    del admin_api_key
+    rows = await list_audit_log_spill_snapshot(limit=limit)
+    return {"events": rows, "count": len(rows)}
+
+
+@router.post("/admin/audit-log/spill/replay")
+async def replay_audit_log_spill(
+    limit: int = Query(100, ge=1, le=1000),
+    ids: list[int] | None = Query(default=None),
+    actor: str | None = Query(default=None),
+    admin_api_key: ApiKey = Depends(require_admin_role),
+):
+    """Replay persisted spilled audit log entries into the primary audit table.
+
+    - Provide `ids` to replay specific spill records.
+    - Provide `actor` to record who initiated the replay.
+    """
+    del admin_api_key
+    result = await replay_spill_entries(limit=limit, ids=ids, actor=actor)
+    return {"result": result}
 
 
 @router.get("/admin/dlq")

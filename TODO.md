@@ -96,6 +96,18 @@ These are not committed backlog items yet.
 - [x] Make ingestion quota enforcement consistent across replicas and
 	restarts
 
+#### Should-Fix Soon
+
+- [ ] Choose and document the deployment topology decision
+	(per-startup isolated deployments vs shared multi-tenant plane)
+- [ ] Add retention and archival policy automation for `events`,
+	`column_changes`, and DLQ history
+- [ ] Add cursor/keyset pagination and optional or approximate counts for
+	`/events` and `/changes`
+- [ ] Add bulk-write ingestion optimizations to reduce per-event write
+	overhead
+- [ ] Define and publish platform SLOs/error budgets per tenant cohort
+
 #### One-Go Closure Checklist
 
 - [x] Close provisioning workflow end-to-end

@@ -52,6 +52,11 @@ audit_log_records_dropped_total = Counter(
     "Total number of audit log records dropped because the queue was full",
 )
 
+audit_log_flush_failures_total = Counter(
+    "db_monitor_audit_log_flush_failures_total",
+    "Total number of audit log flush attempts that failed",
+)
+
 failed_auth_attempts_total = Counter(
     "db_monitor_failed_auth_attempts_total",
     "Total number of failed authentication attempts",

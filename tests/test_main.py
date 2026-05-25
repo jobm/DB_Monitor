@@ -153,7 +153,7 @@ async def test_lifespan_manager_starts_one_consumer_per_cluster(
     def fake_setup_signal_handlers(_loop) -> None:
         return None
 
-    def fake_register_task(_task) -> None:
+    def fake_register_task(_task, *args, **kwargs) -> None:
         return None
 
     async def fake_audit_log_run() -> None:
@@ -254,7 +254,7 @@ async def test_lifespan_manager_passes_topic_partitions_to_consumer(
     def fake_setup_signal_handlers(_loop) -> None:
         return None
 
-    def fake_register_task(_task) -> None:
+    def fake_register_task(_task, *args, **kwargs) -> None:
         return None
 
     async def fake_audit_log_run() -> None:
@@ -334,7 +334,7 @@ async def test_lifespan_manager_passes_rabbitmq_cluster_args(
     def fake_setup_signal_handlers(_loop) -> None:
         return None
 
-    def fake_register_task(_task) -> None:
+    def fake_register_task(_task, *args, **kwargs) -> None:
         return None
 
     async def fake_audit_log_run() -> None:
@@ -430,7 +430,7 @@ async def test_lifespan_manager_starts_retention_task_when_enabled(
     def fake_setup_signal_handlers(_loop) -> None:
         return None
 
-    def fake_register_task(_task) -> None:
+    def fake_register_task(_task, *args, **kwargs) -> None:
         return None
 
     async def fake_audit_log_run() -> None:
