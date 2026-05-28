@@ -151,7 +151,7 @@ def _get_customer_provision_jobs(
 async def _load_customer_lifecycle_state(
     customer_id: str,
 ) -> dict[str, object] | None:
-    """Load one durable lifecycle record and refresh the compatibility cache."""
+    """Load one lifecycle record and refresh the compatibility cache."""
     cached = CUSTOMER_LIFECYCLE_STATE.get(customer_id)
     if cached is not None:
         return dict(cached)
@@ -470,6 +470,9 @@ def readiness_payload() -> dict[str, object]:
         consumer_ready = False
 
     lifecycle_ready = lifecycle_manager.is_healthy
+    audit_log_status = (
+        "healthy" if not audit_log_writer.has_flush_failure else "unhealthy"
+    )
     return {
         "status": (
             "ready" if consumer_ready and lifecycle_ready else "not_ready"
@@ -488,7 +491,7 @@ def readiness_payload() -> dict[str, object]:
                 "shutting_down": lifecycle_manager.is_shutting_down,
             },
             "audit_log": {
-                "status": "healthy" if not audit_log_writer.has_flush_failure else "unhealthy",
+                "status": audit_log_status,
                 "has_flush_failure": audit_log_writer.has_flush_failure,
                 "last_flush_error": audit_log_writer.last_flush_error,
             },
@@ -509,6 +512,9 @@ async def health_check():
         database_error = str(exc)
 
     consumer_health = get_consumer_health()
+    audit_log_status = (
+        "healthy" if not audit_log_writer.has_flush_failure else "unhealthy"
+    )
     lifecycle_status = (
         "healthy" if lifecycle_manager.is_healthy else "unhealthy"
     )
@@ -533,7 +539,7 @@ async def health_check():
                 "error": database_error,
             },
             "audit_log": {
-                "status": "healthy" if not audit_log_writer.has_flush_failure else "unhealthy",
+                "status": audit_log_status,
                 "has_flush_failure": audit_log_writer.has_flush_failure,
                 "last_flush_error": audit_log_writer.last_flush_error,
             },
@@ -613,7 +619,7 @@ async def get_audit_log_spill(
     limit: int = Query(100, ge=1, le=1000),
     admin_api_key: ApiKey = Depends(require_admin_role),
 ):
-    """Return recent persisted spilled audit log entries for operator inspection."""
+    """Return recent spilled audit log entries for inspection."""
     del admin_api_key
     rows = await list_audit_log_spill_snapshot(limit=limit)
     return {"events": rows, "count": len(rows)}
@@ -626,7 +632,7 @@ async def replay_audit_log_spill(
     actor: str | None = Query(default=None),
     admin_api_key: ApiKey = Depends(require_admin_role),
 ):
-    """Replay persisted spilled audit log entries into the primary audit table.
+    """Replay spilled audit log entries into the primary audit table.
 
     - Provide `ids` to replay specific spill records.
     - Provide `actor` to record who initiated the replay.

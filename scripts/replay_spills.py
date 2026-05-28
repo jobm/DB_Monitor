@@ -18,13 +18,19 @@ def parse_ids(ids_str: Optional[str]) -> Optional[list[int]]:
     return [int(x.strip()) for x in ids_str.split(",") if x.strip()]
 
 
-async def main_async(limit: int, ids: Optional[list[int]], actor: Optional[str]) -> None:
+async def main_async(
+    limit: int,
+    ids: Optional[list[int]],
+    actor: Optional[str],
+) -> None:
     result = await replay_spill_entries(limit=limit, ids=ids, actor=actor)
     logger.info("Replay result: %s", result)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Replay spilled audit log entries")
+    parser = argparse.ArgumentParser(
+        description="Replay spilled audit log entries",
+    )
     parser.add_argument(
         "--limit",
         type=int,

@@ -108,6 +108,36 @@ These are not committed backlog items yet.
 	overhead
 - [ ] Define and publish platform SLOs/error budgets per tenant cohort
 
+#### Review Follow-ups
+
+- [ ] Add a partial index and purge/retention job for `api_audit_log_spill`
+	so unreplayed spill lookups stay fast and spill rows do not grow without
+	bound.
+	Done when unreplayed replay queries use a targeted index, old replayed rows
+	are expired or archived on a schedule, and the job is covered by tests.
+- [ ] Add spill-rate and replay-observability metrics for audit logging so
+	operators can see queue pressure, flush failures, spill volume, and replay
+	success/failure trends.
+	Done when Prometheus counters/gauges exist for these signals, dashboards
+	render them, and alert rules fire on sustained degradation.
+- [ ] Define the audit-log backpressure policy for queue saturation
+	(drop, block, or durable fallback) and document the exact production
+	behavior.
+	Done when the queue strategy is configurable, the default is documented,
+	and tests cover the chosen failure mode.
+- [ ] Make event ingestion offset handling explicitly idempotent across crash
+	and restart boundaries so a DB write and broker commit cannot diverge.
+	Done when the code stores or deduplicates processed offsets atomically with
+	the write path and tests prove at-least-once semantics.
+- [ ] Add migration apply safety for concurrent deploys so only one actor can
+	run schema changes at a time.
+	Done when migration execution acquires a lock, logs contention clearly, and
+	is validated in an integration test.
+- [ ] Add a scale test that simulates multiple startups with 10+ source DBs
+	each to confirm consumer throughput, DB pool usage, and operator latency.
+	Done when a repeatable load test exists and its results are recorded for the
+	target startup count.
+
 #### One-Go Closure Checklist
 
 - [x] Close provisioning workflow end-to-end

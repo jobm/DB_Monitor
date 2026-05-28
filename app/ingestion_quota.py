@@ -139,7 +139,7 @@ class IngestionQuotaLimiter:
         key: str,
         limit: int,
     ) -> tuple[bool, bool, float]:
-        """Reserve one quota slot, optionally sleeping until the window resets."""
+        """Reserve a quota slot and sleep until the window resets if needed."""
         total_sleep_seconds = 0.0
         throttled = False
 

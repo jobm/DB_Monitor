@@ -419,7 +419,8 @@ async def _apply_customer_control_plane_state(
         )
         """,
         (
-            "CREATE INDEX IF NOT EXISTS ix_customer_provision_jobs_customer_id "
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_customer_provision_jobs_customer_id "
             "ON customer_provision_jobs (customer_id)"
         ),
     ]
@@ -447,7 +448,8 @@ async def _apply_api_audit_log_spill(
     )
     await connection.execute(
         text(
-            "CREATE INDEX IF NOT EXISTS ix_api_audit_log_spill_spilled_at ON api_audit_log_spill (spilled_at)"
+            "CREATE INDEX IF NOT EXISTS ix_api_audit_log_spill_spilled_at "
+            "ON api_audit_log_spill (spilled_at)"
         )
     )
 

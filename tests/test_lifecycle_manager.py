@@ -102,7 +102,9 @@ async def test_application_shutdown_uses_configured_timeout_and_is_idempotent(
 
 
 @pytest.mark.anyio
-async def test_noncritical_task_failure_does_not_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_noncritical_task_failure_does_not_shutdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A non-critical background task failure should not trigger shutdown."""
     manager = lifecycle_module.GracefulShutdownManager(shutdown_timeout=0.05)
     failure_gate = asyncio.Event()

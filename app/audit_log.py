@@ -167,7 +167,8 @@ class AuditLogWriter:
                 async with engine.begin() as conn:
                     for e in entries:
                         insert_sql = (
-                            "INSERT INTO api_audit_log_spill (entry, error_message) "
+                            "INSERT INTO api_audit_log_spill (entry, "
+                            "error_message) "
                             "VALUES (:entry::jsonb, :error_message)"
                         )
 
@@ -187,7 +188,10 @@ class AuditLogWriter:
                             },
                         )
                 logger.info(
-                    "Persisted spilled audit log entries to api_audit_log_spill",
+                    (
+                        "Persisted spilled audit log entries to "
+                        "api_audit_log_spill"
+                    ),
                     extra={"count": len(entries)},
                 )
             except Exception:  # noqa: BLE001

@@ -10,9 +10,16 @@ async def test_replay_endpoint_calls_repository(monkeypatch):
     async def fake_replay(limit: int = 100, ids=None, actor=None):
         return {"attempted": 2, "replayed": 2, "failed": 0}
 
-    monkeypatch.setattr(routes_ops, "replay_spill_entries", fake_replay)
+    monkeypatch.setattr(
+        routes_ops,
+        "replay_spill_entries",
+        fake_replay,
+    )
 
-    result = await routes_ops.replay_audit_log_spill(limit=10, admin_api_key=None)
+    result = await routes_ops.replay_audit_log_spill(
+        limit=10,
+        admin_api_key=None,
+    )
     assert result["result"]["replayed"] == 2
 
 
@@ -65,8 +72,14 @@ async def test_replay_repository_with_fake_session(monkeypatch):
             self.added.append(model)
 
     # Patch both package and app-level module paths to be robust in tests
-    monkeypatch.setattr("db_monitor.repositories.audit_log_replay.AsyncSessionLocal", lambda: FakeSession())
-    monkeypatch.setattr("repositories.audit_log_replay.AsyncSessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(
+        "db_monitor.repositories.audit_log_replay.AsyncSessionLocal",
+        lambda: FakeSession(),
+    )
+    monkeypatch.setattr(
+        "repositories.audit_log_replay.AsyncSessionLocal",
+        lambda: FakeSession(),
+    )
 
     from repositories.audit_log_replay import replay_spill_entries
 
@@ -129,7 +142,10 @@ async def test_replay_marks_spill_with_actor_and_ids(monkeypatch):
             except Exception:
                 pass
 
-    monkeypatch.setattr("repositories.audit_log_replay.AsyncSessionLocal", lambda: FakeSession())
+    monkeypatch.setattr(
+        "repositories.audit_log_replay.AsyncSessionLocal",
+        lambda: FakeSession(),
+    )
     from repositories.audit_log_replay import replay_spill_entries
 
     result = await replay_spill_entries(ids=[101], actor="script-user")

@@ -28,7 +28,9 @@ async def replay_spill_entries(
         async with session.begin():
             if ids:
                 result = await session.execute(
-                    select(ApiAuditLogSpill).where(ApiAuditLogSpill.id.in_(ids))
+                    select(ApiAuditLogSpill).where(
+                        ApiAuditLogSpill.id.in_(ids)
+                    )
                 )
             else:
                 result = await session.execute(

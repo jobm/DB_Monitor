@@ -30,16 +30,25 @@ class GracefulShutdownManager:
         self._task_failure_detected = False
         self._shutdown_on_task_failure: asyncio.Task[Any] | None = None
 
-    def register_task(self, task: asyncio.Task, *, critical: bool = True) -> None:
+    def register_task(
+        self,
+        task: asyncio.Task,
+        *,
+        critical: bool = True,
+    ) -> None:
         """Register a task for cleanup during shutdown.
 
-        critical: when True (default) a task failure triggers a controlled shutdown.
+        critical: when True, a task failure triggers a controlled shutdown.
         When False, failures are logged but do not cause shutdown.
         """
         self.tasks[id(task)] = task
         self._task_critical[id(task)] = bool(critical)
         task.add_done_callback(self._handle_task_completion)
-        logger.debug(f"Registered task: {task.get_name()} (critical={critical})")
+        logger.debug(
+            "Registered task: %s (critical=%s)",
+            task.get_name(),
+            critical,
+        )
 
     def _handle_task_completion(self, task: asyncio.Task[Any]) -> None:
         """Record task failures and trigger shutdown when needed."""
@@ -60,7 +69,7 @@ class GracefulShutdownManager:
         )
 
         if critical:
-            # For critical tasks we mark failure and trigger controlled shutdown
+            # Critical tasks mark failure and trigger controlled shutdown.
             self._task_failure_detected = True
             if (
                 not self._shutdown_in_progress
@@ -68,10 +77,11 @@ class GracefulShutdownManager:
             ):
                 loop = task.get_loop()
                 self._shutdown_on_task_failure = loop.create_task(
-                    self.shutdown(), name="shutdown_after_task_failure"
+                    self.shutdown(),
+                    name="shutdown_after_task_failure",
                 )
         else:
-            # Non-critical task failures are logged but do not bring down the app
+            # Non-critical failures are logged but do not bring down the app.
             logger.warning(
                 "Non-critical background task failed; continuing",
                 extra={"task_name": task.get_name()},
@@ -108,7 +118,10 @@ class GracefulShutdownManager:
                 task for task in self.tasks.values() if not task.done()
             ]
             if active_tasks:
-                logger.info(f"Cancelling {len(active_tasks)} active tasks...")
+                logger.info(
+                    "Cancelling %s active tasks...",
+                    len(active_tasks),
+                )
                 for task in active_tasks:
                     task.cancel()
 
@@ -129,7 +142,7 @@ class GracefulShutdownManager:
             await self._cleanup_database()
 
         except Exception as e:
-            logger.error(f"Error during shutdown: {e}")
+            logger.error("Error during shutdown: %s", e)
         finally:
             self.tasks.clear()
             self._task_critical.clear()
@@ -144,7 +157,7 @@ class GracefulShutdownManager:
             # Add specific cleanup logic here if needed
             logger.info("Database cleanup completed")
         except Exception as e:
-            logger.error(f"Error during database cleanup: {e}")
+            logger.error("Error during database cleanup: %s", e)
 
 
 class ApplicationLifecycleManager:
@@ -224,7 +237,12 @@ class ApplicationLifecycleManager:
         except asyncio.TimeoutError:
             logger.error("Shutdown timeout exceeded")
 
-    def register_task(self, task: asyncio.Task, *, critical: bool = True) -> None:
+    def register_task(
+        self,
+        task: asyncio.Task,
+        *,
+        critical: bool = True,
+    ) -> None:
         """Register a task for cleanup during shutdown"""
         self.shutdown_manager.register_task(task, critical=critical)
 

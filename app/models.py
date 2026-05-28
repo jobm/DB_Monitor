@@ -382,7 +382,7 @@ class ApiAuditLog(Base):
 
 
 class ApiAuditLogSpill(Base):
-    """Persistent spill table for audit log entries that couldn't be flushed."""
+    """Persistent spill table for audit logs that could not be flushed."""
 
     __tablename__ = "api_audit_log_spill"
 
@@ -400,7 +400,11 @@ class ApiAuditLogSpill(Base):
         nullable=False,
     )
     replayed_by = Column(String(128), nullable=True)
-    replayed_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    replayed_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
 
     __table_args__ = (
         Index("ix_api_audit_log_spill_spilled_at", "spilled_at"),

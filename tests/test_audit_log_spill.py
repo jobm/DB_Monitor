@@ -8,7 +8,12 @@ import routes.ops as routes_ops
 @pytest.mark.anyio
 async def test_get_audit_log_spill_returns_rows(monkeypatch):
     sample = [
-        {"id": 1, "entry": {"endpoint": "/events"}, "error_message": "e", "spilled_at": "2026-01-01T00:00:00Z"}
+            {
+                "id": 1,
+                "entry": {"endpoint": "/events"},
+                "error_message": "e",
+                "spilled_at": "2026-01-01T00:00:00Z",
+            }
     ]
 
     async def fake_list(limit: int = 100):

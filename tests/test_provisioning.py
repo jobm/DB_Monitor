@@ -115,4 +115,3 @@ async def test_execute_step_wraps_unexpected_provider_exception() -> None:
         )
 
     assert "provider exploded" in str(exc_info.value)
-
