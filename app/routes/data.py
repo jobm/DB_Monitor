@@ -136,7 +136,19 @@ async def get_table_columns(service_name: str, table_name: str):
 async def get_events(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    cursor: str | None = Query(
+        None,
+        description=(
+            "JSON cursor with capture_time and event_id, for example "
+            '{"capture_time":"2026-06-02T12:00:00Z","event_id":123}'
+        ),
+    ),
     cursor_id: int | None = Query(None, ge=1),
+    cursor_time: str | None = Query(
+        None,
+        description="ISO 8601 timestamp for keyset pagination. "
+                    "Use with cursor_id for efficient scanning.",
+    ),
     service_name: str | None = None,
     source_table_id: int | None = Query(None, ge=1),
     row_identity: str | None = None,
@@ -144,9 +156,58 @@ async def get_events(
     start_time: str | None = None,
     end_time: str | None = None,
     search_term: str | None = None,
+    include_total: bool | None = Query(
+        None,
+        description=(
+            "Request total count. Omit (default) to skip totals when a "
+            "cursor is active. Set true/false to force."
+        ),
+    ),
 ):
-    """Get events with pagination and optional filtering."""
+    """Get events with pagination and optional filtering.
+
+    Supports keyset pagination via ``cursor`` (preferred) or the
+    legacy ``cursor_time`` + ``cursor_id`` pair for efficient scanning
+    over large, time-partitioned tables.
+
+    Pass ``include_total=false`` explicitly to skip the expensive total
+    count query on large datasets.
+    """
     cursor_value = None if isinstance(cursor_id, Param) else cursor_id
+    parsed_cursor_time = None
+    if cursor is not None and not isinstance(cursor, Param):
+        cursor_payload = parse_json_object_query(cursor, "cursor")
+        cursor_value_raw = cursor_payload.get("event_id")
+        if cursor_value_raw is None:
+            cursor_value_raw = cursor_payload.get("id")
+        if cursor_value_raw is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "cursor must include event_id (events) or id (changes)."
+                ),
+            )
+        cursor_value = int(cursor_value_raw)
+        cursor_time_value = (
+            cursor_payload.get("capture_time")
+            or cursor_payload.get("changed_at")
+        )
+        if cursor_time_value is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "cursor must include capture_time (events) or "
+                    "changed_at (changes)."
+                ),
+            )
+        parsed_cursor_time = parse_timestamp(
+            cursor_time_value,
+            "cursor.capture_time",
+        )
+    elif cursor_time is not None and not isinstance(cursor_time, Param):
+        parsed_cursor_time = parse_timestamp(cursor_time, "cursor_time")
+
+    keyset = parsed_cursor_time is not None and cursor_value is not None
 
     parsed_start_time = parse_timestamp(start_time, "start_time")
     parsed_end_time = parse_timestamp(end_time, "end_time")
@@ -154,6 +215,11 @@ async def get_events(
         row_identity,
         "row_identity",
     )
+
+    if include_total is None or isinstance(include_total, Param):
+        resolved_include_total = not keyset and cursor_value is None
+    else:
+        resolved_include_total = bool(include_total)
 
     events, total = await get_events_repository().list_events(
         filters=EventQueryFilters(
@@ -168,12 +234,28 @@ async def get_events(
         limit=limit,
         offset=offset,
         cursor_id=cursor_value,
-        include_total=cursor_value is None,
+        cursor_time=parsed_cursor_time,
+        include_total=resolved_include_total,
     )
 
     next_cursor = None
-    if cursor_value is not None and len(events) == limit:
-        next_cursor = events[-1].id
+    if keyset and len(events) == limit:
+        last = events[-1]
+        if last.capture_time:
+            next_cursor = {
+                "capture_time": last.capture_time.isoformat(),
+                "event_id": last.id,
+            }
+    elif cursor_value is not None and len(events) == limit:
+        # Backward-compat: id-only cursor
+        next_cursor = {
+            "capture_time": (
+                events[-1].capture_time.isoformat()
+                if events[-1].capture_time
+                else None
+            ),
+            "event_id": events[-1].id,
+        }
 
     return {
         "events": [
@@ -183,6 +265,11 @@ async def get_events(
                 "event_time": (
                     event.event_time.isoformat()
                     if event.event_time
+                    else None
+                ),
+                "capture_time": (
+                    event.capture_time.isoformat()
+                    if event.capture_time
                     else None
                 ),
                 "user_id": event.user_id,
@@ -196,7 +283,7 @@ async def get_events(
         ],
         "total": total,
         "limit": limit,
-        "offset": 0 if cursor_value is not None else offset,
+        "offset": 0 if keyset or cursor_value is not None else offset,
         "next_cursor": next_cursor,
     }
 
@@ -221,8 +308,32 @@ async def get_changes(
     to_time: str | None = None,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    cursor: str | None = Query(
+        None,
+        description=(
+            "JSON cursor with changed_at and id, for example "
+            '{"changed_at":"2026-06-02T12:00:00Z","id":123}'
+        ),
+    ),
+    cursor_id: int | None = Query(None, ge=1),
+    cursor_time: str | None = Query(
+        None,
+        description="ISO 8601 timestamp for keyset pagination. "
+                    "Use with cursor_id for efficient scanning.",
+    ),
+    include_total: bool | None = Query(
+        None,
+        description="Request total count. Omit for default behavior.",
+    ),
 ):
-    """Get column changes for a table with optional filters."""
+    """Get column changes for a table with optional filters.
+
+    Supports keyset pagination ``(changed_at DESC, id DESC)`` via
+    ``cursor`` (preferred) or the legacy ``cursor_time`` + ``cursor_id``
+    pair for efficient scanning of large change histories. When a
+    cursor is provided, ``offset`` is ignored and ``total`` is omitted
+    unless ``include_total=true`` is explicitly set.
+    """
     resolved_service_name, resolved_table_name = resolve_table_reference(
         table_name,
         service_name,
@@ -262,7 +373,49 @@ async def get_changes(
                 ),
             )
 
-    changes = await get_change_processor().get_changes(
+    cursor_value = None if isinstance(cursor_id, Param) else cursor_id
+    parsed_cursor_time = None
+    if cursor is not None and not isinstance(cursor, Param):
+        cursor_payload = parse_json_object_query(cursor, "cursor")
+        cursor_value_raw = cursor_payload.get("id")
+        if cursor_value_raw is None:
+            cursor_value_raw = cursor_payload.get("event_id")
+        if cursor_value_raw is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "cursor must include id (changes) or event_id "
+                    "(events)."
+                ),
+            )
+        cursor_value = int(cursor_value_raw)
+        cursor_time_value = (
+            cursor_payload.get("changed_at")
+            or cursor_payload.get("capture_time")
+        )
+        if cursor_time_value is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "cursor must include changed_at (changes) or "
+                    "capture_time (events)."
+                ),
+            )
+        parsed_cursor_time = parse_timestamp(
+            cursor_time_value,
+            "cursor.changed_at",
+        )
+    elif cursor_time is not None and not isinstance(cursor_time, Param):
+        parsed_cursor_time = parse_timestamp(cursor_time, "cursor_time")
+
+    keyset = parsed_cursor_time is not None and cursor_value is not None
+
+    if include_total is None or isinstance(include_total, Param):
+        resolved_include_total = not keyset and cursor_value is None
+    else:
+        resolved_include_total = bool(include_total)
+
+    changes, total = await get_change_processor().get_changes(
         table_id=table["id"],
         column_id=column_id,
         row_identity=parsed_row_identity,
@@ -270,15 +423,37 @@ async def get_changes(
         to_time=parsed_to_time,
         limit=limit,
         offset=offset,
+        cursor_id=cursor_value,
+        cursor_time=parsed_cursor_time,
+        include_total=resolved_include_total,
     )
+
+    next_cursor = None
+    if keyset and len(changes) == limit:
+        last = changes[-1]
+        last_changed_at = last.get("changed_at")
+        if last_changed_at:
+            next_cursor = {
+                "changed_at": last_changed_at,
+                "id": last["id"],
+            }
+    elif cursor_value is not None and len(changes) == limit:
+        # Backward-compat: id-only cursor
+        next_cursor = {
+            "changed_at": changes[-1].get("changed_at"),
+            "id": changes[-1]["id"],
+        }
+
     return {
         "service_name": resolved_service_name,
         "table_name": resolved_table_name,
         "row_identity": parsed_row_identity,
         "changes": changes,
         "count": len(changes),
+        "total": total,
         "limit": limit,
-        "offset": offset,
+        "offset": 0 if keyset or cursor_value is not None else offset,
+        "next_cursor": next_cursor,
     }
 
 

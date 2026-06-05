@@ -1,0 +1,27 @@
+1. Get the application URL by running:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+  export POD_NAME=$(kubectl get pods -l "app.kubernetes.io/name={{ include "db-monitor.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
+  echo "Visit http://127.0.0.1:8000 to use the API"
+  kubectl port-forward $POD_NAME 8000:8000
+{{- end }}
+
+2. Bootstrap the first admin API key:
+{{- if .Values.app.allowBootstrap }}
+  curl -X POST "http://localhost:8000/auth/bootstrap?owner_name=admin"
+{{- else }}
+  Bootstrap is disabled in this deployment.
+  Set app.allowBootstrap=true during initial setup, then set back to false.
+{{- end }}
+
+3. Exchange the returned id.secret for a bearer token:
+  curl -X POST -H "X-API-Key: <id.secret>" http://localhost:8000/auth/token
+
+4. Check health and readiness:
+  curl http://localhost:8000/health
+  curl http://localhost:8000/readyz
+
+For more, see: https://github.com/jobm/DB_Monitor#readme

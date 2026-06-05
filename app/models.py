@@ -132,6 +132,7 @@ class KafkaEvent(Base):
             "kafka_topic",
             "kafka_partition",
             "kafka_offset",
+            "capture_time",
             unique=True,
         ),
     )
@@ -318,10 +319,6 @@ class CustomerProvisionJob(Base):
         onupdate=func.now(),
     )
 
-    __table_args__ = (
-        Index("ix_customer_provision_jobs_customer_id", "customer_id"),
-    )
-
 
 class IngestionQuotaWindow(Base):
     """Persist one shared quota window for a source or tenant identity."""
@@ -404,8 +401,4 @@ class ApiAuditLogSpill(Base):
         DateTime(timezone=True),
         nullable=True,
         index=True,
-    )
-
-    __table_args__ = (
-        Index("ix_api_audit_log_spill_spilled_at", "spilled_at"),
     )
