@@ -14,4 +14,4 @@ __pycache__/
 
 secrets/*
 !secrets/README.md
-!secrets/*.example
+!secrets/*.examplecontexts/

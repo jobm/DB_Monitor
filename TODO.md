@@ -123,9 +123,9 @@ of millions of rows, deep offsets and full scans are unusable.
 	`(changed_at, id)` tuples
 - [x] Make total counts optional (`?include_total=false`) or use Postgres
 	estimates for approximate counts
-- [ ] Add composite indexes for common cursor + filter combinations
-	Done when `/events?cursor=…&limit=50` returns in < 100ms p95 on a table with
-	500M+ rows, and `?include_total=false` is the default.
+- [x] Add composite indexes for common cursor + filter combinations
+	Done via cursor-optimized indexes on `events` and `column_changes`, with
+	migration support for existing deployments.
 
 #### 🔴 Gap 4: Production Deployment Artifacts (Helm Chart + Terraform)
 

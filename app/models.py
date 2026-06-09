@@ -123,6 +123,19 @@ class KafkaEvent(Base):
         Index("ix_events_type_time", "event_type", "event_time"),
         Index("ix_events_source_table_time", "source_table_id", "event_time"),
         Index(
+            "ix_events_cursor_service_type_time",
+            "service_name",
+            "event_type",
+            "capture_time",
+            "id",
+        ),
+        Index(
+            "ix_events_cursor_source_table_time",
+            "source_table_id",
+            "capture_time",
+            "id",
+        ),
+        Index(
             "ix_events_row_identity",
             "row_identity",
             postgresql_using="gin",
@@ -253,6 +266,18 @@ class ColumnChange(Base):
             "table_id",
             "column_id",
             "changed_at",
+        ),
+        Index(
+            "ix_changes_cursor_table_time",
+            "table_id",
+            "changed_at",
+            "id",
+        ),
+        Index(
+            "ix_changes_cursor_column_time",
+            "column_id",
+            "changed_at",
+            "id",
         ),
         Index(
             "ix_changes_row_identity",

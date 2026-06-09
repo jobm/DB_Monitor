@@ -459,6 +459,38 @@ async def _apply_api_audit_log_spill(
     )
 
 
+async def _apply_cursor_pagination_indexes(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Create cursor-optimized indexes for large event and change scans."""
+    del session_factory
+    statements = [
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_events_cursor_service_type_time "
+            "ON events (service_name, event_type, capture_time, id)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_events_cursor_source_table_time "
+            "ON events (source_table_id, capture_time, id)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_changes_cursor_table_time "
+            "ON column_changes (table_id, changed_at, id)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_changes_cursor_column_time "
+            "ON column_changes (column_id, changed_at, id)"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
 async def _apply_event_partitioning(
     connection: AsyncConnection,
     session_factory: Callable,
@@ -754,6 +786,11 @@ MIGRATIONS: tuple[Migration, ...] = (
             "partitioned tables for efficient retention"
         ),
         apply=_apply_event_partitioning,
+    ),
+    Migration(
+        version="0014_cursor_pagination_indexes",
+        description="Add cursor-optimized composite indexes for large scans",
+        apply=_apply_cursor_pagination_indexes,
     ),
 )
 
