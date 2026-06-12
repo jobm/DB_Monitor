@@ -189,8 +189,8 @@ def _make_request(
     url: str,
     token: str = "",
     timeout: float = 10.0,
-) -> tuple[float, dict]:
-    """Make an HTTP request and return (latency_seconds, response_dict)."""
+) -> tuple[float, object]:
+    """Make an HTTP request and return (latency_seconds, decoded_body)."""
     import urllib.request
 
     headers = {}
@@ -203,7 +203,12 @@ def _make_request(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read()
             latency = time.monotonic() - start
-            return latency, json.loads(body) if body else {}
+            if not body:
+                return latency, {}
+            try:
+                return latency, json.loads(body)
+            except json.JSONDecodeError:
+                return latency, body.decode("utf-8", errors="replace")
     except Exception as exc:
         latency = time.monotonic() - start
         return latency, {"error": str(exc)}
