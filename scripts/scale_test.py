@@ -317,7 +317,7 @@ async def _publish_synthetic_events(
 ) -> None:
     """Publish synthetic CDC events to Kafka at the target rate.
 
-    Falls back to direct DB writes via HTTP if --kafka-broker is not set.
+    Requires ``--kafka-broker`` (or `KAFKA_BROKER`) for direct publishing.
     """
     if not config.kafka_broker:
         raise RuntimeError(
