@@ -187,7 +187,13 @@ async def get_events(
                     "cursor must include event_id (events) or id (changes)."
                 ),
             )
-        cursor_value = int(cursor_value_raw)
+        try:
+            cursor_value = int(cursor_value_raw)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="cursor event_id/id must be an integer.",
+            ) from exc
         cursor_time_value = (
             cursor_payload.get("capture_time")
             or cursor_payload.get("changed_at")
@@ -388,7 +394,13 @@ async def get_changes(
                     "(events)."
                 ),
             )
-        cursor_value = int(cursor_value_raw)
+        try:
+            cursor_value = int(cursor_value_raw)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="cursor id/event_id must be an integer.",
+            ) from exc
         cursor_time_value = (
             cursor_payload.get("changed_at")
             or cursor_payload.get("capture_time")

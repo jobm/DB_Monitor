@@ -235,11 +235,10 @@ class SchemaDiscovery:
 
             db_name = source_coordinates.database_name or "unknown"
             service_name = source_coordinates.service_name or "unknown"
-            topic_parts = (event.service_name or "").split(".")
-            if len(topic_parts) >= 2:
+            topic_parts = (event.kafka_topic or "").split(".")
+            if topic_parts and topic_parts[0]:
                 service_name = topic_parts[0]
-            topic_name = event.service_name or ""
-
+            topic_name = event.kafka_topic or ""
             key = (service_name, db_name, table_identifier)
             table_keys[key] = {
                 "service_name": service_name,

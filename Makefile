@@ -1,6 +1,6 @@
 .PHONY: monitor-help monitor-up monitor-validate-goosemem monitor-up-sandbox monitor-down monitor-down-sandbox monitor-logs monitor-logs-sandbox monitor-register monitor-dev monitor-migrate monitor-test monitor-test-core monitor-test-integration monitor-test-sandbox monitor-test-sandbox-pytest monitor-test-smoke monitor-test-scale monitor-test-scale-target monitor-test-container-readyz monitor-lint monitor-typecheck monitor-package-smoke monitor-recovery monitor-tui monitor-tui-build
 
-PODMAN_COMPOSE ?= $(shell command -v podman-compose 2>/dev/null || echo $(HOME)/.local/bin/podman-compose)
+PODMAN_COMPOSE ?= $(shell command -v podman-compose 2>/dev/null || echo "docker compose")
 
 .DEFAULT_GOAL := monitor-help
 

@@ -111,11 +111,11 @@ async def _cleanup_policy_once(
     policy: RetentionPolicy,
     session_factory=AsyncSessionLocal,
 ) -> int:
-    """Cleanup one policy and return deleted-row count.
+    """Cleanup one policy and return a cleanup count.
 
     For partitioned tables this drops entire child partitions whose data
-    is entirely before the cutoff. For non-partitioned tables it falls
-    back to batched DELETE.
+    is entirely before the cutoff (count = partitions dropped). For
+    non-partitioned tables it falls back to batched DELETE (count = rows deleted).
     """
     if policy.retention_days <= 0:
         return 0

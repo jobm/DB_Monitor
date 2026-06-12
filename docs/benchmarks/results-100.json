@@ -1,12 +1,3 @@
-=== DB Monitor Scale Validation ===
-  Sources: 10
-  Target rate: 100 events/sec
-  Duration: 60s
-  API base: http://localhost:8000
-
-  Synthetic service: scale-test-7803d77a
-Checking API readiness...
-ERROR: DB Monitor API is not ready. Aborting.
 {
   "passed": false,
   "events_ingested": 0,

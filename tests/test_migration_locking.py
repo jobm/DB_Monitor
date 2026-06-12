@@ -24,15 +24,23 @@ async def _make_fake_engine():
         async def execute(self, *args, **kwargs):
             return self
 
-        def scalar(self):
+        async def commit(self):
             return None
 
-        def fetchall(self):
-            return []
+        def begin(self):
+            conn = self
+
+            class _Txn:
+                async def __aenter__(self):
+                    return conn
+
+                async def __aexit__(self, *exc):
+                    return False
+
+            return _Txn()
 
         async def close(self):
             self.closed = True
-
     class FakeAsyncContextManager:
         def __init__(self, connection):
             self._conn = connection
@@ -45,10 +53,11 @@ async def _make_fake_engine():
             return False
 
     class FakeEngine:
-        def begin(self):
-            conn = FakeConnection()
-            return FakeAsyncContextManager(conn)
+        def connect(self):
+            return FakeAsyncContextManager(FakeConnection())
 
+        def begin(self):
+            return FakeAsyncContextManager(FakeConnection())
     return FakeEngine()
 
 
