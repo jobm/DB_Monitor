@@ -627,8 +627,8 @@ async def _apply_event_partitioning(
                     column_id INTEGER,
                     operation VARCHAR(16),
                     row_identity JSONB,
-                    old_value TEXT,
-                    new_value TEXT,
+                    old_value JSONB,
+                    new_value JSONB,
                     changed_at TIMESTAMPTZ NOT NULL
                 ) PARTITION BY RANGE (changed_at)
                 """
