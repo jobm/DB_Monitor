@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.server
 import json
 import threading
+import time
 
 import scripts.smoke_test_endpoints as smoke_test_endpoints
 
@@ -38,6 +39,16 @@ class _TextHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.end_headers()
         self.wfile.write(raw)
+
+    def log_message(self, format: str, *args: object) -> None:  # noqa: A002,D102
+        pass
+
+
+class _SlowHandler(http.server.BaseHTTPRequestHandler):
+    """Handler that accepts connections but never writes a response."""
+
+    def do_GET(self) -> None:  # noqa: N802
+        time.sleep(2)  # well above the 0.3s test timeout
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002,D102
         pass
@@ -146,6 +157,25 @@ def test_smoke_test_endpoint_empty_body() -> None:
         )
         assert ok is False
         assert "Expecting value" in detail or "JSONDecodeError" in detail
+    finally:
+        server.shutdown()
+
+
+def test_smoke_test_endpoint_timeout() -> None:
+    """Server accepts connection but never sends a response."""
+    server = http.server.HTTPServer(
+        ("127.0.0.1", 0), _SlowHandler,
+    )
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        ok, detail = smoke_test_endpoints.smoke_test_endpoint(
+            f"http://127.0.0.1:{port}/health",
+            timeout=0.3,
+        )
+        assert ok is False
+        assert "timed out" in detail.lower() or "timeout" in detail.lower()
     finally:
         server.shutdown()
 
