@@ -270,7 +270,7 @@ class ChangeProcessor:
                 stmt = stmt.where(ColumnChange.id < cursor_id)
 
             total: int | None = None
-            if include_total and not keyset:
+            if include_total and not keyset and cursor_id is None:
                 count_stmt = select(func.count()).select_from(
                     stmt.subquery()
                 )

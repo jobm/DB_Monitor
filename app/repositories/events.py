@@ -12,18 +12,6 @@ from core.models import KafkaEvent
 
 
 @dataclass(slots=True)
-class EventPageCursor:
-    """Composite keyset cursor for event pagination.
-
-    The page boundary is defined by ``(capture_time, event_id)``.
-    Both fields must be set for keyset pagination to activate.
-    """
-
-    capture_time: datetime | None = None
-    event_id: int | None = None
-
-
-@dataclass(slots=True)
 class EventQueryFilters:
     """Supported filters for event listing queries."""
 
