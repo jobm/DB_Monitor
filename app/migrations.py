@@ -505,6 +505,17 @@ async def _apply_event_partitioning(
     """
     del session_factory
 
+    # Drop FK from column_changes → events upfront so events_old can
+    # always be dropped without dependent-object errors.
+    await connection.execute(
+        text(
+            """
+            ALTER TABLE column_changes
+            DROP CONSTRAINT IF EXISTS column_changes_event_id_fkey
+            """
+        )
+    )
+
     # ── events ──────────────────────────────────────────────────────
     partitioned = await connection.execute(
         text(
@@ -515,16 +526,6 @@ async def _apply_event_partitioning(
         )
     )
     if partitioned.fetchone() is None:
-        # Drop FK from column_changes → events before renaming so the
-        # old table can be dropped without dependent-object errors.
-        await connection.execute(
-            text(
-                """
-                ALTER TABLE column_changes
-                DROP CONSTRAINT IF EXISTS column_changes_event_id_fkey
-                """
-            )
-        )
         await connection.execute(
             text(
                 """
@@ -611,9 +612,6 @@ async def _apply_event_partitioning(
             text("DROP TABLE IF EXISTS events_old")
         )
 
-        # Recreate FK from column_changes → events once both tables
-        # have been partitioned (handled below).
-
     # ── column_changes ──────────────────────────────────────────────
     partitioned = await connection.execute(
         text(
@@ -692,8 +690,17 @@ async def _apply_event_partitioning(
             text("DROP TABLE IF EXISTS column_changes_old")
         )
 
-        # Recreate FK from column_changes → events now that both
-        # tables are partitioned.
+    # Recreate FK from column_changes → events unconditionally once
+    # both tables have been partitioned.
+    fk_exists = await connection.execute(
+        text(
+            """
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'column_changes_event_id_fkey'
+            """
+        )
+    )
+    if fk_exists.fetchone() is None:
         await connection.execute(
             text(
                 """
