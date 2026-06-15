@@ -689,29 +689,12 @@ async def _apply_event_partitioning(
         await connection.execute(
             text("DROP TABLE IF EXISTS column_changes_old")
         )
-
-    # Recreate FK from column_changes → events unconditionally once
-    # both tables have been partitioned.
-    fk_exists = await connection.execute(
-        text(
-            """
-            SELECT 1 FROM pg_constraint
-            WHERE conname = 'column_changes_event_id_fkey'
-            """
-        )
-    )
-    if fk_exists.fetchone() is None:
-        await connection.execute(
-            text(
-                """
-                ALTER TABLE column_changes
-                ADD CONSTRAINT column_changes_event_id_fkey
-                FOREIGN KEY (event_id)
-                REFERENCES events (id)
-                ON DELETE CASCADE
-                """
-            )
-        )
+    # NOTE: We intentionally do not recreate the FK from
+    # column_changes → events.  PostgreSQL requires FKs referencing
+    # partitioned tables to include all partition-key columns, but
+    # column_changes has no capture_time.  In practice partition DROPs
+    # (used by retention cleanup) do not trigger FK cascades, so the
+    # FK provides no operational benefit in a partitioned layout.
 
 
 async def _apply_ingestion_quota_windows(
