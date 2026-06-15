@@ -515,6 +515,16 @@ async def _apply_event_partitioning(
         )
     )
     if partitioned.fetchone() is None:
+        # Drop FK from column_changes → events before renaming so the
+        # old table can be dropped without dependent-object errors.
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE column_changes
+                DROP CONSTRAINT IF EXISTS column_changes_event_id_fkey
+                """
+            )
+        )
         await connection.execute(
             text(
                 """
@@ -601,6 +611,9 @@ async def _apply_event_partitioning(
             text("DROP TABLE IF EXISTS events_old")
         )
 
+        # Recreate FK from column_changes → events once both tables
+        # have been partitioned (handled below).
+
     # ── column_changes ──────────────────────────────────────────────
     partitioned = await connection.execute(
         text(
@@ -677,6 +690,20 @@ async def _apply_event_partitioning(
         )
         await connection.execute(
             text("DROP TABLE IF EXISTS column_changes_old")
+        )
+
+        # Recreate FK from column_changes → events now that both
+        # tables are partitioned.
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE column_changes
+                ADD CONSTRAINT column_changes_event_id_fkey
+                FOREIGN KEY (event_id)
+                REFERENCES events (id)
+                ON DELETE CASCADE
+                """
+            )
         )
 
 
