@@ -33,8 +33,8 @@ def test_main_app_imports_without_error() -> None:
 def test_core_proxy_modules_are_importable() -> None:
     """All ``core`` proxy sub-modules must be importable without error.
 
-    ``app/core/__init__.py`` eagerly imports every sub-module, so this
-    test also catches any cycle introduced through the proxy layer.
+    ``app/core/__init__.py`` uses lazy imports via ``__getattr__``,
+    so each sub-module is loaded independently on access.
     """
     core_config = importlib.import_module("core.config")
     core_db = importlib.import_module("core.db")
@@ -82,23 +82,29 @@ def test_db_monitor_package_imports_without_error() -> None:
         importlib.import_module(module_name)
 
 
-def test_circular_import_in_extensions_is_caught(
+def test_broken_extensions_is_caught(
     tmp_path: Path,
 ) -> None:
     """Drop a broken ``extensions.py`` into *tmp_path* and verify the
     import chain fails.
 
-    This is a *negative* test: it deliberately reintroduces the circular
-    import (``extensions → core.config → core/__init__ → core.db →
-    extensions``) and asserts that importing ``main`` raises an error.
-    This proves the positive smoke tests above actually catch the
-    regression they were designed for.
+    This is a *negative* test: it supplies a minimal ``extensions.py``
+    that imports from ``core.config`` but does **not** define the
+    symbols (``engine``, ``AsyncSessionLocal``, …) that
+    ``core/db.py`` expects.  When ``core.db`` tries to access those
+    names it raises ``AttributeError``, which propagates through the
+    import chain and causes ``main`` to fail to load.
+
+    This proves the positive smoke tests above actually catch a
+    broken ``extensions`` module — whether the failure manifests as
+    a missing-symbol error, a circular-import error, or another
+    import-time exception.
 
     Instead of modifying the real source file (which would race with
     parallel test workers), a minimal broken ``extensions.py`` is placed
     in a temporary directory that takes priority on ``sys.path``.
     """
-    # Broken extensions.py that triggers the circular import chain.
+    # Broken extensions.py missing the symbols core/db.py expects.
     (tmp_path / "extensions.py").write_text(
         "from core.config import POSTGRES_URL\n"
     )
