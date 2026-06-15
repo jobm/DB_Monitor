@@ -97,6 +97,7 @@ monitor-test-container-readyz: ## Start monitor container and validate readiness
 	@test -f secrets/monitor_postgres_url || cp secrets/monitor_postgres_url.example secrets/monitor_postgres_url
 	@test -f secrets/monitor_jwt_secret || cp secrets/monitor_jwt_secret.example secrets/monitor_jwt_secret
 	@test -f secrets/monitor_jwt_secret_next || cp secrets/monitor_jwt_secret_next.example secrets/monitor_jwt_secret_next
+	@python scripts/check_port_free.py 8000
 	DB_SCHEMA_MODE=apply $(PODMAN_COMPOSE) up -d --build monitor-server
 	python scripts/check_container_readyz.py || ($(PODMAN_COMPOSE) logs --tail=200 monitor-server postgres-monitor kafka; $(PODMAN_COMPOSE) down -v; exit 1)
 	$(PODMAN_COMPOSE) down -v

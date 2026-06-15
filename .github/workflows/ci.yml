@@ -68,7 +68,13 @@ jobs:
         run: uv sync --group dev --frozen
 
       - name: Start sandbox and core services
-        run: docker compose --profile sandbox up -d
+        run: |
+          # Only start services needed for integration tests.
+          # Excludes monitor-server (port 8000 conflicts with the
+          # locally-started app) and the monitoring stack (prometheus,
+          # alertmanager, grafana, kafka-ui) which are not required.
+          docker compose --profile sandbox up -d \
+            connect connector-registrar
 
       - name: Wait for databases and brokers to boot
         run: |
@@ -127,6 +133,9 @@ jobs:
           PY
           docker compose ps
 
+      - name: Verify port 8000 is free
+        run: python scripts/check_port_free.py 8000
+
       - name: Start app locally against live infrastructure
         working-directory: app
         env:
@@ -160,6 +169,13 @@ jobs:
           raise SystemExit(f"TIMED OUT waiting for {url}")
           PY
 
+      - name: Smoke-test health, liveness, and metrics endpoints
+        run: |
+          python scripts/smoke_test_endpoints.py \
+            http://localhost:8000 \
+            /health /livez \
+            --text-endpoints /metrics
+
       - name: Seed sandbox admin key
         working-directory: app
         env:
@@ -183,17 +199,22 @@ jobs:
           DB_MONITOR_ADMIN_API_KEY: ${{ env.DB_MONITOR_ADMIN_API_KEY }}
         run: make monitor-test-smoke
 
-      - name: Show app log on failure
-        if: failure()
+      - name: Show app startup log
+        if: always()
         run: |
-          test -f app-integration.log && cat app-integration.log || true
+          if [ -f app-integration.log ]; then
+            echo "--- app-integration.log (last 80 lines) ---"
+            tail -80 app-integration.log
+          else
+            echo "app-integration.log not found"
+          fi
 
-      - name: Show compose status on failure
-        if: failure()
+      - name: Show compose status
+        if: always()
         run: docker compose ps
 
-      - name: Show compose logs on failure
-        if: failure()
+      - name: Show compose logs
+        if: always()
         run: docker compose logs --tail=200
 
       - name: Stop local app
