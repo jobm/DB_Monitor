@@ -35,11 +35,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
-# Ensure the app package is importable
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
-sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "src")
-)
+# Note: the Makefile target sets PYTHONPATH=../src:. before invoking this
+# script, so db_monitor packages under src/ are already importable.
 
 
 @dataclass
