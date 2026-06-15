@@ -94,6 +94,9 @@ monitor-package-smoke: ## Build wheel/sdist and verify package import in clean v
 	.pkg-smoke-sdist/bin/python -c "import db_monitor; import db_monitor.cli; import db_monitor.public_api"
 
 monitor-test-container-readyz: ## Start monitor container and validate readiness endpoint semantics
+	@test -f secrets/monitor_postgres_url || cp secrets/monitor_postgres_url.example secrets/monitor_postgres_url
+	@test -f secrets/monitor_jwt_secret || cp secrets/monitor_jwt_secret.example secrets/monitor_jwt_secret
+	@test -f secrets/monitor_jwt_secret_next || cp secrets/monitor_jwt_secret_next.example secrets/monitor_jwt_secret_next
 	DB_SCHEMA_MODE=apply $(PODMAN_COMPOSE) up -d --build monitor-server
 	python scripts/check_container_readyz.py || ($(PODMAN_COMPOSE) logs --tail=200 monitor-server postgres-monitor kafka; $(PODMAN_COMPOSE) down -v; exit 1)
 	$(PODMAN_COMPOSE) down -v
