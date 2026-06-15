@@ -10,6 +10,7 @@ environments.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -991,6 +992,11 @@ async def create_monthly_partitions(
     Idempotent — skips partitions that already exist. Returns the names
     of newly created partitions.
     """
+    if not re.match(r"^[a-z_][a-z0-9_]*$", table_name):
+        raise ValueError(
+            f"Invalid table_name for partition DDL: {table_name!r}"
+        )
+
     now = datetime.now(timezone.utc)
     created: list[str] = []
 
@@ -1048,6 +1054,11 @@ async def drop_old_partitions(
     Only drops partitions that are entirely before the cutoff — does not
     touch the DEFAULT partition. Returns the names of dropped partitions.
     """
+    if not re.match(r"^[a-z_][a-z0-9_]*$", table_name):
+        raise ValueError(
+            f"Invalid table_name for partition DDL: {table_name!r}"
+        )
+
     # Find child partitions older than the cutoff
     rows = await connection.execute(
         text(
@@ -1099,8 +1110,6 @@ async def drop_old_partitions(
 
 def _extract_upper_bound(bound_expr: str) -> str | None:
     """Extract the upper bound value from a PG partition bound expression."""
-    import re
-
     match = re.search(r"TO\s*\(\s*'([^']+)'\s*\)", bound_expr)
     if match:
         return match.group(1)
