@@ -137,6 +137,19 @@ def test_smoke_test_endpoint_malformed_json() -> None:
         server.shutdown()
 
 
+def test_smoke_test_endpoint_empty_body() -> None:
+    server, port = _start_text_server(body="")
+    try:
+        ok, detail = smoke_test_endpoints.smoke_test_endpoint(
+            f"http://127.0.0.1:{port}/health",
+            expect_json=True,
+        )
+        assert ok is False
+        assert "Expecting value" in detail or "JSONDecodeError" in detail
+    finally:
+        server.shutdown()
+
+
 def test_smoke_test_endpoint_connection_refused() -> None:
     ok, detail = smoke_test_endpoints.smoke_test_endpoint(
         "http://127.0.0.1:19999/health",
