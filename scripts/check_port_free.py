@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Check whether a TCP port is free on a given host.
 
 Exit code 0 when the port is free, 1 when it is already in use.

@@ -97,10 +97,16 @@ monitor-test-container-readyz: ## Start monitor container and validate readiness
 	@test -f secrets/monitor_postgres_url || cp secrets/monitor_postgres_url.example secrets/monitor_postgres_url
 	@test -f secrets/monitor_jwt_secret || cp secrets/monitor_jwt_secret.example secrets/monitor_jwt_secret
 	@test -f secrets/monitor_jwt_secret_next || cp secrets/monitor_jwt_secret_next.example secrets/monitor_jwt_secret_next
-	@python scripts/check_port_free.py 8000
-	DB_SCHEMA_MODE=apply $(PODMAN_COMPOSE) up -d --build monitor-server
-	python scripts/check_container_readyz.py || ($(PODMAN_COMPOSE) logs --tail=200 monitor-server postgres-monitor kafka; $(PODMAN_COMPOSE) down -v; exit 1)
-	$(PODMAN_COMPOSE) down -v
+	$(PODMAN_COMPOSE) stop monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true
+	$(PODMAN_COMPOSE) rm -fv monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true
+	@python3 scripts/check_port_free.py 8000
+	DB_SCHEMA_MODE=apply APP_SHUTDOWN_TIMEOUT_SECONDS=30 $(PODMAN_COMPOSE) up -d --build zookeeper kafka postgres-monitor
+	DB_SCHEMA_MODE=apply APP_SHUTDOWN_TIMEOUT_SECONDS=30 $(PODMAN_COMPOSE) up -d --build --no-deps monitor-server
+	@echo "Waiting for monitor-server to start..."
+	@sleep 15
+	python3 scripts/check_container_readyz.py || ($(PODMAN_COMPOSE) logs --tail=200 monitor-server postgres-monitor kafka zookeeper || true; $(PODMAN_COMPOSE) stop monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true; $(PODMAN_COMPOSE) rm -fv monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true; exit 1)
+	$(PODMAN_COMPOSE) stop monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true
+	$(PODMAN_COMPOSE) rm -fv monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true
 
 monitor-test-integration: ## Run sandbox-backed live integration checks
 	cd app && uv run --group dev python ../examples/sandbox/run_integration_tests.py
