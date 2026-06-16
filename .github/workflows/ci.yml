@@ -142,8 +142,12 @@ jobs:
           JWT_SECRET: dev-insecure-secret-change-me-please-rotate
           JWT_SECRET_NEXT: dev-insecure-secret-change-me-please-rotate
         run: |
+          ls -la .venv/bin/python 2>/dev/null || echo "No .venv found"
+          uv run python -c "import sys; print(sys.executable)" 2>&1 || echo "uv run failed"
           nohup PYTHONPATH=src:. uv run python -m db_monitor.start_monitor > app-integration.log 2>&1 &
           echo $! > app-integration.pid
+          sleep 3
+          cat app-integration.log
 
       - name: Wait for app readiness
         run: |
