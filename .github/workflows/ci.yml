@@ -136,15 +136,14 @@ jobs:
         run: python scripts/check_port_free.py 8000
 
       - name: Start app locally against live infrastructure
-        working-directory: app
         env:
           POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5437/postgres
           KAFKA_BROKER: localhost:9093
           JWT_SECRET: dev-insecure-secret-change-me-please-rotate
           JWT_SECRET_NEXT: dev-insecure-secret-change-me-please-rotate
         run: |
-          nohup PYTHONPATH=../src:. uv run python -m db_monitor.start_monitor > ../app-integration.log 2>&1 &
-          echo $! > ../app-integration.pid
+          nohup PYTHONPATH=src:. uv run python -m db_monitor.start_monitor > app-integration.log 2>&1 &
+          echo $! > app-integration.pid
 
       - name: Wait for app readiness
         run: |
