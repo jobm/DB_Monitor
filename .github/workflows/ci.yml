@@ -63,8 +63,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Install app dependencies
-        working-directory: app
+      - name: Install dependencies (root project installs db-monitor + deps)
         run: uv sync --group dev --frozen
 
       - name: Start sandbox and core services
@@ -141,6 +140,8 @@ jobs:
         env:
           POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5437/postgres
           KAFKA_BROKER: localhost:9093
+          JWT_SECRET: dev-insecure-secret-change-me-please-rotate
+          JWT_SECRET_NEXT: dev-insecure-secret-change-me-please-rotate
         run: |
           nohup PYTHONPATH=../src:. uv run python -m db_monitor.start_monitor > ../app-integration.log 2>&1 &
           echo $! > ../app-integration.pid
