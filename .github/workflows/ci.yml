@@ -144,7 +144,7 @@ jobs:
         run: |
           ls -la .venv/bin/python 2>/dev/null || echo "No .venv found"
           uv run python -c "import sys; print(sys.executable)" 2>&1 || echo "uv run failed"
-          nohup PYTHONPATH=src:. uv run python -m db_monitor.start_monitor > app-integration.log 2>&1 &
+          PYTHONPATH=src:. nohup uv run python -m db_monitor.start_monitor > app-integration.log 2>&1 &
           echo $! > app-integration.pid
           sleep 3
           echo "--- app-integration.log (last 30 lines) ---"
