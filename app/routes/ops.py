@@ -454,9 +454,13 @@ def readiness_payload() -> dict[str, object]:
     consumer_ready = bool(
         consumer_health.get("running") and consumer_health.get("connected")
     )
+    # Only require a commit when the consumer is behind.  A consumer
+    # that is connected, running, and has zero lag is caught up even
+    # if the first ack+commit batch has not yet flushed.
     if (
         consumer_health.get("last_message_at")
         and consumer_health.get("last_commit_at") is None
+        and lag_total > 0
     ):
         consumer_ready = False
     if (

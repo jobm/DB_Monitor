@@ -147,7 +147,17 @@ jobs:
           nohup PYTHONPATH=src:. uv run python -m db_monitor.start_monitor > app-integration.log 2>&1 &
           echo $! > app-integration.pid
           sleep 3
-          cat app-integration.log
+          echo "--- app-integration.log (last 30 lines) ---"
+          tail -30 app-integration.log
+          # Verify the app process is still alive after startup.
+          APP_PID=$(cat app-integration.pid)
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "App process $APP_PID is alive."
+          else
+            echo "ERROR: App process $APP_PID exited prematurely."
+            cat app-integration.log
+            exit 1
+          fi
 
       - name: Wait for app readiness
         run: |
