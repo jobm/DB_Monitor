@@ -50,6 +50,7 @@ from metrics import (
     dlq_records_pending as dlq_records_pending_metric,
     dlq_messages_total,
     events_consumed_total,
+    events_duplicate_skipped_total,
     events_failed_total,
     events_processed_total,
     ingestion_quota_dropped_total,
@@ -475,16 +476,23 @@ async def _store_batch_graph_with_retries(
             with db_write_duration_seconds.labels(operation="BATCH").time():
                 async with session_factory() as session:
                     async with session.begin():
-                        for event_obj in events:
-                            table_id = await schema_discovery.process_event(
-                                event_obj,
+                        # Batch schema discovery — single round-trip for
+                        # all unique (service, db, table) combos
+                        table_id_map = (
+                            await schema_discovery.process_events_batch(
+                                events,
                                 session=session,
                             )
-                            if table_id:
-                                event_obj.source_table_id = table_id
+                        )
+                        for event_obj in events:
+                            event_obj.source_table_id = table_id_map.get(
+                                id(event_obj)
+                            )
 
-                            await _populate_row_identity(session, event_obj)
+                        # Batch row identity — single query for all PK columns
+                        await _populate_row_identity_batch(session, events)
 
+                        now = datetime.now(timezone.utc)
                         values = [
                             {
                                 "event_type": event_obj.event_type,
@@ -499,6 +507,11 @@ async def _store_batch_graph_with_retries(
                                 "row_identity": event_obj.row_identity,
                                 "event_data": event_obj.event_data,
                                 "raw_payload": event_obj.raw_payload,
+                                "capture_time": (
+                                    event_obj.event_time
+                                    if event_obj.event_time is not None
+                                    else now
+                                ),
                             }
                             for event_obj in events
                         ]
@@ -510,6 +523,7 @@ async def _store_batch_graph_with_retries(
                                     "kafka_topic",
                                     "kafka_partition",
                                     "kafka_offset",
+                                    "capture_time",
                                 ]
                             )
                             .returning(
@@ -532,22 +546,34 @@ async def _store_batch_graph_with_retries(
                         }
 
                         inserted_keys = set(inserted_lookup.keys())
-                        for event_obj in events:
-                            event_key = (
-                                event_obj.kafka_topic,
-                                event_obj.kafka_partition,
-                                event_obj.kafka_offset,
-                            )
-                            inserted_id = inserted_lookup.get(event_key)
-                            if inserted_id is None:
-                                continue
 
-                            event_obj.id = inserted_id
-                            if event_obj.source_table_id:
-                                await change_processor.process_event(
-                                    event_obj,
-                                    session=session,
+                        # Batch change extraction — single query for all
+                        # audit-enabled columns, then bulk insert changes
+                        inserted_events = [
+                            e
+                            for e in events
+                            if (
+                                e.kafka_topic,
+                                e.kafka_partition,
+                                e.kafka_offset,
+                            )
+                            in inserted_keys
+                        ]
+                        for event_obj in inserted_events:
+                            inserted_id = inserted_lookup.get(
+                                (
+                                    event_obj.kafka_topic,
+                                    event_obj.kafka_partition,
+                                    event_obj.kafka_offset,
                                 )
+                            )
+                            if inserted_id is not None:
+                                event_obj.id = inserted_id
+
+                        await change_processor.process_events_batch(
+                            inserted_events,
+                            session=session,
+                        )
 
                         return inserted_keys
         except (OperationalError, DBAPIError) as exc:
@@ -649,6 +675,7 @@ async def _process_batch_individually(
 
 async def _insert_event_record(session, event_obj: KafkaEvent) -> bool:
     """Insert an event once, keyed by Kafka topic/partition/offset."""
+    now = datetime.now(timezone.utc)
     insert_stmt = (
         pg_insert(KafkaEvent)
         .values(
@@ -664,9 +691,19 @@ async def _insert_event_record(session, event_obj: KafkaEvent) -> bool:
             row_identity=event_obj.row_identity,
             event_data=event_obj.event_data,
             raw_payload=event_obj.raw_payload,
+            capture_time=(
+                event_obj.event_time
+                if event_obj.event_time is not None
+                else now
+            ),
         )
         .on_conflict_do_nothing(
-            index_elements=["kafka_topic", "kafka_partition", "kafka_offset"]
+            index_elements=[
+                "kafka_topic",
+                "kafka_partition",
+                "kafka_offset",
+                "capture_time",
+            ]
         )
         .returning(KafkaEvent.id)
     )
@@ -699,6 +736,45 @@ async def _populate_row_identity(session, event_obj: KafkaEvent) -> None:
         event_obj.event_data,
         primary_key_columns=primary_key_columns,
     )
+
+
+async def _populate_row_identity_batch(
+    session,
+    events: list[KafkaEvent],
+) -> None:
+    """Populate row identity for a batch of events in one round-trip.
+
+    Fetches primary-key column names once per unique ``source_table_id``
+    found in the batch, then applies ``extract_row_identity`` to each
+    event in memory.
+    """
+    table_ids: set[int] = {
+        e.source_table_id
+        for e in events
+        if e.source_table_id is not None
+    }
+    if not table_ids:
+        return
+
+    pk_result = await session.execute(
+        select(
+            MonitoredColumn.table_id,
+            MonitoredColumn.column_name,
+        ).where(
+            MonitoredColumn.table_id.in_(table_ids),
+            MonitoredColumn.is_primary_key.is_(True),
+        )
+    )
+    pk_by_table: dict[int, list[str]] = {}
+    for table_id, col_name in pk_result.fetchall():
+        pk_by_table.setdefault(table_id, []).append(col_name)
+
+    for event_obj in events:
+        pk_cols = pk_by_table.get(event_obj.source_table_id, [])
+        event_obj.row_identity = extract_row_identity(
+            event_obj.event_data,
+            primary_key_columns=pk_cols,
+        )
 
 
 async def send_to_dlq(
@@ -974,7 +1050,19 @@ async def consumer_task(
             connection_url=connection_url,
             dlq_destination=dlq_destination,
         )
-        await dlq_publisher.start()
+        for dlq_attempt in range(30):
+            try:
+                await dlq_publisher.start()
+                break
+            except Exception as dlq_exc:
+                if dlq_attempt == 29:
+                    raise
+                logger.warning(
+                    "DLQ publisher not ready (attempt %d/30): %s",
+                    dlq_attempt + 1,
+                    dlq_exc,
+                )
+                await asyncio.sleep(2)
 
     batch: list[tuple[KafkaEvent, str, BrokerMessage]] = []
     batch_timeout = 5.0
@@ -1369,6 +1457,9 @@ async def _process_batch(
                             event.kafka_partition,
                             event.kafka_offset,
                         )
+                        events_duplicate_skipped_total.labels(
+                            service=event.service_name or "unknown",
+                        ).inc()
                         continue
 
                     await _broadcast_event(event)

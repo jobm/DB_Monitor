@@ -23,7 +23,7 @@ from core.config import (
 )
 from core.db import AsyncSessionLocal
 from core.models import ApiAuditLog, ColumnChange, DeadLetterEvent, KafkaEvent
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 logger = logging.getLogger(__name__)
 
@@ -111,11 +111,70 @@ async def _cleanup_policy_once(
     policy: RetentionPolicy,
     session_factory=AsyncSessionLocal,
 ) -> int:
-    """Cleanup one policy and return deleted-row count."""
+    """Cleanup one policy and return a cleanup count.
+
+    For partitioned tables this drops entire child partitions whose data
+    is entirely before the cutoff (count = partitions dropped). For
+    non-partitioned tables it falls back to batched DELETE (count = rows deleted).
+    """
     if policy.retention_days <= 0:
         return 0
 
     cutoff = _utc_now() - timedelta(days=policy.retention_days)
+    table_name = policy.model.__tablename__
+
+    # Check if the table is partitioned
+    async with session_factory() as session:
+        result = await session.execute(
+            text(
+                """
+                SELECT 1 FROM pg_partitioned_table
+                WHERE partrelid = :table_name::regclass
+                """
+            ),
+            {"table_name": table_name},
+        )
+        is_partitioned = result.fetchone() is not None
+
+    if is_partitioned:
+        # Partition-aware cleanup: drop old child partitions
+        return await _cleanup_partitioned_policy_once(
+            policy, table_name, cutoff, session_factory
+        )
+
+    # Legacy DELETE-based cleanup for non-partitioned tables
+    return await _cleanup_delete_policy_once(
+        policy, cutoff, session_factory
+    )
+
+
+async def _cleanup_partitioned_policy_once(
+    policy: RetentionPolicy,
+    table_name: str,
+    cutoff: datetime,
+    session_factory,
+) -> int:
+    """Drop partitions whose upper bound is before the cutoff."""
+    from migrations import drop_old_partitions
+
+    async with session_factory() as session:
+        async with session.begin():
+            connection = await session.connection()
+            dropped = await drop_old_partitions(
+                connection,
+                table_name=table_name,
+                partition_column=policy.timestamp_column.name,
+                older_than=cutoff,
+            )
+    return len(dropped)
+
+
+async def _cleanup_delete_policy_once(
+    policy: RetentionPolicy,
+    cutoff: datetime,
+    session_factory,
+) -> int:
+    """Batched DELETE for non-partitioned tables (legacy fallback)."""
     deleted_rows = 0
 
     for _ in range(RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE):
@@ -190,3 +249,41 @@ async def retention_cleanup_task() -> None:
             logger.exception("Retention cleanup cycle failed")
 
         await asyncio.sleep(RETENTION_CLEANUP_INTERVAL_SECONDS)
+
+
+async def partition_maintenance_task() -> None:
+    """Background task that creates upcoming monthly partitions.
+
+    Runs once per day to ensure the next N months of partitions exist
+    for partitioned tables.
+    """
+    logger.info("Partition maintenance task started (interval=86400s)")
+
+    from core.db import engine
+    from migrations import create_monthly_partitions
+
+    while True:
+        try:
+            async with engine.begin() as connection:
+                for table_name, column in (
+                    ("events", "capture_time"),
+                    ("column_changes", "changed_at"),
+                ):
+                    created = await create_monthly_partitions(
+                        connection,
+                        table_name=table_name,
+                        partition_column=column,
+                        months_ahead=3,
+                    )
+                    if created:
+                        logger.info(
+                            "Created partitions for %s: %s",
+                            table_name,
+                            ", ".join(created),
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Partition maintenance cycle failed")
+
+        await asyncio.sleep(86400)  # Once per day

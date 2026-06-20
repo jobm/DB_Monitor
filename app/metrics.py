@@ -14,6 +14,13 @@ events_processed_total = Counter(
     ["service", "operation"],
 )
 
+events_duplicate_skipped_total = Counter(
+    "db_monitor_events_duplicate_skipped_total",
+    "Total number of events skipped as duplicates "
+    "(idempotent offset deduplication)",
+    ["service"],
+)
+
 events_failed_total = Counter(
     "db_monitor_events_failed_total",
     "Total number of events that failed processing",

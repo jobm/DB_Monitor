@@ -22,6 +22,7 @@ async def managed_lifespan(
     broker_clusters: list[dict[str, object]],
     consumer_task: Callable[..., Awaitable[None]],
     retention_cleanup_task: Callable[[], Awaitable[None]],
+    partition_maintenance_task: Callable[[], Awaitable[None]] | None,
     retention_cleanup_enabled: bool,
     dlq_enabled: bool,
     batch_enabled: bool,
@@ -87,6 +88,13 @@ async def managed_lifespan(
                 name="retention_cleanup",
             )
             lifecycle_manager.register_task(retention_task, critical=False)
+
+        if partition_maintenance_task is not None:
+            partition_task = asyncio.create_task(
+                partition_maintenance_task(),
+                name="partition_maintenance",
+            )
+            lifecycle_manager.register_task(partition_task, critical=False)
 
         logger.info(
             "Consumer tasks started",

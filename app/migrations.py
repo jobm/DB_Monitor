@@ -9,15 +9,21 @@ environments.
 
 from __future__ import annotations
 
+import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from core.models import Base, KafkaEvent, KafkaEventLegacy
 from event_parser import parse_event_payload
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_MIGRATIONS_TABLE = "schema_migrations"
 
@@ -92,7 +98,7 @@ async def _apply_event_ingestion_columns(
     statements = [
         "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_topic VARCHAR(256)",
         "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_partition INTEGER",
-        "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_offset INTEGER",
+        "ALTER TABLE events ADD COLUMN IF NOT EXISTS kafka_offset BIGINT",
         (
             "CREATE UNIQUE INDEX IF NOT EXISTS ux_events_kafka_position "
             "ON events (kafka_topic, kafka_partition, kafka_offset)"
@@ -454,6 +460,252 @@ async def _apply_api_audit_log_spill(
     )
 
 
+async def _apply_cursor_pagination_indexes(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Create cursor-optimized indexes for large event and change scans."""
+    del session_factory
+    statements = [
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_events_cursor_service_type_time "
+            "ON events (service_name, event_type, capture_time, id)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_events_cursor_source_table_time "
+            "ON events (source_table_id, capture_time, id)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_changes_cursor_table_time "
+            "ON column_changes (table_id, changed_at, id)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_changes_cursor_column_time "
+            "ON column_changes (column_id, changed_at, id)"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
+async def _apply_event_partitioning(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Convert events and column_changes to time-range partitioned tables.
+
+    Partitioning ensures that retention cleanup can DROP entire partitions
+    instead of issuing expensive DELETE statements on billion-row tables.
+    This migration is idempotent — it skips tables that are already
+    partitioned.
+    """
+    del session_factory
+
+    # Drop FK from column_changes → events upfront so events_old can
+    # always be dropped without dependent-object errors.
+    await connection.execute(
+        text(
+            """
+            ALTER TABLE column_changes
+            DROP CONSTRAINT IF EXISTS column_changes_event_id_fkey
+            """
+        )
+    )
+
+    # ── events ──────────────────────────────────────────────────────
+    partitioned = await connection.execute(
+        text(
+            """
+            SELECT 1 FROM pg_partitioned_table
+            WHERE partrelid = 'events'::regclass
+            """
+        )
+    )
+    if partitioned.fetchone() is None:
+        # Drop the UNIQUE CONSTRAINT that migration 0001 created via
+        # Base.metadata.create_all (UniqueConstraint on KafkaEvent).
+        # Constraint names are schema-scoped, so we must drop it before
+        # the table rename to avoid a name collision when we ADD
+        # CONSTRAINT with the same name on the new partitioned table.
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE events
+                DROP CONSTRAINT IF EXISTS ux_events_kafka_position
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE events RENAME TO events_old
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE TABLE events (
+                    id SERIAL,
+                    event_type VARCHAR(64) NOT NULL,
+                    event_time TIMESTAMPTZ NOT NULL,
+                    user_id VARCHAR(128),
+                    service_name VARCHAR(128),
+                    kafka_topic VARCHAR(256),
+                    kafka_partition INTEGER,
+                    kafka_offset BIGINT,
+                    source_table_id INTEGER,
+                    operation VARCHAR(16),
+                    row_identity JSONB,
+                    event_data JSONB,
+                    raw_payload TEXT NOT NULL,
+                    capture_time TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                ) PARTITION BY RANGE (capture_time)
+                """
+            )
+        )
+        # NOTE: We intentionally do NOT add the UNIQUE CONSTRAINT here.
+        # Migration 0015 (_apply_events_unique_constraint) handles adding
+        # the constraint to the partitioned table.  Keeping it in 0013
+        # caused DuplicateTableError on fresh databases because the
+        # constraint name is schema-scoped and may collide with the
+        # backing index from Base.metadata.create_all.
+        await connection.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_events_type_time
+                ON events (event_type, event_time)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_events_source_table_time
+                ON events (source_table_id, event_time)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_events_row_identity
+                ON events USING GIN (row_identity)
+                """
+            )
+        )
+        # Create a default partition to hold legacy rows
+        await connection.execute(
+            text(
+                """
+                CREATE TABLE events_default PARTITION OF events DEFAULT
+                """
+            )
+        )
+        # Migrate rows from old table into default partition
+        await connection.execute(
+            text(
+                """
+                INSERT INTO events
+                SELECT * FROM events_old
+                """
+            )
+        )
+        # Drop the legacy table and its indexes so the partitioned table
+        # can claim the canonical index names.
+        await connection.execute(
+            text("DROP TABLE IF EXISTS events_old")
+        )
+
+    # ── column_changes ──────────────────────────────────────────────
+    partitioned = await connection.execute(
+        text(
+            """
+            SELECT 1 FROM pg_partitioned_table
+            WHERE partrelid = 'column_changes'::regclass
+            """
+        )
+    )
+    if partitioned.fetchone() is None:
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE column_changes RENAME TO column_changes_old
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE TABLE column_changes (
+                    id SERIAL,
+                    event_id INTEGER,
+                    table_id INTEGER,
+                    column_id INTEGER,
+                    operation VARCHAR(16),
+                    row_identity JSONB,
+                    old_value JSONB,
+                    new_value JSONB,
+                    changed_at TIMESTAMPTZ NOT NULL
+                ) PARTITION BY RANGE (changed_at)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_column_changes_event_id
+                ON column_changes (event_id)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_column_changes_table_id
+                ON column_changes (table_id)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_column_changes_changed_at
+                ON column_changes (changed_at)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE TABLE column_changes_default
+                PARTITION OF column_changes DEFAULT
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO column_changes
+                SELECT * FROM column_changes_old
+                """
+            )
+        )
+        await connection.execute(
+            text("DROP TABLE IF EXISTS column_changes_old")
+        )
+    # NOTE: We intentionally do not recreate the FK from
+    # column_changes → events.  PostgreSQL requires FKs referencing
+    # partitioned tables to include all partition-key columns, but
+    # column_changes has no capture_time.  In practice partition DROPs
+    # (used by retention cleanup) do not trigger FK cascades, so the
+    # FK provides no operational benefit in a partitioned layout.
+
+
 async def _apply_ingestion_quota_windows(
     connection: AsyncConnection,
     session_factory: Callable,
@@ -489,6 +741,66 @@ async def _apply_ingestion_quota_windows(
     ]
     for statement in statements:
         await connection.execute(text(statement))
+
+
+async def _apply_events_unique_constraint(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Replace unique index with unique constraint on partitioned events.
+
+    PostgreSQL requires a UNIQUE CONSTRAINT (not merely a unique index)
+    for INSERT ... ON CONFLICT to work on partitioned tables.  Databases
+    that ran migration 0013 before this fix have a unique *index*
+    instead of a constraint, which causes ON CONFLICT to fail at
+    runtime with ``InvalidColumnReferenceError``.
+    """
+    del session_factory
+    # Check whether the table is actually partitioned.
+    partitioned = await connection.execute(
+        text(
+            """
+            SELECT 1 FROM pg_partitioned_table
+            WHERE partrelid = 'events'::regclass
+            """
+        )
+    )
+    if partitioned.fetchone() is None:
+        # Not partitioned yet -- nothing to do here.
+        return
+
+    # Check if a UNIQUE CONSTRAINT (not just an index) already exists.
+    constraint_exists = await connection.execute(
+        text(
+            """
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'ux_events_kafka_position'
+              AND conrelid = 'events'::regclass
+            """
+        )
+    )
+    if constraint_exists.fetchone() is not None:
+        return  # constraint already present
+
+    # Drop the existing unique index so we can recreate it as a
+    # constraint with the same name.
+    await connection.execute(
+        text(
+            """
+            DROP INDEX IF EXISTS ux_events_kafka_position
+            """
+        )
+    )
+    await connection.execute(
+        text(
+            """
+            ALTER TABLE events
+            ADD CONSTRAINT ux_events_kafka_position
+            UNIQUE (kafka_topic, kafka_partition, kafka_offset,
+                    capture_time)
+            """
+        )
+    )
 
 
 MIGRATIONS: tuple[Migration, ...] = (
@@ -554,9 +866,59 @@ MIGRATIONS: tuple[Migration, ...] = (
         description="Create durable spill table for audit log entries",
         apply=_apply_api_audit_log_spill,
     ),
+    Migration(
+        version="0013_event_partitioning",
+        description=(
+            "Convert events and column_changes to time-range "
+            "partitioned tables for efficient retention"
+        ),
+        apply=_apply_event_partitioning,
+    ),
+    Migration(
+        version="0014_cursor_pagination_indexes",
+        description="Add cursor-optimized composite indexes for large scans",
+        apply=_apply_cursor_pagination_indexes,
+    ),
+    Migration(
+        version="0015_events_unique_constraint",
+        description=(
+            "Replace unique index with unique constraint on events "
+            "so ON CONFLICT works on the partitioned table"
+        ),
+        apply=_apply_events_unique_constraint,
+    ),
 )
 
 CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version
+
+# ── Advisory lock for concurrent migration safety ────────────────────
+#
+# Uses PostgreSQL advisory lock to ensure only one process can execute
+# migrations at a time. The lock ID is derived from a well-known constant
+# so all replicas contend on the same lock.
+
+_MIGRATION_LOCK_ID = 7273646  # "dbmonitor" on a phone keypad
+
+
+async def _acquire_migration_lock(
+    connection: AsyncConnection,
+) -> bool:
+    """Try to acquire the migration advisory lock. Returns True on success."""
+    result = await connection.execute(
+        text("SELECT pg_try_advisory_lock(:lock_id)"),
+        {"lock_id": _MIGRATION_LOCK_ID},
+    )
+    return bool(result.scalar())
+
+
+async def _release_migration_lock(
+    connection: AsyncConnection,
+) -> None:
+    """Release the migration advisory lock."""
+    await connection.execute(
+        text("SELECT pg_advisory_unlock(:lock_id)"),
+        {"lock_id": _MIGRATION_LOCK_ID},
+    )
 
 
 async def get_pending_migrations(engine: AsyncEngine) -> list[Migration]:
@@ -576,15 +938,42 @@ async def apply_migrations(
     session_factory: Callable,
     engine: AsyncEngine,
 ) -> list[str]:
-    """Apply all pending migrations and return their versions."""
+    """Apply all pending migrations and return their versions.
+
+    Acquires a PostgreSQL advisory lock before running any migration
+    steps. When the lock is held by another process this function logs a
+    clear message and raises ``RuntimeError`` so callers can retry or
+    exit cleanly.
+    """
     applied_versions: list[str] = []
 
-    for migration in await get_pending_migrations(engine):
-        async with engine.begin() as connection:
-            await _ensure_migration_table(connection)
-            await migration.apply(connection, session_factory)
-            await _record_migration(connection, migration)
-        applied_versions.append(migration.version)
+    async with engine.connect() as connection:
+        await _ensure_migration_table(connection)
+        await connection.commit()
+
+        if not await _acquire_migration_lock(connection):
+            raise RuntimeError(
+                "Migration lock is held by another process. "
+                "Only one actor can run schema changes at a time. "
+                "Retry once the other migration completes."
+            )
+        await connection.commit()
+
+        try:
+            async with connection.begin():
+                pending = [
+                    m
+                    for m in MIGRATIONS
+                    if m.version
+                    not in await _get_applied_versions(connection)
+                ]
+
+                for migration in pending:
+                    await migration.apply(connection, session_factory)
+                    await _record_migration(connection, migration)
+                    applied_versions.append(migration.version)
+        finally:
+            await _release_migration_lock(connection)
 
     return applied_versions
 
@@ -638,9 +1027,14 @@ async def migrate_legacy_kafka_events(
     inserted_total = 0
 
     async with session_factory() as session:
-        stream = await session.stream_scalars(
-            select(KafkaEventLegacy).order_by(KafkaEventLegacy.id)
-        )
+        try:
+            stream = await session.stream_scalars(
+                select(KafkaEventLegacy).order_by(KafkaEventLegacy.id)
+            )
+        except ProgrammingError as exc:
+            if 'relation "kafka_events" does not exist' in str(exc):
+                return 0
+            raise
 
         batch: list[dict[str, Any]] = []
         async for legacy in stream:
@@ -679,3 +1073,138 @@ async def migrate_legacy_kafka_events(
         await session.commit()
 
     return inserted_total
+
+
+async def create_monthly_partitions(
+    connection: AsyncConnection,
+    table_name: str,
+    partition_column: str,
+    months_ahead: int = 3,
+) -> list[str]:
+    """Create monthly range partitions for the upcoming months.
+
+    Idempotent — skips partitions that already exist. Returns the names
+    of newly created partitions.
+    """
+    if not re.match(r"^[a-z_][a-z0-9_]*$", table_name):
+        raise ValueError(
+            f"Invalid table_name for partition DDL: {table_name!r}"
+        )
+
+    now = datetime.now(timezone.utc)
+    created: list[str] = []
+
+    for offset in range(months_ahead):
+        month_start = _month_start(now, offset)
+        month_end = _month_start(now, offset + 1)
+        partition_name = (
+            f"{table_name}_{month_start.strftime('%Y%m')}"
+        )
+
+        exists = await connection.execute(
+            text(
+                """
+                SELECT 1 FROM pg_class
+                WHERE relname = :partition_name
+                """
+            ),
+            {"partition_name": partition_name},
+        )
+        if exists.fetchone() is not None:
+            continue
+
+        await connection.execute(
+            text(
+                f"""
+                CREATE TABLE {partition_name}
+                PARTITION OF {table_name}
+                FOR VALUES FROM (
+                '{month_start.isoformat()}') TO
+                ('{month_end.isoformat()}')
+                """
+            )
+        )
+        created.append(partition_name)
+
+    return created
+
+
+def _month_start(reference: datetime, months_ahead: int) -> datetime:
+    """Return the first instant of a month offset from ``reference``."""
+    total_months = reference.year * 12 + (reference.month - 1) + months_ahead
+    year = total_months // 12
+    month = total_months % 12 + 1
+    return datetime(year, month, 1, tzinfo=timezone.utc)
+
+
+async def drop_old_partitions(
+    connection: AsyncConnection,
+    table_name: str,
+    partition_column: str,
+    older_than: datetime,
+) -> list[str]:
+    """Drop range partitions whose upper bound is before ``older_than``.
+
+    Only drops partitions that are entirely before the cutoff — does not
+    touch the DEFAULT partition. Returns the names of dropped partitions.
+    """
+    if not re.match(r"^[a-z_][a-z0-9_]*$", table_name):
+        raise ValueError(
+            f"Invalid table_name for partition DDL: {table_name!r}"
+        )
+
+    # Find child partitions older than the cutoff
+    rows = await connection.execute(
+        text(
+            """
+            SELECT c.relname AS partition_name,
+                   pg_get_expr(c.relpartbound, c.oid) AS bound
+            FROM pg_inherits i
+            JOIN pg_class c ON c.oid = i.inhrelid
+            JOIN pg_class p ON p.oid = i.inhparent
+            WHERE p.relname = :table_name
+              AND c.relispartition = TRUE
+              AND c.relname != :default_name
+            """
+        ),
+        {
+            "table_name": table_name,
+            "default_name": f"{table_name}_default",
+        },
+    )
+
+    dropped: list[str] = []
+    for partition_name, bound_expr in rows.fetchall():
+        if bound_expr is None:
+            continue
+        # bound_expr is e.g. "FOR VALUES FROM ('2026-01-01')
+        # TO ('2026-02-01')"  — extract the upper bound
+        upper_str = _extract_upper_bound(bound_expr)
+        if upper_str is None:
+            continue
+        try:
+            upper = datetime.fromisoformat(upper_str)
+        except ValueError:
+            continue
+
+        if upper <= older_than:
+            await connection.execute(
+                text(f"DROP TABLE IF EXISTS {partition_name}")
+            )
+            dropped.append(partition_name)
+            logger.info(
+                "Dropped old partition %s (upper bound %s <= cutoff %s)",
+                partition_name,
+                upper.isoformat(),
+                older_than.isoformat(),
+            )
+
+    return dropped
+
+
+def _extract_upper_bound(bound_expr: str) -> str | None:
+    """Extract the upper bound value from a PG partition bound expression."""
+    match = re.search(r"TO\s*\(\s*'([^']+)'\s*\)", bound_expr)
+    if match:
+        return match.group(1)
+    return None

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from core.models import KafkaEvent
 
@@ -38,28 +38,48 @@ class EventsRepository:
         limit: int,
         offset: int,
         cursor_id: int | None = None,
+        cursor_time: datetime | None = None,
         include_total: bool = True,
     ) -> tuple[list[KafkaEvent], int | None]:
         """Return paginated events for filters.
 
-        Uses offset pagination by default and keyset pagination when a
-        cursor_id is provided.
+        Uses keyset pagination ``(capture_time DESC, id DESC)`` when
+        both ``cursor_time`` and ``cursor_id`` are provided.  Falls
+        back to offset pagination otherwise.
         """
         async with self._session_factory() as session:
-            query = select(KafkaEvent).order_by(KafkaEvent.id.desc())
+            query = select(KafkaEvent).order_by(
+                KafkaEvent.capture_time.desc(),
+                KafkaEvent.id.desc(),
+            )
             query = self._apply_filters(query, filters)
-            if cursor_id is not None:
+
+            keyset = cursor_time is not None and cursor_id is not None
+            if keyset:
+                query = query.where(
+                    or_(
+                        KafkaEvent.capture_time < cursor_time,
+                        and_(
+                            KafkaEvent.capture_time == cursor_time,
+                            KafkaEvent.id < cursor_id,
+                        ),
+                    )
+                )
+            elif cursor_id is not None:
+                # Backward-compat: id-only cursor
                 query = query.where(KafkaEvent.id < cursor_id)
 
             total: int | None = None
-            if include_total:
+            if include_total and not keyset and cursor_id is None:
                 count_query = select(func.count()).select_from(
                     query.subquery()
                 )
                 total_result = await session.execute(count_query)
                 total = int(total_result.scalar() or 0)
 
-            effective_offset = 0 if cursor_id is not None else offset
+            effective_offset = (
+                0 if (keyset or cursor_id is not None) else offset
+            )
             result = await session.execute(
                 query.limit(limit).offset(effective_offset)
             )

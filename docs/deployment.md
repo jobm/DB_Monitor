@@ -75,6 +75,97 @@ Expected local `.env` values are documented in [docs/configuration.md](docs/conf
 
 ## 3. Production-Like Expectations
 
+### 3a. Kubernetes (Helm Chart)
+
+DB Monitor ships a Helm chart under `deploy/helm/db-monitor/` for production
+deployments on Kubernetes.
+
+**Prerequisites:**
+- Kubernetes 1.25+
+- Helm 3.12+
+- A PostgreSQL server (external or provisioned via the Terraform module)
+- A Kafka or RabbitMQ cluster
+
+**Install:**
+
+```bash
+# From the repo
+helm install db-monitor ./deploy/helm/db-monitor \
+  --set auth.jwtSecret="$(openssl rand -hex 32)" \
+  --set database.host=postgres-monitor.example.com \
+  --set database.password="<postgres-password>" \
+  --set kafka.broker=kafka.example.com:9092
+
+# With a values override file
+helm install db-monitor ./deploy/helm/db-monitor \
+  -f my-values.yaml
+```
+
+**Post-install:**
+```
+helm test db-monitor
+kubectl port-forward svc/db-monitor 8000:8000
+curl -X POST "http://localhost:8000/auth/bootstrap?owner_name=admin"
+```
+
+**Upgrade:**
+```bash
+helm upgrade db-monitor ./deploy/helm/db-monitor -f my-values.yaml
+```
+
+**Minimal production values:**
+```yaml
+app:
+  env: production
+  schemaMode: validate
+  allowBootstrap: false
+
+database:
+  host: postgres-monitor.internal
+  password: "<secure-password>"
+
+auth:
+  jwtSecret: "<random-64-char-hex>"
+
+kafka:
+  broker: kafka.internal:9092
+  securityProtocol: SSL
+
+autoscaling:
+  enabled: true
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+```
+
+See `deploy/helm/db-monitor/values.yaml` for all available options.
+
+### 3b. Terraform (Companion Infrastructure)
+
+A Terraform module is available under `deploy/terraform/` that provisions a
+production-ready PostgreSQL flexible server for DB Monitor.
+
+```hcl
+module "db_monitor_infra" {
+  source = "github.com/jobm/DB_Monitor//deploy/terraform"
+
+  resource_group_name     = azurerm_resource_group.main.name
+  location               = azurerm_resource_group.main.location
+  postgres_admin_password = var.postgres_admin_password
+  postgres_server_name    = "dbm-monitor-prod"
+  postgres_sku            = "GP_Standard_D4s_v3"
+  postgres_storage_mb     = 262144  # 256 GB
+}
+
+# Use the output to configure the Helm chart
+output "db_monitor_helm_values" {
+  value = module.db_monitor_infra.helm_values
+}
+```
+
+### 3c. Production-Like Expectations (Non-Kubernetes)
+
 The bundled `monitor-server` service already applies several production
 constraints:
 

@@ -68,3 +68,4 @@ def timestamp_age_seconds(value: str | None) -> float | None:
 
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return max((utc_now() - parsed).total_seconds(), 0.0)
+

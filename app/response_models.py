@@ -26,6 +26,7 @@ class EventItemResponse(BaseModel):
     id: int
     event_type: str
     event_time: str | None
+    capture_time: str | None = None
     user_id: str | None
     service_name: str | None
     operation: str | None
@@ -41,7 +42,7 @@ class EventsResponse(BaseModel):
     total: int | None
     limit: int
     offset: int
-    next_cursor: int | None = None
+    next_cursor: dict[str, Any] | None = None
 
 
 class ChangesResponse(BaseModel):
@@ -52,8 +53,10 @@ class ChangesResponse(BaseModel):
     row_identity: dict[str, Any] | None
     changes: list[dict[str, Any]]
     count: int
+    total: int | None = None
     limit: int
     offset: int
+    next_cursor: dict[str, Any] | None = None
 
 
 class PointInTimeValueResponse(BaseModel):

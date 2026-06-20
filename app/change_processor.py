@@ -13,7 +13,7 @@ from core.models import (
     MonitoredColumn,
     MonitoredTable,
 )
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,96 @@ class ChangeProcessor:
             return
 
         await self._process_event(event, session)
+
+    async def process_events_batch(
+        self,
+        events: list[KafkaEvent],
+        session,
+    ) -> None:
+        """Extract column changes for a batch of events in one round-trip.
+
+        Fetches audit-enabled columns once per unique table_id, computes all
+        per-event column deltas in memory, and bulk-inserts the resulting
+        ``ColumnChange`` rows in a single ``session.add_all()`` call.
+        """
+        if not events:
+            return
+
+        # Collect events that are eligible for change extraction
+        eligible: list[KafkaEvent] = []
+        table_ids: set[int] = set()
+        for event in events:
+            if (
+                event.id is not None
+                and event.source_table_id is not None
+                and event.event_data
+            ):
+                eligible.append(event)
+                table_ids.add(event.source_table_id)
+
+        if not eligible:
+            return
+
+        # Fetch audit-enabled columns once per unique table
+        col_stmt = select(MonitoredColumn).where(
+            MonitoredColumn.table_id.in_(table_ids),
+            MonitoredColumn.audit_enabled.is_(True),
+        )
+        col_result = await session.execute(col_stmt)
+        all_columns = col_result.scalars().all()
+
+        columns_by_table: dict[int, list[MonitoredColumn]] = {}
+        for col in all_columns:
+            columns_by_table.setdefault(col.table_id, []).append(col)
+
+        # Compute all changes in memory and bulk-insert
+        all_changes: list[ColumnChange] = []
+        for event in eligible:
+            payload = event.event_data or {}
+            operation = event.operation
+            table_id = event.source_table_id
+            if table_id is None:
+                continue
+
+            old_data: dict[str, Any] | None = None
+            new_data: dict[str, Any] | None = None
+
+            if operation == "INSERT":
+                new_data = payload.get("after", {})
+            elif operation == "UPDATE":
+                old_data = payload.get("before", {})
+                new_data = payload.get("after", {})
+            elif operation == "DELETE":
+                old_data = payload.get("before", {})
+
+            if new_data is None and old_data is None:
+                continue
+
+            columns = columns_by_table.get(table_id, [])
+            for col in columns:
+                old_val = (
+                    old_data.get(col.column_name) if old_data else None
+                )
+                new_val = (
+                    new_data.get(col.column_name) if new_data else None
+                )
+                if old_val == new_val:
+                    continue
+                all_changes.append(
+                    ColumnChange(
+                        event_id=event.id,
+                        table_id=table_id,
+                        column_id=col.id,
+                        operation=event.operation,
+                        row_identity=event.row_identity,
+                        old_value=old_val,
+                        new_value=new_val,
+                        changed_at=event.event_time,
+                    )
+                )
+
+        if all_changes:
+            session.add_all(all_changes)
 
     async def _process_event(self, event: KafkaEvent, session) -> None:
         """Process an event within an existing database session."""
@@ -136,8 +226,16 @@ class ChangeProcessor:
         to_time: Optional[datetime] = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        """Query column changes with filters."""
+        cursor_id: int | None = None,
+        cursor_time: datetime | None = None,
+        include_total: bool = True,
+    ) -> tuple[list[dict[str, Any]], int | None]:
+        """Query column changes with filters and optional keyset pagination.
+
+        Uses keyset ``(changed_at DESC, id DESC)`` when both
+        ``cursor_time`` and ``cursor_id`` are provided.  Falls back to
+        offset pagination otherwise.  Returns ``(changes, total_or_none)``.
+        """
         async with self.session_factory() as session:
             stmt = (
                 select(ColumnChange, MonitoredColumn)
@@ -156,17 +254,43 @@ class ChangeProcessor:
                 stmt = stmt.where(ColumnChange.changed_at >= from_time)
             if to_time:
                 stmt = stmt.where(ColumnChange.changed_at <= to_time)
+            keyset = cursor_time is not None and cursor_id is not None
+            if keyset:
+                stmt = stmt.where(
+                    or_(
+                        ColumnChange.changed_at < cursor_time,
+                        and_(
+                            ColumnChange.changed_at == cursor_time,
+                            ColumnChange.id < cursor_id,
+                        ),
+                    )
+                )
+            elif cursor_id is not None:
+                # Backward-compat: id-only cursor
+                stmt = stmt.where(ColumnChange.id < cursor_id)
 
+            total: int | None = None
+            if include_total and not keyset and cursor_id is None:
+                count_stmt = select(func.count()).select_from(
+                    stmt.subquery()
+                )
+                total_result = await session.execute(count_stmt)
+                total = int(total_result.scalar() or 0)
+
+            effective_offset = 0 if keyset or cursor_id is not None else offset
             stmt = (
-                stmt.order_by(ColumnChange.changed_at.desc())
+                stmt.order_by(
+                    ColumnChange.changed_at.desc(),
+                    ColumnChange.id.desc(),
+                )
                 .limit(limit)
-                .offset(offset)
+                .offset(effective_offset)
             )
 
             result = await session.execute(stmt)
             rows = result.all()
 
-            return [
+            changes = [
                 {
                     "id": change.id,
                     "event_id": change.event_id,
@@ -183,6 +307,7 @@ class ChangeProcessor:
                 }
                 for change, col in rows
             ]
+            return changes, total
 
     async def get_value_at_time(
         self,

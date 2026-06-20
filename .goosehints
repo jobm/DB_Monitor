@@ -1,0 +1,111 @@
+# DB Monitor — Goose Hints for 9B Local Agent
+# Inject this into every turn to maintain logic consistency.
+
+## PROJECT IDENTITY
+- DB Monitor is a Python 3.11+ CDC monitoring platform built on FastAPI + SQLAlchemy async + PostgreSQL.
+- It ingests Debezium CDC events from Kafka or RabbitMQ, stores structured event history, discovers schemas, extracts column-level changes, and serves a REST/WebSocket/Prometheus interface.
+- Single-package product: `db_monitor`. Installable via pip/hatch. Entry points: `db-monitor`, `db-monitor-serve`, `db-monitor-migrate`.
+
+## DIRECTORY LAYOUT — READ THIS BEFORE EDITING ANYTHING
+- `src/db_monitor/` — **CANONICAL package code**. This is the real source. All runtime logic lives here.
+- `app/` — **Legacy compatibility shims**. Files here are thin proxies (e.g. `app/core/db.py` imports from `db_monitor`). Do NOT add new logic here.
+- `tests/` — Pytest suite. Uses `conftest.py` fixtures. Run with `uv run pytest`.
+- `tui/` — Separate Textual TUI client (its own pyproject.toml).
+- `sdk/` — Python and JavaScript client SDKs (separate packages).
+- `deploy/` — Helm chart and Terraform module.
+- `migrations/sql/` — Raw SQL migration files (numbered 0012, 0013, etc.).
+- `connectors/` — Source manifest JSON schemas and templates.
+- `scripts/` — Operator utility scripts (load test, replay, seed, setup).
+- `examples/sandbox/` — Demo init SQL and integration test harness.
+- `docs/` — Architecture, runbooks, troubleshooting, deployment guides.
+
+## IMPORT RULES — THE #1 SOURCE OF HALLUCINATED PATHS
+- Always import from the `db_monitor` package namespace: `from db_monitor.auth import ...`, `from db_monitor.core.config import ...`.
+- Never import from bare module names like `from config import ...` or `from models import ...` — those are the legacy `app/` shims.
+- The `app/core/` directory contains compatibility wrappers that re-export from `db_monitor.*`. They exist only for backward compat.
+- Config constants are loaded at module import time from environment variables. They are plain module-level variables (e.g. `POSTGRES_URL`, `KAFKA_BROKER`), not class instances.
+
+## DATABASE LAYER
+- Engine: `db_monitor.core.db.engine` (SQLAlchemy async, asyncpg driver).
+- Session factory: `db_monitor.core.db.AsyncSessionLocal` — this is a `sessionmaker`, not a session. Use `async with AsyncSessionLocal() as session:`.
+- ORM models: `db_monitor.core.models` re-exports from `models.py`. Key models: `KafkaEvent`, `MonitoredTable`, `MonitoredColumn`, `ColumnChange`, `ApiKey`, `ConsumerCheckpoint`, `DeadLetterEvent`, `ApiAuditLog`, `IngestionQuotaWindow`.
+- Tables `events` and `column_changes` are **partitioned by range on time columns** (`capture_time` and `changed_at`). Retention drops entire partitions.
+- Unique constraint on events: `(kafka_topic, kafka_partition, kafka_offset, capture_time)` — used for idempotent writes via `ON CONFLICT DO NOTHING`.
+- Migrations: tracked in `schema_migrations` table with PostgreSQL advisory lock (ID 7273646). Use `db_monitor.migrations.apply_migrations()`.
+- Pool metrics are instrumented via SQLAlchemy pool event hooks in `extensions.py`.
+
+## INGESTION PIPELINE — DATA FLOW (memorize this sequence)
+1. Broker message received (`consumer_task` in `consumer_service.py`)
+2. `parse_event_payload()` → `ParsedEvent` (event_parser.py)
+3. `EventPipeline.should_process()` → filter by type/table/fields (event_pipeline.py)
+4. `EventPipeline.transform()` → mask fields, run custom processors
+5. `IngestionQuotaLimiter.apply()` → source/tenant rate limiting (ingestion_quota.py)
+6. `SchemaDiscovery.process_event()` → upsert MonitoredTable + MonitoredColumn (schema_discovery.py)
+7. `extract_row_identity()` → populate event row_identity (row_identity.py)
+8. `_insert_event_record()` → `INSERT ... ON CONFLICT DO NOTHING` (consumer_service.py)
+9. `ChangeProcessor.process_event()` → extract ColumnChange deltas (change_processor.py)
+10. `ws_manager.broadcast()` → push to WebSocket clients + `webhook_notifier.send_message()` → outbound HTTP webhooks
+11. `persist_consumer_checkpoints()` → durable recovery position + Broker ack → offset commit (batch-level, not per-event)
+
+## BROKER ADAPTERS
+- Two broker kinds: `kafka` and `rabbitmq`. Selected via `MESSAGE_BROKER` env var or `BROKER_CLUSTERS` JSON.
+- `KafkaConsumerAdapter` uses `aiokafka`. `RabbitMQConsumerAdapter` uses `aio_pika`.
+- Both implement `MessageConsumerAdapter` protocol (start/stop/ack_batch/__aiter__).
+- DLQ publishers follow the same adapter pattern: `KafkaDeadLetterPublisher`, `RabbitMQDeadLetterPublisher`.
+- `build_message_consumer()` and `build_dead_letter_publisher()` are factory functions.
+
+## AUTHENTICATION
+- API keys stored as argon2 hashes. Format: `{id}.{raw_secret}`.
+- Three credential paths: API key header (`X-API-Key`), Bearer JWT, WebSocket session token.
+- JWT tokens: signed with `JWT_SECRET`, support rotation via `JWT_SECRET_NEXT`.
+- RBAC: `admin` and `viewer` roles. Dependencies: `require_valid_api_key`, `require_admin_role`, `require_viewer_role`.
+- Bootstrap: `POST /auth/bootstrap` creates first admin key (one-time, disabled in prod).
+
+## WEBSOCKET
+- `WebSocketManager` in `ws_manager.py` manages connections and broadcasts.
+- Multi-instance support via Postgres LISTEN/NOTIFY backplane (`WS_BACKPLANE_CHANNEL`).
+- Each instance has a unique `_instance_id` to avoid echoing own notifications.
+
+## OBSERVABILITY
+- Prometheus metrics in `metrics.py`: counters for events consumed/processed/failed, histograms for DB write and API latency, gauges for pool/consumer/DLQ state.
+- Audit logging: `AuditLogWriter` buffers entries in an asyncio queue, flushes in batches. On persistent failure, spills to `api_audit_log_spill` table.
+- OpenTelemetry tracing: optional, enabled via `OTEL_TRACING_ENABLED`.
+
+## CONFIGURATION
+- All config loaded from env vars in `config.py` with production validation.
+- `BROKER_CLUSTERS` JSON env var supports multi-cluster Kafka/RabbitMQ.
+- `KAFKA_CLUSTERS` is the legacy single-broker-kind format; `BROKER_CLUSTERS` is the generic replacement.
+- `INGESTION_QUOTA_*` env vars control source/tenant rate limiting.
+- `RETENTION_*` env vars control cleanup intervals and batch sizes.
+- Production mode (`APP_ENV=production`) enforces stricter validation (pool sizes, JWT secret length, explicit POSTGRES_URL).
+
+## COMMON PITFALLS
+- Do NOT assume `AsyncSessionLocal` is a session — it is a sessionmaker factory.
+- Do NOT import from `app/` modules — use `db_monitor.*` package paths.
+- Do NOT edit `app/` shim files to add features — add them in `src/db_monitor/`.
+- The `events` table is partitioned — queries that filter by `capture_time` can leverage partition pruning.
+- `ON CONFLICT DO NOTHING` means duplicate events are silently skipped (counted in `events_duplicate_skipped_total`).
+- Consumer checkpoints track both Kafka-style `(topic, partition, offset)` and broker-neutral `(broker_kind, broker_destination, broker_substream, broker_position)` metadata.
+- `CustomerJWTSecretState`, `CustomerLifecycleState`, `CustomerProvisionJob` store JSONB state blobs — mutations happen in-memory then persist.
+- The TUI (`tui/`) is a separate package with its own `pyproject.toml` and `uv.lock`.
+
+## CLI ENTRY POINTS
+- `db-monitor` → `db_monitor.cli:main` (general CLI dispatch)
+- `db-monitor-serve` → `db_monitor.cli:serve` (start the API server)
+- `db-monitor-migrate` → `db_monitor.cli:migrate` (run/validate migrations)
+- CLI module: `src/db_monitor/cli.py`
+
+## TESTING
+- Unit tests: `uv run pytest tests/` from project root.
+- Integration tests: `scripts/run_integration_tests.py` (requires running stack).
+- Scale tests: `scripts/scale_test.py`.
+- Load tests: `scripts/load_test.py` and `examples/sandbox/load_test.py`.
+- Makefile targets: `make monitor-test`, `make monitor-test-integration`.
+
+## CODE STYLE
+- Python 3.11+, async/await throughout.
+- Line length: 79 (ruff config).
+- Type hints on public functions. `Optional[X]` or `X | None`.
+- Pydantic v2 response models in `response_models.py`.
+- SQLAlchemy 2.0 style: `select()`, `scalar_one_or_none()`, `scalars().all()`.
+- Use `from __future__ import annotations` at module top.

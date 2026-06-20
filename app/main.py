@@ -32,7 +32,10 @@ from db_monitor.metrics import (
     api_request_duration_seconds,
     failed_auth_attempts_total,
 )
-from db_monitor.retention import retention_cleanup_task
+from db_monitor.retention import (
+    partition_maintenance_task,
+    retention_cleanup_task,
+)
 from db_monitor.tracing import current_trace_context, initialize_tracing
 from db_monitor.ws_manager import ws_manager
 
@@ -104,6 +107,7 @@ async def lifespan_manager(app: FastAPI):
         broker_clusters=BROKER_CLUSTERS,
         consumer_task=consumer_task,
         retention_cleanup_task=retention_cleanup_task,
+        partition_maintenance_task=partition_maintenance_task,
         retention_cleanup_enabled=RETENTION_CLEANUP_ENABLED,
         dlq_enabled=DLQ_ENABLED,
         batch_enabled=BATCH_ENABLED,

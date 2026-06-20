@@ -165,7 +165,7 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
 
     async def fake_get_changes(**kwargs):
         captured.update(kwargs)
-        return [{"id": 10, "event_id": 77, "column_name": "status"}]
+        return [{"id": 10, "event_id": 77, "column_name": "status"}], None
 
     monkeypatch.setattr(
         routes_data,
@@ -659,12 +659,14 @@ async def test_get_events_supports_cursor_pagination(monkeypatch):
         limit,
         offset,
         cursor_id,
+        cursor_time,
         include_total,
     ):
         del filters
         captured["limit"] = limit
         captured["offset"] = offset
         captured["cursor_id"] = cursor_id
+        captured["cursor_time"] = cursor_time
         captured["include_total"] = include_total
         return events, None
 
@@ -683,7 +685,10 @@ async def test_get_events_supports_cursor_pagination(monkeypatch):
 
     assert response["total"] is None
     assert response["offset"] == 0
-    assert response["next_cursor"] == 49
+    assert response["next_cursor"] == {
+        "capture_time": None,
+        "event_id": 49,
+    }
 
 
 @pytest.mark.anyio

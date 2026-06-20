@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Validate monitor-server readiness endpoint semantics for CI smoke tests."""
 
 from __future__ import annotations

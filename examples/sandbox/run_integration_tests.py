@@ -274,7 +274,10 @@ def run_tests() -> None:
     print(f"Using admin key source: {admin_key_source}.")
 
     access_token = exchange_access_token(admin_key)
-    headers = {"Authorization": f"Bearer {access_token}"}
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "X-DBM-Customer-ID": "integration-test",
+    }
 
     print("Testing /metrics...")
     status_code, metrics_payload = request_text("/metrics")
