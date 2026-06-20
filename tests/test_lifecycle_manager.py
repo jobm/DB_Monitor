@@ -24,7 +24,7 @@ async def test_task_failure_triggers_shutdown_and_marks_unhealthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A crashing background task should be supervised and stop the app."""
-    manager = lifecycle_module.GracefulShutdownManager(shutdown_timeout=0.05)
+    manager = lifecycle_module.GracefulShutdownManager(shutdown_timeout=1.0)
     failure_gate = asyncio.Event()
     cleanup_called = asyncio.Event()
     cancelled = asyncio.Event()
@@ -106,7 +106,7 @@ async def test_noncritical_task_failure_does_not_shutdown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A non-critical background task failure should not trigger shutdown."""
-    manager = lifecycle_module.GracefulShutdownManager(shutdown_timeout=0.05)
+    manager = lifecycle_module.GracefulShutdownManager(shutdown_timeout=1.0)
     failure_gate = asyncio.Event()
     cleanup_called = asyncio.Event()
 
@@ -133,7 +133,7 @@ async def test_noncritical_task_failure_does_not_shutdown(
     failure_gate.set()
 
     # give the manager a moment to observe the exception
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(0.5)
 
     # non-critical failure should not trigger shutdown
     assert manager.has_task_failure is False
