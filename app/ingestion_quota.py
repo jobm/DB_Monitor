@@ -182,12 +182,18 @@ class IngestionQuotaLimiter:
                 return False, throttled, total_sleep_seconds
 
             throttled = True
-            wait_seconds = self._sleep_seconds_until_reset(window_start, now)
-            if wait_seconds <= 0:
-                continue
-
-            total_sleep_seconds += wait_seconds
-            await asyncio.sleep(wait_seconds)
+            # Sleep through the remainder of the window without hitting the
+            # database again — the UPSERT cannot succeed until the window
+            # rolls over, so we skip intermediate round-trips.
+            while True:
+                wait_seconds = self._sleep_seconds_until_reset(window_start, now)
+                if wait_seconds <= 0:
+                    break  # window has reset or we're past the boundary
+                total_sleep_seconds += wait_seconds
+                await asyncio.sleep(wait_seconds)
+                now = datetime.now(timezone.utc)
+            # Window has rolled — retry UPSERT with fresh window_start
+            continue
 
     def _window_start_for(self, moment: datetime) -> datetime:
         """Round one timestamp down to the current quota window boundary."""

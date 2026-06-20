@@ -103,7 +103,7 @@ monitor-test-container-readyz: ## Start monitor container and validate readiness
 	DB_SCHEMA_MODE=apply APP_SHUTDOWN_TIMEOUT_SECONDS=30 $(PODMAN_COMPOSE) up -d --build zookeeper kafka postgres-monitor
 	DB_SCHEMA_MODE=apply APP_SHUTDOWN_TIMEOUT_SECONDS=30 $(PODMAN_COMPOSE) up -d --build --no-deps monitor-server
 	@echo "Waiting for monitor-server to start..."
-	@sleep 15
+	@sleep 30
 	python3 scripts/check_container_readyz.py || ($(PODMAN_COMPOSE) logs --tail=200 monitor-server postgres-monitor kafka zookeeper || true; $(PODMAN_COMPOSE) stop monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true; $(PODMAN_COMPOSE) rm -fv monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true; exit 1)
 	$(PODMAN_COMPOSE) stop monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true
 	$(PODMAN_COMPOSE) rm -fv monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true
