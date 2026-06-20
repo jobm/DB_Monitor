@@ -1,0 +1,108 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "db-monitor.fullname" . }}-config
+  labels:
+    {{- include "db-monitor.labels" . | nindent 4 }}
+data:
+  APP_ENV: {{ .Values.app.env | quote }}
+  DB_SCHEMA_MODE: {{ .Values.app.schemaMode | quote }}
+  ALLOW_BOOTSTRAP: {{ .Values.app.allowBootstrap | quote }}
+
+  {{- if not .Values.database.existingSecret }}
+  POSTGRES_URL: {{ printf "postgresql+asyncpg://%s:%s@%s:%d/%s" .Values.database.user .Values.database.password .Values.database.host (int .Values.database.port) .Values.database.name | quote }}
+  {{- end }}
+
+  DB_POOL_SIZE: {{ .Values.database.poolSize | quote }}
+  DB_MAX_OVERFLOW: {{ .Values.database.maxOverflow | quote }}
+  DB_POOL_TIMEOUT_SECONDS: {{ .Values.database.poolTimeoutSeconds | quote }}
+  DB_POOL_RECYCLE_SECONDS: {{ .Values.database.poolRecycleSeconds | quote }}
+  DB_POOL_PRE_PING: {{ .Values.database.poolPrePing | quote }}
+
+  MESSAGE_BROKER: {{ .Values.broker.kind | quote }}
+  KAFKA_BROKER: {{ .Values.kafka.broker | quote }}
+  {{- if .Values.kafka.topics }}
+  KAFKA_TOPICS: {{ .Values.kafka.topics | quote }}
+  {{- end }}
+  KAFKA_CONSUMER_GROUP: {{ .Values.kafka.consumerGroup | quote }}
+  KAFKA_SECURITY_PROTOCOL: {{ .Values.kafka.securityProtocol | quote }}
+
+  {{- if .Values.clusters.kafkaClusters }}
+  KAFKA_CLUSTERS: {{ .Values.clusters.kafkaClusters | quote }}
+  {{- end }}
+  {{- if .Values.clusters.brokerClusters }}
+  BROKER_CLUSTERS: {{ .Values.clusters.brokerClusters | quote }}
+  {{- end }}
+
+  {{- if eq .Values.broker.kind "rabbitmq" }}
+  RABBITMQ_URL: {{ .Values.rabbitmq.url | quote }}
+  {{- if .Values.rabbitmq.queues }}
+  RABBITMQ_QUEUES: {{ .Values.rabbitmq.queues | quote }}
+  {{- end }}
+  RABBITMQ_PREFETCH_COUNT: {{ .Values.rabbitmq.prefetchCount | quote }}
+  RABBITMQ_DLQ_QUEUE: {{ .Values.rabbitmq.dlqQueue | quote }}
+  {{- end }}
+
+  BATCH_ENABLED: {{ .Values.consumer.batchEnabled | quote }}
+  BATCH_SIZE: {{ .Values.consumer.batchSize | quote }}
+  INGESTION_BULK_WRITE_ENABLED: {{ .Values.consumer.bulkWriteEnabled | quote }}
+  DLQ_ENABLED: {{ .Values.consumer.dlqEnabled | quote }}
+  READINESS_MAX_COMMIT_AGE_SECONDS: {{ .Values.consumer.readinessMaxCommitAgeSeconds | quote }}
+  READINESS_MAX_CONSUMER_LAG: {{ .Values.consumer.readinessMaxConsumerLag | quote }}
+  READINESS_MAX_DLQ_MESSAGES: {{ .Values.consumer.readinessMaxDlqMessages | quote }}
+
+  {{- if not .Values.auth.existingSecret }}
+  JWT_SECRET: {{ required "auth.jwtSecret is required" .Values.auth.jwtSecret | quote }}
+  {{- end }}
+  {{- if .Values.auth.jwtSecretNext }}
+  JWT_SECRET_NEXT: {{ .Values.auth.jwtSecretNext | quote }}
+  {{- end }}
+  JWT_ALGORITHM: {{ .Values.auth.jwtAlgorithm | quote }}
+  ACCESS_TOKEN_TTL_MINUTES: {{ .Values.auth.accessTokenTtlMinutes | quote }}
+  WS_SESSION_TOKEN_TTL_SECONDS: {{ .Values.auth.wsSessionTokenTtlSeconds | quote }}
+  API_KEY_DEFAULT_TTL_DAYS: {{ .Values.auth.apiKeyDefaultTtlDays | quote }}
+
+  INGESTION_QUOTA_ENABLED: {{ .Values.ingestionQuota.enabled | quote }}
+  INGESTION_QUOTA_WINDOW_SECONDS: {{ .Values.ingestionQuota.windowSeconds | quote }}
+  INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW: {{ .Values.ingestionQuota.sourceDefaultEventsPerWindow | quote }}
+  INGESTION_SOURCE_QUOTAS: {{ .Values.ingestionQuota.sourceQuotas | quote }}
+  INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW: {{ .Values.ingestionQuota.tenantDefaultEventsPerWindow | quote }}
+  INGESTION_TENANT_QUOTAS: {{ .Values.ingestionQuota.tenantQuotas | quote }}
+  INGESTION_QUOTA_MODE: {{ .Values.ingestionQuota.mode | quote }}
+  INGESTION_QUOTA_MAX_THROTTLE_SECONDS: {{ .Values.ingestionQuota.maxThrottleSeconds | quote }}
+
+  RETENTION_CLEANUP_ENABLED: {{ .Values.retention.cleanupEnabled | quote }}
+  RETENTION_CLEANUP_INTERVAL_SECONDS: {{ .Values.retention.cleanupIntervalSeconds | quote }}
+  RETENTION_CLEANUP_BATCH_SIZE: {{ .Values.retention.cleanupBatchSize | quote }}
+  RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE: {{ .Values.retention.cleanupMaxBatchesPerTable | quote }}
+  RETENTION_ARCHIVE_BEFORE_DELETE: {{ .Values.retention.archiveBeforeDelete | quote }}
+  RETENTION_ARCHIVE_DIR: {{ .Values.retention.archiveDir | quote }}
+  EVENT_RETENTION_DAYS: {{ .Values.retention.eventRetentionDays | quote }}
+  COLUMN_CHANGES_RETENTION_DAYS: {{ .Values.retention.columnChangesRetentionDays | quote }}
+  DEAD_LETTER_RETENTION_DAYS: {{ .Values.retention.deadLetterRetentionDays | quote }}
+  API_AUDIT_LOG_RETENTION_DAYS: {{ .Values.retention.apiAuditLogRetentionDays | quote }}
+
+  WS_BACKPLANE_ENABLED: {{ .Values.websocket.backplaneEnabled | quote }}
+  WS_BACKPLANE_CHANNEL: {{ .Values.websocket.backplaneChannel | quote }}
+
+  {{- if .Values.webhooks.urls }}
+  WEBHOOK_URLS: {{ .Values.webhooks.urls | quote }}
+  WEBHOOK_TIMEOUT_SECONDS: {{ .Values.webhooks.timeoutSeconds | quote }}
+  WEBHOOK_MAX_RETRIES: {{ .Values.webhooks.maxRetries | quote }}
+  WEBHOOK_RETRY_BACKOFF_SECONDS: {{ .Values.webhooks.retryBackoffSeconds | quote }}
+  WEBHOOK_CIRCUIT_BREAKER_THRESHOLD: {{ .Values.webhooks.circuitBreakerThreshold | quote }}
+  WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS: {{ .Values.webhooks.circuitBreakerRecoverySeconds | quote }}
+  {{- if .Values.webhooks.sharedSecret }}
+  WEBHOOK_SHARED_SECRET: {{ .Values.webhooks.sharedSecret | quote }}
+  {{- end }}
+  {{- end }}
+
+  {{- if .Values.tracing.enabled }}
+  OTEL_EXPORTER: {{ .Values.tracing.exporter | quote }}
+  {{- if .Values.tracing.otlpEndpoint }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.tracing.otlpEndpoint | quote }}
+  {{- end }}
+  {{- if .Values.tracing.otlpHeaders }}
+  OTEL_EXPORTER_OTLP_HEADERS: {{ .Values.tracing.otlpHeaders | quote }}
+  {{- end }}
+  {{- end }}

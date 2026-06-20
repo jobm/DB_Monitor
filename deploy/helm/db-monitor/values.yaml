@@ -1,0 +1,305 @@
+# Default values for db-monitor.
+# This is a YAML-formatted file.
+
+# -- Override the name of the chart
+nameOverride: ""
+# -- Override the fully qualified app name
+fullnameOverride: ""
+
+# -- Number of replicas
+replicaCount: 2
+
+image:
+  # -- Container image repository
+  repository: ghcr.io/jobm/db-monitor
+  # -- Image pull policy
+  pullPolicy: IfNotPresent
+  # -- Overrides the image tag (defaults to Chart appVersion)
+  tag: ""
+
+# -- Image pull secrets
+imagePullSecrets: []
+# -- Service account configuration
+serviceAccount:
+  create: true
+  name: ""
+
+# -- Pod annotations
+podAnnotations: {}
+# -- Pod labels
+podLabels: {}
+
+# -- Pod security context
+podSecurityContext:
+  fsGroup: 1001
+
+# -- Container security context (non-root, read-only rootfs)
+securityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1001
+  allowPrivilegeEscalation: false
+
+# -- Service configuration
+service:
+  type: ClusterIP
+  port: 8000
+
+# -- Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: db-monitor.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# -- Resource requests and limits
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+# -- Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# -- Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# -- Node selector
+nodeSelector: {}
+
+# -- Tolerations
+tolerations: []
+
+# -- Affinity
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - db-monitor
+          topologyKey: kubernetes.io/hostname
+
+# -- Topology spread constraints
+topologySpreadConstraints: []
+
+# ── Application configuration ────────────────────────────────────────
+
+app:
+  # -- Environment mode: development or production
+  env: production
+  # -- Schema handling: apply, validate, or skip
+  schemaMode: validate
+  # -- Allow one-time admin bootstrap
+  allowBootstrap: false
+
+# ── Database configuration ───────────────────────────────────────────
+
+database:
+  # -- PostgreSQL host
+  host: postgres-monitor
+  # -- PostgreSQL port
+  port: 5432
+  # -- PostgreSQL database name
+  name: postgres
+  # -- PostgreSQL user
+  user: postgres
+  # -- PostgreSQL password (use existingSecret for production)
+  password: ""
+  # -- Name of existing secret containing postgres-url key
+  existingSecret: ""
+  # -- Database pool size
+  poolSize: 10
+  # -- Database max overflow connections
+  maxOverflow: 20
+  # -- Pool timeout in seconds
+  poolTimeoutSeconds: 30
+  # -- Pool recycle interval in seconds
+  poolRecycleSeconds: 1800
+  # -- Validate pooled connections before use
+  poolPrePing: true
+
+# ── Message broker configuration ─────────────────────────────────────
+
+broker:
+  # -- Broker type: kafka or rabbitmq
+  kind: kafka
+
+# -- Kafka configuration (when broker.kind is kafka)
+kafka:
+  # -- Kafka bootstrap servers
+  broker: kafka:9092
+  # -- Comma-separated topic list (overrides manifest-derived topics)
+  topics: ""
+  # -- Consumer group ID
+  consumerGroup: fastapi-consumer-group
+  # -- Security protocol: PLAINTEXT, SSL, or SASL_SSL
+  securityProtocol: PLAINTEXT
+  # -- TLS configuration (use existingSecret for certs)
+  tls:
+    enabled: false
+    existingSecret: ""
+    caFile: ""
+    certFile: ""
+    keyFile: ""
+    password: ""
+
+# -- Multi-cluster configuration (JSON arrays)
+clusters:
+  kafkaClusters: ""
+  brokerClusters: ""
+
+# -- RabbitMQ configuration (when broker.kind is rabbitmq)
+rabbitmq:
+  url: amqp://guest:guest@localhost/
+  queues: ""
+  prefetchCount: 100
+  dlqQueue: db-monitor-dlq
+
+# ── Consumer configuration ───────────────────────────────────────────
+
+consumer:
+  # -- Enable batch processing
+  batchEnabled: true
+  # -- Batch size for consumer writes
+  batchSize: 100
+  # -- Enable bulk write ingestion path
+  bulkWriteEnabled: true
+  # -- Enable DLQ persistence
+  dlqEnabled: true
+  # -- Readiness threshold for stale commits (seconds)
+  readinessMaxCommitAgeSeconds: 300
+  # -- Readiness threshold for lag backlog
+  readinessMaxConsumerLag: 1000
+  # -- Readiness threshold for pending DLQ rows
+  readinessMaxDlqMessages: 0
+
+# ── Auth configuration ───────────────────────────────────────────────
+
+auth:
+  # -- JWT secret (use existingSecret for production)
+  jwtSecret: ""
+  # -- JWT rotation secret
+  jwtSecretNext: ""
+  # -- Name of existing secret containing jwt-secret key
+  existingSecret: ""
+  # -- JWT algorithm
+  jwtAlgorithm: HS256
+  # -- Access token TTL in minutes
+  accessTokenTtlMinutes: 15
+  # -- WebSocket session token TTL in seconds
+  wsSessionTokenTtlSeconds: 60
+  # -- Default API key lifetime in days
+  apiKeyDefaultTtlDays: 90
+
+# ── Ingestion quota configuration ────────────────────────────────────
+
+ingestionQuota:
+  enabled: false
+  windowSeconds: 60
+  sourceDefaultEventsPerWindow: 0
+  sourceQuotas: "{}"
+  tenantDefaultEventsPerWindow: 0
+  tenantQuotas: "{}"
+  mode: throttle
+  maxThrottleSeconds: 5.0
+
+# ── Retention configuration ──────────────────────────────────────────
+
+retention:
+  cleanupEnabled: true
+  cleanupIntervalSeconds: 3600
+  cleanupBatchSize: 1000
+  cleanupMaxBatchesPerTable: 10
+  archiveBeforeDelete: false
+  archiveDir: /tmp/retention-archive
+  eventRetentionDays: 90
+  columnChangesRetentionDays: 90
+  deadLetterRetentionDays: 30
+  apiAuditLogRetentionDays: 30
+
+# ── WebSocket configuration ──────────────────────────────────────────
+
+websocket:
+  backplaneEnabled: true
+  backplaneChannel: db_monitor_ws
+
+# ── Webhook configuration ────────────────────────────────────────────
+
+webhooks:
+  urls: ""
+  timeoutSeconds: 10
+  maxRetries: 3
+  retryBackoffSeconds: 2.0
+  circuitBreakerThreshold: 5
+  circuitBreakerRecoverySeconds: 60
+  sharedSecret: ""
+
+# ── Tracing configuration ────────────────────────────────────────────
+
+tracing:
+  enabled: false
+  exporter: console
+  otlpEndpoint: ""
+  otlpHeaders: ""
+
+# ── Persistence ──────────────────────────────────────────────────────
+
+persistence:
+  enabled: true
+  # -- Storage class for retention archive PVC
+  storageClass: ""
+  # -- Access mode
+  accessMode: ReadWriteOnce
+  # -- Size of archive volume
+  size: 10Gi
+
+# ── Monitoring ───────────────────────────────────────────────────────
+
+monitoring:
+  # -- Create a Prometheus ServiceMonitor
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+# ── Network policies ─────────────────────────────────────────────────
+
+networkPolicy:
+  enabled: false
+  # -- Additional egress rules (broker and database egress are auto-generated)
+  extraEgress: []
+
+# ── Extra environment variables ──────────────────────────────────────
+
+extraEnv: []
+# - name: CUSTOM_EVENT_PROCESSORS
+#   value: "my_project.processors:add_summary"
+
+# -- Extra volumes
+extraVolumes: []
+# -- Extra volume mounts
+extraVolumeMounts: []

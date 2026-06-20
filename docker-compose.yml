@@ -1,13 +1,13 @@
 services:
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
+    image: docker.io/confluentinc/cp-zookeeper:7.5.0
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     ports:
       - "2181:2181"
 
   kafka:
-    image: confluentinc/cp-kafka:7.5.0
+    image: docker.io/confluentinc/cp-kafka:7.5.0
     depends_on:
       - zookeeper
     environment:
@@ -21,7 +21,7 @@ services:
       - "9093:9093"
 
   kafka-ui:
-    image: provectuslabs/kafka-ui:latest
+    image: docker.io/provectuslabs/kafka-ui:latest
     ports:
       - "8080:8080"
     environment:
@@ -31,7 +31,7 @@ services:
       - kafka
 
   postgres-order:
-    image: postgres:15
+    image: docker.io/postgres:15
     profiles:
       - sandbox
     environment:
@@ -45,7 +45,7 @@ services:
       - "5434:5432"
 
   postgres-catalog:
-    image: postgres:15
+    image: docker.io/postgres:15
     profiles:
       - sandbox
     environment:
@@ -59,7 +59,7 @@ services:
       - "5435:5432"
 
   postgres-shipping:
-    image: postgres:15
+    image: docker.io/postgres:15
     profiles:
       - sandbox
     environment:
@@ -73,7 +73,7 @@ services:
       - "5436:5432"
 
   postgres-monitor:
-    image: postgres:15
+    image: docker.io/postgres:15
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
@@ -82,7 +82,7 @@ services:
       - "5437:5432"
 
   connect:
-    image: debezium/connect:2.5
+    image: docker.io/debezium/connect:2.5
     profiles:
       - sandbox
     ports:
@@ -154,7 +154,7 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
-    stop_grace_period: 45s
+    stop_grace_period: 60s
 
   connector-registrar:
     build:
@@ -172,7 +172,7 @@ services:
       - ./connectors:/connectors:ro
 
   prometheus:
-    image: prom/prometheus:latest
+    image: docker.io/prom/prometheus:latest
     restart: unless-stopped
     volumes:
       - ./monitoring/prometheus/:/etc/prometheus/
@@ -187,7 +187,7 @@ services:
       - monitor-server
 
   alertmanager:
-    image: prom/alertmanager:latest
+    image: docker.io/prom/alertmanager:latest
     restart: unless-stopped
     volumes:
       - ./monitoring/alertmanager/:/etc/alertmanager/
@@ -198,7 +198,7 @@ services:
       - "9094:9093"
 
   grafana:
-    image: grafana/grafana:latest
+    image: docker.io/grafana/grafana:latest
     restart: unless-stopped
     ports:
       - "3000:3000"

@@ -16,6 +16,7 @@ Adopters can integrate DB Monitor as an audit-log platform around their own data
 - Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 - Recovery runbook: [docs/runbooks/recovery-and-validation.md](docs/runbooks/recovery-and-validation.md)
 - Alerts runbook: [docs/runbooks/alerts-and-thresholds.md](docs/runbooks/alerts-and-thresholds.md)
+- OS release readiness assessment: [docs/os-release-readiness-assessment.md](docs/os-release-readiness-assessment.md)
 
 ## Architecture
 

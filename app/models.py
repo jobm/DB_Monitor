@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
@@ -123,16 +124,29 @@ class KafkaEvent(Base):
         Index("ix_events_type_time", "event_type", "event_time"),
         Index("ix_events_source_table_time", "source_table_id", "event_time"),
         Index(
+            "ix_events_cursor_service_type_time",
+            "service_name",
+            "event_type",
+            "capture_time",
+            "id",
+        ),
+        Index(
+            "ix_events_cursor_source_table_time",
+            "source_table_id",
+            "capture_time",
+            "id",
+        ),
+        Index(
             "ix_events_row_identity",
             "row_identity",
             postgresql_using="gin",
         ),
-        Index(
-            "ux_events_kafka_position",
+        UniqueConstraint(
             "kafka_topic",
             "kafka_partition",
             "kafka_offset",
-            unique=True,
+            "capture_time",
+            name="ux_events_kafka_position",
         ),
     )
 
@@ -254,6 +268,18 @@ class ColumnChange(Base):
             "changed_at",
         ),
         Index(
+            "ix_changes_cursor_table_time",
+            "table_id",
+            "changed_at",
+            "id",
+        ),
+        Index(
+            "ix_changes_cursor_column_time",
+            "column_id",
+            "changed_at",
+            "id",
+        ),
+        Index(
             "ix_changes_row_identity",
             "row_identity",
             postgresql_using="gin",
@@ -316,10 +342,6 @@ class CustomerProvisionJob(Base):
         DateTime(timezone=True),
         server_default=func.now(),
         onupdate=func.now(),
-    )
-
-    __table_args__ = (
-        Index("ix_customer_provision_jobs_customer_id", "customer_id"),
     )
 
 
@@ -404,8 +426,4 @@ class ApiAuditLogSpill(Base):
         DateTime(timezone=True),
         nullable=True,
         index=True,
-    )
-
-    __table_args__ = (
-        Index("ix_api_audit_log_spill_spilled_at", "spilled_at"),
     )

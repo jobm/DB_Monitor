@@ -27,6 +27,9 @@ jobs:
         working-directory: app
         run: uv sync --group dev --frozen
 
+      - name: Validate .goosemem coverage
+        run: bash scripts/validate_goosemem_coverage.sh
+
       - name: Run lint gate (ruff)
         run: make monitor-lint
 
@@ -60,12 +63,17 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Install app dependencies
-        working-directory: app
+      - name: Install dependencies (root project installs db-monitor + deps)
         run: uv sync --group dev --frozen
 
       - name: Start sandbox and core services
-        run: docker compose --profile sandbox up -d
+        run: |
+          # Only start services needed for integration tests.
+          # Excludes monitor-server (port 8000 conflicts with the
+          # locally-started app) and the monitoring stack (prometheus,
+          # alertmanager, grafana, kafka-ui) which are not required.
+          docker compose --profile sandbox up -d \
+            connect connector-registrar
 
       - name: Wait for databases and brokers to boot
         run: |
@@ -124,14 +132,32 @@ jobs:
           PY
           docker compose ps
 
+      - name: Verify port 8000 is free
+        run: python scripts/check_port_free.py 8000
+
       - name: Start app locally against live infrastructure
-        working-directory: app
         env:
           POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5437/postgres
           KAFKA_BROKER: localhost:9093
+          JWT_SECRET: dev-insecure-secret-change-me-please-rotate
+          JWT_SECRET_NEXT: dev-insecure-secret-change-me-please-rotate
         run: |
-          nohup PYTHONPATH=../src:. uv run python -m db_monitor.start_monitor > ../app-integration.log 2>&1 &
-          echo $! > ../app-integration.pid
+          ls -la .venv/bin/python 2>/dev/null || echo "No .venv found"
+          uv run python -c "import sys; print(sys.executable)" 2>&1 || echo "uv run failed"
+          PYTHONPATH=src:. nohup uv run python -m db_monitor.start_monitor > app-integration.log 2>&1 &
+          echo $! > app-integration.pid
+          sleep 3
+          echo "--- app-integration.log (last 30 lines) ---"
+          tail -30 app-integration.log
+          # Verify the app process is still alive after startup.
+          APP_PID=$(cat app-integration.pid)
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            echo "App process $APP_PID is alive."
+          else
+            echo "ERROR: App process $APP_PID exited prematurely."
+            cat app-integration.log
+            exit 1
+          fi
 
       - name: Wait for app readiness
         run: |
@@ -157,6 +183,13 @@ jobs:
           raise SystemExit(f"TIMED OUT waiting for {url}")
           PY
 
+      - name: Smoke-test health, liveness, and metrics endpoints
+        run: |
+          python scripts/smoke_test_endpoints.py \
+            http://localhost:8000 \
+            /health /livez \
+            --text-endpoints /metrics
+
       - name: Seed sandbox admin key
         working-directory: app
         env:
@@ -180,17 +213,22 @@ jobs:
           DB_MONITOR_ADMIN_API_KEY: ${{ env.DB_MONITOR_ADMIN_API_KEY }}
         run: make monitor-test-smoke
 
-      - name: Show app log on failure
-        if: failure()
+      - name: Show app startup log
+        if: always()
         run: |
-          test -f app-integration.log && cat app-integration.log || true
+          if [ -f app-integration.log ]; then
+            echo "--- app-integration.log (last 80 lines) ---"
+            tail -80 app-integration.log
+          else
+            echo "app-integration.log not found"
+          fi
 
-      - name: Show compose status on failure
-        if: failure()
+      - name: Show compose status
+        if: always()
         run: docker compose ps
 
-      - name: Show compose logs on failure
-        if: failure()
+      - name: Show compose logs
+        if: always()
         run: docker compose logs --tail=200
 
       - name: Stop local app

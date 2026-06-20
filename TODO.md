@@ -72,6 +72,118 @@ These are not committed backlog items yet.
 
 ## Active Backlog
 
+### OS Release Critical Path (Staff Engineer Assessment — 2026-06-02)
+
+Full analysis: `docs/os-release-readiness-assessment.md`
+
+These seven items are the **minimum must-fix before this project can be released
+as an OS tool that a startup can deploy to monitor 100+ databases**. They are
+ordered by risk/impact.
+
+#### 🔴 Gap 1: Bulk-Write Ingestion Path
+
+The consumer pipeline executes per-event DB writes even in batch mode. At 5,000+
+events/sec (realistic for 100 source DBs), this saturates the connection pool.
+
+- [x] Verify `INGESTION_BULK_WRITE_ENABLED` uses true multi-row
+	`INSERT … VALUES (...), (...)` with a single round-trip per batch
+- [x] Add batch-level schema discovery: one `SELECT … WHERE (svc, db, table) IN
+	(...)` instead of per-event lookups
+- [x] Batch checkpoint updates: commit offsets after N batches, not per-event
+- [ ] Benchmark ingestion throughput at 100/500/1000/5000 events/sec and publish
+	results
+	Done when `INGESTION_BULK_WRITE_ENABLED=true` with `BATCH_SIZE=100` results
+	in a single `INSERT` per batch for events and a single schema-discovery
+	query, benchmarked at ≥ 5000 events/sec sustained with < 500ms p95 DB write
+	latency.
+
+#### 🔴 Gap 2: Table Partitioning + Partition-Aware Retention
+
+Core tables are plain Postgres tables. At billions of rows, `DELETE`-based
+retention causes table bloat and autovacuum storms.
+
+- [x] Add time-based range partitioning on `events` (daily or weekly partitions)
+- [x] Add time-based range partitioning on `column_changes`
+- [x] Migrate retention from `DELETE … WHERE capture_time < …` to
+	`DROP TABLE` / `DETACH PARTITION`
+- [x] Add migration to create partitioned table structure with a default
+	partition
+	Done when retention cleanup of 1M+ rows completes in < 5 seconds via
+	partition DROP/DETACH, with no table bloat or autovacuum pressure, and the
+	migration creates partitioned tables automatically.
+
+#### 🔴 Gap 3: Cursor/Keyset Pagination
+
+`/events` and `/changes` use `LIMIT/OFFSET` plus total `COUNT(*)`. At hundreds
+of millions of rows, deep offsets and full scans are unusable.
+
+- [x] Implement keyset/cursor pagination on `/events` using
+	`(capture_time, event_id)` tuples
+- [x] Implement keyset/cursor pagination on `/changes` using
+	`(changed_at, id)` tuples
+- [x] Make total counts optional (`?include_total=false`) or use Postgres
+	estimates for approximate counts
+- [x] Add composite indexes for common cursor + filter combinations
+	Done via cursor-optimized indexes on `events` and `column_changes`, with
+	migration support for existing deployments.
+
+#### 🔴 Gap 4: Production Deployment Artifacts (Helm Chart + Terraform)
+
+No Helm chart, Terraform module, or Kustomize overlays exist. A startup must
+write all infrastructure from scratch.
+
+- [x] Ship a Helm chart (`deploy/helm/db-monitor/`) with configurable deployment,
+	resources, HPA, secrets, ServiceMonitor, NetworkPolicy, and security
+	contexts
+- [x] Ship a Terraform module (`deploy/terraform/`) for companion infrastructure
+	(Postgres server, Kafka topic ACLs, monitoring)
+- [x] Document the Helm install flow in `docs/deployment.md`
+	Done when `helm install db-monitor ./deploy/helm/db-monitor` with a values
+	file results in a running, healthy deployment, and the Terraform module
+	outputs a connection URL compatible with the Helm chart.
+
+#### 🔴 Gap 5: Idempotent Offset Handling (Crash Safety)
+
+A crash between DB write and broker commit silently creates duplicate events.
+
+- [x] Add `(topic, partition, offset)` unique constraint or dedup key on
+	`events`
+- [x] Use `INSERT … ON CONFLICT (topic, partition, offset) DO NOTHING` for
+	idempotent writes
+- [x] Add Prometheus counter `events_duplicate_skipped_total` for detected
+	duplicates
+	Done when kill -9 of the consumer mid-batch results in zero duplicate rows
+	in `events` after restart, and duplicates are counted in metrics.
+
+#### 🔴 Gap 6: Concurrent Migration Locking
+
+Multiple replicas starting simultaneously race to apply migrations with no
+locking, risking schema corruption.
+
+- [x] Add PostgreSQL advisory lock (`pg_try_advisory_lock`) in the migration
+	runner
+- [x] Log contention clearly (winner vs waiter)
+- [x] Add integration test simulating concurrent migration attempts
+	Done when two concurrent `db-monitor-migrate apply` invocations result in one
+	winner and one clean "lock held by another process" exit, validated by
+	integration test.
+
+#### 🟡 Gap 7: Scale Validation at Target Throughput
+
+No automated test validates the system at 100-DB scale.
+
+- [x] Build a parameterized scale test that provisions N source DBs with
+	configurable event rates
+- [x] Measure and publish p50/p95/p99 for ingestion latency, API latency, and
+	commit lag at 100/500/1000/5000 events/sec
+- [x] Add `make monitor-test-scale-target` target with published baseline
+	results
+	Done when a repeatable scale test provisions 10 source DBs, generates 500
+	events/sec sustained for 5 minutes, and validates p95 ingestion < 500ms, p95
+	API < 200ms, zero DLQ events. Results recorded for release notes.
+
+---
+
 ### Pre-V1 Launch Execution (Shared Control Plane + Isolated Cells)
 
 #### Delivery Backlog

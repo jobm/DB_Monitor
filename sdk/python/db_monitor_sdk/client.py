@@ -51,7 +51,9 @@ class DBMonitorClient:
         limit: int = 100,
         service_name: str | None = None,
         operation: str | None = None,
+        cursor: dict[str, Any] | None = None,
         cursor_id: int | None = None,
+        cursor_time: str | None = None,
     ) -> dict[str, Any]:
         """Return recent events with optional filters."""
         query = {"limit": limit}
@@ -59,8 +61,12 @@ class DBMonitorClient:
             query["service_name"] = service_name
         if operation:
             query["operation"] = operation
+        if cursor is not None:
+            query["cursor"] = json.dumps(cursor, separators=(",", ":"))
         if cursor_id is not None:
             query["cursor_id"] = cursor_id
+        if cursor_time is not None:
+            query["cursor_time"] = cursor_time
         return self._request_json("/events", query=query)
 
     def get_changes(
@@ -71,6 +77,9 @@ class DBMonitorClient:
         row_identity: dict[str, Any] | None = None,
         limit: int = 100,
         offset: int = 0,
+        cursor: dict[str, Any] | None = None,
+        cursor_id: int | None = None,
+        cursor_time: str | None = None,
     ) -> dict[str, Any]:
         """Return recent column changes for one table or record."""
         query: dict[str, Any] = {
@@ -82,6 +91,12 @@ class DBMonitorClient:
             query["service_name"] = service_name
         if row_identity is not None:
             query["row_identity"] = json.dumps(row_identity)
+        if cursor is not None:
+            query["cursor"] = json.dumps(cursor, separators=(",", ":"))
+        if cursor_id is not None:
+            query["cursor_id"] = cursor_id
+        if cursor_time is not None:
+            query["cursor_time"] = cursor_time
         return self._request_json("/changes", query=query)
 
     def get_consumer_checkpoints(self) -> dict[str, Any]:

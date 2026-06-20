@@ -1,0 +1,13 @@
+{
+  "passed": false,
+  "events_ingested": 0,
+  "events_per_second": 0.0,
+  "p50_api_latency_ms": 0.0,
+  "p95_api_latency_ms": 0.0,
+  "p99_api_latency_ms": 0.0,
+  "dlq_count": 0,
+  "errors": [
+    "API not ready"
+  ],
+  "elapsed_seconds": 0.0
+}
