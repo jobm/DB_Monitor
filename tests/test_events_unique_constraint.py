@@ -61,25 +61,35 @@ async def test_pg_constraint_is_unique_type() -> None:
     """After migration 0015 the events table must have a unique
     CONSTRAINT (contype='u') rather than just a unique INDEX.
     """
-    from extensions import AsyncSessionLocal
     from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
 
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            text(
-                "SELECT contype FROM pg_constraint "
-                "WHERE conname = 'ux_events_kafka_position' "
-                "AND conrelid = 'events'::regclass"
+    from core.config import POSTGRES_URL
+
+    engine = create_async_engine(POSTGRES_URL)
+    try:
+        async with engine.connect() as conn:
+            result = await conn.execute(
+                text(
+                    "SELECT contype FROM pg_constraint "
+                    "WHERE conname = 'ux_events_kafka_position' "
+                    "AND conrelid = 'events'::regclass"
+                )
             )
-        )
-        row = result.fetchone()
+            row = result.fetchone()
+    finally:
+        await engine.dispose()
 
     assert row is not None, (
         "No constraint named 'ux_events_kafka_position' found on "
         "the events table. Migration 0015 may not have run."
     )
-    assert row[0] == "u", (
-        f"ux_events_kafka_position has contype='{row[0]}' but "
+    # asyncpg returns bytes for PostgreSQL 'char' columns.
+    contype = row[0]
+    if isinstance(contype, bytes):
+        contype = contype.decode()
+    assert contype == "u", (
+        f"ux_events_kafka_position has contype='{contype}' but "
         "expected 'u' (unique constraint). The table likely has a "
         "unique INDEX instead of a unique CONSTRAINT, which will "
         "cause ON CONFLICT to fail on the partitioned table."
@@ -98,16 +108,19 @@ async def test_on_conflict_insert_succeeds_on_partitioned_events() -> None:
     """
     from datetime import datetime, timezone
 
-    from extensions import AsyncSessionLocal
     from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from core.config import POSTGRES_URL
 
     now = datetime.now(timezone.utc)
     kafka_offset = 999_999_999
 
-    async with AsyncSessionLocal() as session:
-        async with session.begin():
+    engine = create_async_engine(POSTGRES_URL)
+    try:
+        async with engine.begin() as conn:
             # First insert — should succeed.
-            await session.execute(
+            await conn.execute(
                 text(
                     "INSERT INTO events "
                     "(event_type, event_time, service_name, "
@@ -125,7 +138,7 @@ async def test_on_conflict_insert_succeeds_on_partitioned_events() -> None:
 
             # Second insert with same key — ON CONFLICT DO NOTHING
             # should silently skip it (rowcount=0).
-            result = await session.execute(
+            result = await conn.execute(
                 text(
                     "INSERT INTO events "
                     "(event_type, event_time, service_name, "
@@ -141,6 +154,8 @@ async def test_on_conflict_insert_succeeds_on_partitioned_events() -> None:
                 {"event_time": now, "offset": kafka_offset, "capture_time": now},
             )
             rowcount = result.rowcount
+    finally:
+        await engine.dispose()
 
     assert rowcount == 0, (
         f"ON CONFLICT DO NOTHING did not suppress duplicate: "
