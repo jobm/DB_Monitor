@@ -526,6 +526,19 @@ async def _apply_event_partitioning(
         )
     )
     if partitioned.fetchone() is None:
+        # Drop the UNIQUE CONSTRAINT that migration 0001 created via
+        # Base.metadata.create_all (UniqueConstraint on KafkaEvent).
+        # Constraint names are schema-scoped, so we must drop it before
+        # the table rename to avoid a name collision when we ADD
+        # CONSTRAINT with the same name on the new partitioned table.
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE events
+                DROP CONSTRAINT IF EXISTS ux_events_kafka_position
+                """
+            )
+        )
         await connection.execute(
             text(
                 """
@@ -555,16 +568,12 @@ async def _apply_event_partitioning(
                 """
             )
         )
-        # Recreate indexes (partition key required in unique indexes)
-        await connection.execute(
-            text(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_events_kafka_position
-                ON events (kafka_topic, kafka_partition, kafka_offset,
-                           capture_time)
-                """
-            )
-        )
+        # NOTE: We intentionally do NOT add the UNIQUE CONSTRAINT here.
+        # Migration 0015 (_apply_events_unique_constraint) handles adding
+        # the constraint to the partitioned table.  Keeping it in 0013
+        # caused DuplicateTableError on fresh databases because the
+        # constraint name is schema-scoped and may collide with the
+        # backing index from Base.metadata.create_all.
         await connection.execute(
             text(
                 """
@@ -734,6 +743,66 @@ async def _apply_ingestion_quota_windows(
         await connection.execute(text(statement))
 
 
+async def _apply_events_unique_constraint(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Replace unique index with unique constraint on partitioned events.
+
+    PostgreSQL requires a UNIQUE CONSTRAINT (not merely a unique index)
+    for INSERT ... ON CONFLICT to work on partitioned tables.  Databases
+    that ran migration 0013 before this fix have a unique *index*
+    instead of a constraint, which causes ON CONFLICT to fail at
+    runtime with ``InvalidColumnReferenceError``.
+    """
+    del session_factory
+    # Check whether the table is actually partitioned.
+    partitioned = await connection.execute(
+        text(
+            """
+            SELECT 1 FROM pg_partitioned_table
+            WHERE partrelid = 'events'::regclass
+            """
+        )
+    )
+    if partitioned.fetchone() is None:
+        # Not partitioned yet -- nothing to do here.
+        return
+
+    # Check if a UNIQUE CONSTRAINT (not just an index) already exists.
+    constraint_exists = await connection.execute(
+        text(
+            """
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'ux_events_kafka_position'
+              AND conrelid = 'events'::regclass
+            """
+        )
+    )
+    if constraint_exists.fetchone() is not None:
+        return  # constraint already present
+
+    # Drop the existing unique index so we can recreate it as a
+    # constraint with the same name.
+    await connection.execute(
+        text(
+            """
+            DROP INDEX IF EXISTS ux_events_kafka_position
+            """
+        )
+    )
+    await connection.execute(
+        text(
+            """
+            ALTER TABLE events
+            ADD CONSTRAINT ux_events_kafka_position
+            UNIQUE (kafka_topic, kafka_partition, kafka_offset,
+                    capture_time)
+            """
+        )
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version="0001_base_schema",
@@ -809,6 +878,14 @@ MIGRATIONS: tuple[Migration, ...] = (
         version="0014_cursor_pagination_indexes",
         description="Add cursor-optimized composite indexes for large scans",
         apply=_apply_cursor_pagination_indexes,
+    ),
+    Migration(
+        version="0015_events_unique_constraint",
+        description=(
+            "Replace unique index with unique constraint on events "
+            "so ON CONFLICT works on the partitioned table"
+        ),
+        apply=_apply_events_unique_constraint,
     ),
 )
 

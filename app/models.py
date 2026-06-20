@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
@@ -140,13 +141,12 @@ class KafkaEvent(Base):
             "row_identity",
             postgresql_using="gin",
         ),
-        Index(
-            "ux_events_kafka_position",
+        UniqueConstraint(
             "kafka_topic",
             "kafka_partition",
             "kafka_offset",
             "capture_time",
-            unique=True,
+            name="ux_events_kafka_position",
         ),
     )
 
