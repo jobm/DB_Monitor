@@ -8,8 +8,8 @@ import pytest
 
 import consumer_service
 import message_brokers
-from ingestion_quota import QuotaDecision
-from models import KafkaEvent
+from db_monitor.ingestion.quota import QuotaDecision
+from db_monitor.models import KafkaEvent
 
 
 class FakeTimerMetric:

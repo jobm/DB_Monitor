@@ -8,7 +8,7 @@ model definition and SQL-level behaviour so the bug does not regress.
 from __future__ import annotations
 
 import pytest
-from models import KafkaEvent
+from db_monitor.models import KafkaEvent
 from sqlalchemy import Index, UniqueConstraint
 
 

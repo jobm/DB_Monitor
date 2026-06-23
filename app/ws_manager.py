@@ -13,7 +13,7 @@ from core.db import AsyncSessionLocal, engine
 from core.models import KafkaEvent
 from fastapi import WebSocket
 from sqlalchemy import select, text
-from tracing import start_span
+from db_monitor.tracing import start_span
 
 logger = logging.getLogger(__name__)
 

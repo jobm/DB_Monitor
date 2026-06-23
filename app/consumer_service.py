@@ -63,7 +63,7 @@ from schema_discovery import SchemaDiscovery, extract_operation
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
-from tracing import start_span
+from db_monitor.tracing import start_span
 from webhooks import webhook_notifier
 from ws_manager import ws_manager
 

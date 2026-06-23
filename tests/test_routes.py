@@ -10,7 +10,7 @@ from fastapi import HTTPException
 import routes.auth as routes_auth
 import routes.data as routes_data
 import routes.ops as routes_ops
-from models import (
+from db_monitor.models import (
     ApiKey,
     CustomerJWTSecretState,
     CustomerLifecycleState,
@@ -109,11 +109,13 @@ class FakeWriteSession:
 
     def add(self, model):
         self.added.append(model)
-        if isinstance(model, CustomerJWTSecretState):
+        # Use attribute-based detection instead of isinstance to avoid
+        # import-path mismatches between core.models and db_monitor.models.
+        if hasattr(model, "customer_id") and hasattr(model, "state"):
             self.customer_jwt_records[model.customer_id] = model
-        if isinstance(model, CustomerLifecycleState):
+        if hasattr(model, "customer_id") and hasattr(model, "lifecycle_state"):
             self.customer_lifecycle_records[model.customer_id] = model
-        if isinstance(model, CustomerProvisionJob):
+        if hasattr(model, "job_id") and hasattr(model, "customer_id"):
             self.customer_provision_jobs[model.job_id] = model
 
     async def flush(self):

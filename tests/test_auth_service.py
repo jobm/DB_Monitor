@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-import auth
-from models import ApiKey
+from db_monitor import auth as auth_mod
+from db_monitor.models import ApiKey
 
 
 def test_is_api_key_usable_rejects_expired_key() -> None:
@@ -17,7 +17,7 @@ def test_is_api_key_usable_rejects_expired_key() -> None:
         expires_at=datetime.now(timezone.utc) - timedelta(days=1),
     )
 
-    assert auth.is_api_key_usable(expired_key) is False
+    assert auth_mod.is_api_key_usable(expired_key) is False
 
 
 def test_is_api_key_usable_rejects_revoked_key() -> None:
@@ -29,13 +29,13 @@ def test_is_api_key_usable_rejects_revoked_key() -> None:
         revoked_at=datetime.now(timezone.utc),
     )
 
-    assert auth.is_api_key_usable(revoked_key) is False
+    assert auth_mod.is_api_key_usable(revoked_key) is False
 
 
 @pytest.mark.anyio
 async def test_require_valid_api_key_reports_remediation_steps() -> None:
-    with pytest.raises(auth.HTTPException) as exc_info:
-        await auth.require_valid_api_key(api_key_record=None)
+    with pytest.raises(auth_mod.HTTPException) as exc_info:
+        await auth_mod.require_valid_api_key(api_key_record=None)
 
     assert exc_info.value.status_code == 401
     assert "POST /auth/token" in exc_info.value.detail
@@ -50,8 +50,8 @@ async def test_require_admin_role_reports_expected_credential() -> None:
         is_active=True,
     )
 
-    with pytest.raises(auth.HTTPException) as exc_info:
-        await auth.require_admin_role(api_key_record=viewer_key)
+    with pytest.raises(auth_mod.HTTPException) as exc_info:
+        await auth_mod.require_admin_role(api_key_record=viewer_key)
 
     assert exc_info.value.status_code == 403
     assert "Admin role required" in exc_info.value.detail
@@ -66,8 +66,8 @@ async def test_require_viewer_role_reports_expected_credential() -> None:
         is_active=True,
     )
 
-    with pytest.raises(auth.HTTPException) as exc_info:
-        await auth.require_viewer_role(api_key_record=unknown_role_key)
+    with pytest.raises(auth_mod.HTTPException) as exc_info:
+        await auth_mod.require_viewer_role(api_key_record=unknown_role_key)
 
     assert exc_info.value.status_code == 403
     assert "viewer or admin credential" in exc_info.value.detail

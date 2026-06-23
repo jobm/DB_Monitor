@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-import schema_discovery as schema_discovery_module
-from models import KafkaEvent
-from schema_discovery import SchemaDiscovery
+from db_monitor.ingestion import schema as schema_discovery_module
+from db_monitor.models import KafkaEvent
+from db_monitor.ingestion.schema import SchemaDiscovery
 
 
 def test_extract_column_definitions_falls_back_to_payload_rows():

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from app.event_parser import parse_event_payload
+from db_monitor.ingestion.pipeline import parse_event_payload
 
 
 def test_parse_valid_json_with_explicit_event_time():

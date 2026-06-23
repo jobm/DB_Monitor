@@ -3,26 +3,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 from datetime import datetime, timezone
-from pathlib import Path
-import sys
 
 from sqlalchemy import select
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-APP_ROOT = REPO_ROOT / "app"
-
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-if str(APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(APP_ROOT))
-
-from auth import (  # noqa: E402
+from db_monitor.auth import (
     build_api_key_expiration,
     generate_new_api_key,
     get_api_key_hash,
 )
-from extensions import AsyncSessionLocal  # noqa: E402
-from models import ApiKey  # noqa: E402
+from db_monitor.extensions import AsyncSessionLocal
+from db_monitor.models import ApiKey
 
 
 async def create_admin_api_key(owner_name: str, ttl_days: int) -> str:

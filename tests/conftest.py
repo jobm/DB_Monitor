@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from ingestion_quota import IngestionQuotaLimiter
-from models import KafkaEvent
+from db_monitor.ingestion.quota import IngestionQuotaLimiter
+from db_monitor.models import KafkaEvent
 
 
 # ── CI-safe timing constants for quota throttling tests ─────────────────
@@ -149,6 +149,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = REPO_ROOT / "app"
 SRC_ROOT = REPO_ROOT / "src"
 
+# Keep sys.path manipulation for legacy app/ modules that haven't been
+# migrated to src/db_monitor/ yet. Once all modules are moved, remove these.
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 if str(SRC_ROOT) not in sys.path:

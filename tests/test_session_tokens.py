@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import auth
+from db_monitor import auth as auth_mod
 import pytest
 
 import routes.auth as routes_auth
-from models import ApiKey
+from db_monitor.models import ApiKey
 
 
 def _api_key() -> ApiKey:
@@ -22,9 +22,9 @@ def _api_key() -> ApiKey:
 
 def test_access_token_round_trip() -> None:
     api_key = _api_key()
-    token, _expires_at = auth.build_access_token(api_key)
+    token, _expires_at = auth_mod.build_access_token(api_key)
 
-    claims = auth.decode_session_token(token, expected_token_type="access")
+    claims = auth_mod.decode_session_token(token, expected_token_type="access")
 
     assert claims is not None
     assert claims["sub"] == str(api_key.id)
@@ -33,14 +33,16 @@ def test_access_token_round_trip() -> None:
 
 def test_ws_token_rejects_wrong_token_type() -> None:
     api_key = _api_key()
-    token, _expires_at = auth.build_access_token(api_key)
+    token, _expires_at = auth_mod.build_access_token(api_key)
 
-    claims = auth.decode_session_token(token, expected_token_type="ws")
+    claims = auth_mod.decode_session_token(token, expected_token_type="ws")
 
     assert claims is None
 
 
 def test_decode_session_token_accepts_next_secret(monkeypatch) -> None:
+    import auth as _legacy_auth
+
     issued_at = datetime.now(timezone.utc)
     payload = {
         "sub": "7",
@@ -52,22 +54,22 @@ def test_decode_session_token_accepts_next_secret(monkeypatch) -> None:
     }
 
     monkeypatch.setattr(
-        auth,
+        _legacy_auth,
         "JWT_SECRET",
         "current-secret-12345678901234567890",
     )
     monkeypatch.setattr(
-        auth,
+        _legacy_auth,
         "JWT_SECRET_NEXT",
         "next-secret-123456789012345678901234",
     )
-    token = auth.jwt.encode(
+    token = auth_mod.jwt.encode(
         payload,
-        auth.JWT_SECRET_NEXT,
-        algorithm=auth.JWT_ALGORITHM,
+        auth_mod.JWT_SECRET_NEXT,
+        algorithm=auth_mod.JWT_ALGORITHM,
     )
 
-    claims = auth.decode_session_token(token, expected_token_type="access")
+    claims = auth_mod.decode_session_token(token, expected_token_type="access")
 
     assert claims is not None
     assert claims["sub"] == "7"
@@ -80,7 +82,7 @@ async def test_token_exchange_uses_authenticated_api_key() -> None:
     assert response["token_type"] == "bearer"
     assert response["role"] == "admin"
     assert response["owner_name"] == "ops"
-    assert auth.decode_session_token(
+    assert auth_mod.decode_session_token(
         response["access_token"],
         expected_token_type="access",
     ) is not None
@@ -91,7 +93,7 @@ async def test_ws_token_exchange_returns_ws_session_token() -> None:
     response = await routes_auth.create_websocket_session_token(_api_key())
 
     assert response["role"] == "admin"
-    assert auth.decode_session_token(
+    assert auth_mod.decode_session_token(
         response["session_token"],
         expected_token_type="ws",
     ) is not None

@@ -5,8 +5,8 @@ from types import ModuleType
 
 import pytest
 
-import event_pipeline as event_pipeline_module
-from models import KafkaEvent
+from db_monitor.ingestion import pipeline as event_pipeline_module
+from db_monitor.models import KafkaEvent
 
 
 def _make_event(event_data: dict) -> KafkaEvent:
