@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from migrations import apply_migrations
+from db_monitor.core.migrations import apply_migrations
 
 
 async def _make_fake_engine():

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from source_metadata import extract_source_coordinates
+from db_monitor.ingestion.source_metadata import extract_source_coordinates
 
 
 def test_extract_source_coordinates_supports_schema_qualified_tables() -> None:

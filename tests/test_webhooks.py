@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-import webhooks
-from webhooks import WebhookNotifier
+from db_monitor import webhooks
+from db_monitor.webhooks import WebhookNotifier
 
 
 @pytest.mark.anyio
