@@ -1,5 +1,13 @@
 # DB Monitor Principal Readiness Review (2026-05-24)
 
+> **Status update (2026-06-23):** The recommended Phase 1 improvements
+> (cursor pagination, retention policies, ingestion rate limits) and Phase 2
+> improvements (bulk insert paths, per-source quotas) have been implemented.
+> Helm chart and Terraform modules are shipped. The remaining work aligns with
+> Phase 3 (storage scaling, SDK hardening, SLO dashboards). See
+> `docs/os-release-readiness-assessment.md` for the detailed implementation
+> status and `TODO.md` for the active backlog.
+
 ## Scope
 
 This review evaluates readiness for serving approximately 60 startups, each

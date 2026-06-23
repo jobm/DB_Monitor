@@ -45,7 +45,11 @@ The bundled docker-compose stack provides three PostgreSQL applications to simul
 
 ---
 
-## Main Application Modules
+> **Note on module layout:** The canonical implementation lives under `app/`.
+> A parallel tree at `src/db_monitor/` provides compatibility wrappers that
+> delegate to `app/` at runtime (via `legacy_runtime.py`). The
+> `pyproject.toml` builds from `src/db_monitor/`, but the real logic is in
+> `app/`. See `docs/module-inventory.md` for the consolidation plan.
 
 | Module | Role |
 | --- | --- |

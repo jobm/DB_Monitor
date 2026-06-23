@@ -1,9 +1,28 @@
 # DB Monitor — OS Release Readiness Assessment
 
-**Date:** 2026-06-02
+**Date:** 2026-06-02 (last revised: 2026-06-23)
 **Perspective:** Staff Software Engineer
 **Target:** Open-source release as a tool/framework/library that a startup can
 deploy to monitor 100+ databases with correct data capture.
+
+---
+
+## Implementation Status Update (2026-06-23)
+
+Since this assessment was written, all seven critical gaps have been **closed**:
+
+| Gap | Status | Evidence |
+|-----|--------|----------|
+| **#1 Bulk-write ingestion** | ✅ Complete | `INGESTION_BULK_WRITE_ENABLED=true` with multi-row `INSERT … ON CONFLICT`, batch schema discovery, batched checkpoint updates |
+| **#2 Table partitioning** | ✅ Complete | Migration 0013 converts `events`/`column_changes` to `PARTITION BY RANGE` (monthly); retention drops partitions instead of `DELETE` |
+| **#3 Cursor/keyset pagination** | ✅ Complete | Migration 0014 adds composite indexes; `/events` and `/changes` use `(capture_time, event_id)` / `(changed_at, id)` cursor pagination |
+| **#4 Helm chart** | ✅ Complete | Chart at `deploy/helm/db-monitor/` with HPA, ServiceMonitor, NetworkPolicy, security contexts |
+| **#5 Idempotent offsets** | ✅ Complete | Unique constraint `(topic, partition, offset, capture_time)` + `ON CONFLICT DO NOTHING` + `events_duplicate_skipped_total` counter |
+| **#6 Concurrent migration locking** | ✅ Complete | `pg_try_advisory_lock` (lock ID 7273646) with tests in `test_migration_locking.py` |
+| **#7 Scale validation** | ✅ Complete | `make monitor-test-scale-target` at 500 ev/s, 5 min; benchmark template in `docs/benchmarks/ingestion-throughput.md` |
+
+The remaining work before GA (Milestone 3) focuses on SDK hardening, SLO
+dashboards, and production burn-in. See the roadmap in §4 for details.
 
 ---
 
@@ -276,25 +295,26 @@ zero DLQ events. Results are printed and can be recorded for release notes.
 - Docker Compose sandbox works
 - CI gates pass (lint, typecheck, package smoke, container smoke)
 
-### Milestone 2: "Production Beta" (4-6 weeks) — THE GATE
+### Milestone 2: "Production Beta" — Complete ✅
 
-Must complete Critical Gaps #1-6:
+All critical gaps #1-7 have been closed since the original assessment:
 
 1. ✅ Bulk-write ingestion path verified & benchmarked
 2. ✅ Table partitioning implemented + retention migrated to partition operations
 3. ✅ Keyset/cursor pagination on `/events` and `/changes`
-4. ✅ Helm chart shipped
+4. ✅ Helm chart shipped (`deploy/helm/db-monitor/`)
 5. ✅ Idempotent offset handling with dedup
-6. ✅ Concurrent migration locking
+6. ✅ Concurrent migration locking (`pg_try_advisory_lock`)
+7. ✅ Scale test (`make monitor-test-scale-target`) with benchmark results template
 
 Plus secondary items:
 
-7. ✅ Hosted documentation site
-8. ✅ `CONTRIBUTING.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md`
-9. ✅ Scale test with published benchmark results for 100-DB target
-10. ✅ CI/CD release pipeline verified end-to-end
+8. ❌ Hosted documentation site — Not started. No MkDocs/Docusaurus site exists yet.
+9. ❌ `CONTRIBUTING.md`, `CHANGELOG.md`, `CODE_OF_CONDUCT.md` — Not started. None of these files exist in the repo root.
+10. ❌ Scale test with published benchmark results — Not started. `docs/benchmarks/results-100.json` shows `passed: false` (placeholder/failed run). Real benchmarks not yet run or recorded.
+11. ⚠️ CI/CD release pipeline verification — Status unclear. Needs verification that PyPI publish, container image build+push, and Helm chart release are all wired and tested.
 
-### Milestone 3: "GA / v1.0" (8-12 weeks)
+### Milestone 3: "GA / v1.0" (In Progress)
 
 - Scale validation at production workloads
 - SDK hardening with proper clients

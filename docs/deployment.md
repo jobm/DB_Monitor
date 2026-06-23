@@ -141,10 +141,33 @@ monitoring:
 
 See `deploy/helm/db-monitor/values.yaml` for all available options.
 
+The Helm chart includes:
+
+- Configurable `monitor-server` deployment with replica count, resource limits,
+  and HPA
+- Configurable PostgreSQL connection (external or bundled)
+- Kafka/RabbitMQ broker connection settings
+- Secrets management via Kubernetes Secrets (mapped to `*_FILE` env vars)
+- Prometheus `ServiceMonitor` / `PodMonitor`
+- `NetworkPolicy` templates with deny-all-default posture
+- Production security defaults: non-root user, read-only root filesystem,
+  `securityContext`, capability drops
+
+The Terraform module and Helm chart are designed to be used together:
+
+```hcl
+module "db_monitor_infra" {
+  source = "github.com/jobm/DB_Monitor//deploy/terraform"
+  ...
+}
+# → module output supplies Helm values for the chart
+```
+
 ### 3b. Terraform (Companion Infrastructure)
 
 A Terraform module is available under `deploy/terraform/` that provisions a
-production-ready PostgreSQL flexible server for DB Monitor.
+production-ready PostgreSQL flexible server for DB Monitor. The module outputs
+connection details and Helm values for use with the chart above.
 
 ```hcl
 module "db_monitor_infra" {
@@ -221,6 +244,21 @@ per-source or per-tenant protection during traffic spikes:
 - keep `INGESTION_QUOTA_ENABLED=true` for bounded ingestion
 - use `INGESTION_QUOTA_MODE=throttle` to absorb spikes gradually
 - use `INGESTION_QUOTA_MODE=drop` only for strict fail-fast pressure control
+
+7. Understand partition management and migration safety.
+
+The `events` and `column_changes` tables are automatically converted to
+time-range-partitioned tables (monthly partitions) by migration 0013.
+Retention cleanup uses partition `DROP` / `DETACH` rather than `DELETE`,
+which keeps table bloat under control.
+
+Migration execution uses PostgreSQL advisory locks (`pg_try_advisory_lock`).
+Only one pod can run migrations at a time; concurrent attempts log a clear
+"lock held by another process" message and exit cleanly. This is validated
+by integration tests.
+
+See `docs/configuration.md` for retention settings and
+`docs/runbooks/recovery-and-validation.md` for operational workflows.
 
 ## 4. Post-Deploy Validation
 
