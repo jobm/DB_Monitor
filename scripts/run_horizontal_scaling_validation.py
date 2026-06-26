@@ -214,13 +214,13 @@ def start_instance(
             sys.executable,
             "-m",
             "uvicorn",
-            "main:app",
+            "db_monitor.asgi:app",
             "--host",
             "127.0.0.1",
             "--port",
             str(port),
         ],
-        cwd=str(APP_ROOT),
+        cwd=str(REPO_ROOT),
         env=build_instance_env(instance_name),
         stdout=log_handle,
         stderr=subprocess.STDOUT,
@@ -253,7 +253,7 @@ def print_log_tail(log_path: Path, label: str) -> None:
 async def create_ephemeral_admin_key() -> tuple[str, int]:
     from db_monitor.auth import generate_new_api_key, get_api_key_hash
     from db_monitor.extensions import AsyncSessionLocal
-    from db_monitor.models import ApiKey
+    from db_monitor.core.models import ApiKey
 
     raw_key = generate_new_api_key()
     key_hash = get_api_key_hash(raw_key)
@@ -276,7 +276,7 @@ async def create_ephemeral_admin_key() -> tuple[str, int]:
 
 async def revoke_ephemeral_admin_key(key_id: int) -> None:
     from db_monitor.extensions import AsyncSessionLocal
-    from db_monitor.models import ApiKey
+    from db_monitor.core.models import ApiKey
 
     async with AsyncSessionLocal() as session:
         api_key = await session.get(ApiKey, key_id)
@@ -306,7 +306,7 @@ async def resolve_admin_key(base_url: str) -> tuple[str, int | None]:
 
 async def seed_dead_letter_event(marker: str) -> int:
     from db_monitor.extensions import AsyncSessionLocal
-    from db_monitor.models import DeadLetterEvent
+    from db_monitor.core.models import DeadLetterEvent
 
     kafka_offset = int(time.time() * 1_000_000)
     payload = {

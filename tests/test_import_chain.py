@@ -16,44 +16,28 @@ import pytest
 from fastapi import FastAPI
 
 
-def test_main_app_imports_without_error() -> None:
-    """Import the ``main`` module and confirm the FastAPI *app* is reachable.
+def test_asgi_app_imports_without_error() -> None:
+    """Import the ``db_monitor.asgi`` module and confirm the FastAPI *app*
+    is reachable.
 
     This exercises the entire import chain that uvicorn follows when it
-    loads ``main:app`` — the same path that the CI smoke-test and the
-    production container entrypoint use.
+    loads ``db_monitor.asgi:app`` -- the same path that the CI smoke-test and
+    the production container entrypoint use.
     """
-    main = importlib.import_module("main")
-    assert hasattr(main, "app"), "main module must expose an 'app' attribute"
+    asgi = importlib.import_module("db_monitor.asgi")
+    assert hasattr(
+        asgi, "app"
+    ), "db_monitor.asgi module must expose an 'app' attribute"
     assert isinstance(
-        main.app, FastAPI
+        asgi.app, FastAPI
     ), "app must be a FastAPI instance"
 
 
-def test_core_proxy_modules_are_importable() -> None:
-    """All ``core`` proxy sub-modules must be importable without error.
-
-    ``app/core/__init__.py`` uses lazy imports via ``__getattr__``,
-    so each sub-module is loaded independently on access.
-    """
-    core_config = importlib.import_module("core.config")
-    core_db = importlib.import_module("core.db")
-    core_lifecycle = importlib.import_module("core.lifecycle")
-    core_models = importlib.import_module("core.models")
-    core_responses = importlib.import_module("core.responses")
-
-    assert hasattr(core_config, "KAFKA_BROKER")
-    assert hasattr(core_db, "AsyncSessionLocal")
-    assert hasattr(core_db, "engine")
-    assert hasattr(core_lifecycle, "lifecycle_manager")
-    assert hasattr(core_models, "ApiKey")
-    assert hasattr(core_responses, "HealthResponse")
-
-
 def test_extensions_exposes_expected_symbols() -> None:
-    """The ``extensions`` module must expose the DB engine and session factory."""
-    extensions = importlib.import_module("extensions")
-
+    """The ``db_monitor.extensions`` module must expose the DB engine and
+    session factory.
+    """
+    extensions = importlib.import_module("db_monitor.extensions")
     assert hasattr(extensions, "engine")
     assert hasattr(extensions, "AsyncSessionLocal")
     assert hasattr(extensions, "build_engine")
@@ -61,24 +45,25 @@ def test_extensions_exposes_expected_symbols() -> None:
 
 
 def test_db_monitor_package_imports_without_error() -> None:
-    """The ``db_monitor`` namespace proxies must all be importable.
+    """The ``db_monitor`` namespace modules must all be importable.
 
-    This catches regressions where a ``src/db_monitor`` proxy module
-    triggers a circular import through the legacy ``app/`` tree.
+    This catches regressions where a ``src/db_monitor`` module triggers a
+    circular import through the legacy ``app/`` tree.
     """
-    proxy_modules = [
+    modules = [
         "db_monitor.core.config",
-        "db_monitor.core.db",
-        "db_monitor.config",
         "db_monitor.extensions",
+        "db_monitor.lifecycle_manager",
         "db_monitor.metrics",
         "db_monitor.retention",
         "db_monitor.lifespan",
         "db_monitor.tracing",
         "db_monitor.ws_manager",
+        "db_monitor.main",
+        "db_monitor.asgi",
     ]
 
-    for module_name in proxy_modules:
+    for module_name in modules:
         importlib.import_module(module_name)
 
 
@@ -89,24 +74,24 @@ def test_broken_extensions_is_caught(
     import chain fails.
 
     This is a *negative* test: it supplies a minimal ``extensions.py``
-    that imports from ``core.config`` but does **not** define the
-    symbols (``engine``, ``AsyncSessionLocal``, …) that
-    ``core/db.py`` expects.  When ``core.db`` tries to access those
-    names it raises ``AttributeError``, which propagates through the
-    import chain and causes ``main`` to fail to load.
+    that imports from ``db_monitor.core.config`` but does **not** define the
+    symbols (``engine``, ``AsyncSessionLocal``, ...) that ``db_monitor.core.db``
+    expects.  When ``core.db`` tries to access those names it raises
+    ``AttributeError``, which propagates through the import chain and causes
+    the ASGI app to fail to load.
 
-    This proves the positive smoke tests above actually catch a
-    broken ``extensions`` module — whether the failure manifests as
-    a missing-symbol error, a circular-import error, or another
-    import-time exception.
+    This proves the positive smoke tests above actually catch a broken
+    ``extensions`` module -- whether the failure manifests as a
+    missing-symbol error, a circular-import error, or another import-time
+    exception.
 
-    Instead of modifying the real source file (which would race with
-    parallel test workers), a minimal broken ``extensions.py`` is placed
-    in a temporary directory that takes priority on ``sys.path``.
+    Instead of modifying the real source file (which would race with parallel
+    test workers), a minimal broken ``extensions.py`` is placed in a temporary
+    directory that takes priority on ``sys.path``.
     """
-    # Broken extensions.py missing the symbols core/db.py expects.
+    # Broken extensions.py missing the symbols db_monitor.core.db expects.
     (tmp_path / "extensions.py").write_text(
-        "from core.config import POSTGRES_URL\n"
+        "from db_monitor.core.config import settings\n"
     )
 
     # Clear every module that participates in or caches the import chain
@@ -116,7 +101,6 @@ def test_broken_extensions_is_caught(
     for name in list(sys.modules):
         if (
             name == "extensions"
-            or name.startswith("core")
             or name.startswith("db_monitor")
             or name == "main"
         ):
@@ -125,7 +109,7 @@ def test_broken_extensions_is_caught(
     sys.path.insert(0, str(tmp_path))
     try:
         with pytest.raises((ImportError, AttributeError, ValueError)):
-            importlib.import_module("main")
+            importlib.import_module("db_monitor.asgi")
     finally:
         sys.path.remove(str(tmp_path))
         sys.modules.update(saved)

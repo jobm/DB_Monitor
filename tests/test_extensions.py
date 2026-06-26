@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-import extensions
+from db_monitor import extensions
 
 
 @pytest.mark.anyio
@@ -19,9 +19,13 @@ async def test_init_db_applies_migrations_in_apply_mode(monkeypatch: pytest.Monk
     async def fake_validate(db_engine) -> None:
         called.append("validate")
 
-    monkeypatch.setattr(extensions, "DB_SCHEMA_MODE", "apply")
-    monkeypatch.setattr("migrations.apply_migrations", fake_apply)
-    monkeypatch.setattr("migrations.validate_migrations", fake_validate)
+    monkeypatch.setattr(extensions.settings, "db_schema_mode", "apply")
+    monkeypatch.setattr(
+        "db_monitor.core.migrations.apply_migrations", fake_apply
+    )
+    monkeypatch.setattr(
+        "db_monitor.core.migrations.validate_migrations", fake_validate
+    )
 
     await extensions.init_db()
 
@@ -41,9 +45,13 @@ async def test_init_db_validates_in_validate_mode(monkeypatch: pytest.MonkeyPatc
         called.append("validate")
         assert db_engine is extensions.engine
 
-    monkeypatch.setattr(extensions, "DB_SCHEMA_MODE", "validate")
-    monkeypatch.setattr("migrations.apply_migrations", fake_apply)
-    monkeypatch.setattr("migrations.validate_migrations", fake_validate)
+    monkeypatch.setattr(extensions.settings, "db_schema_mode", "validate")
+    monkeypatch.setattr(
+        "db_monitor.core.migrations.apply_migrations", fake_apply
+    )
+    monkeypatch.setattr(
+        "db_monitor.core.migrations.validate_migrations", fake_validate
+    )
 
     await extensions.init_db()
 
@@ -62,13 +70,13 @@ def test_build_engine_uses_pool_configuration(
         return object()
 
     monkeypatch.setattr(extensions, "create_async_engine", fake_create_async_engine)
-    monkeypatch.setattr(extensions, "POSTGRES_URL", "postgresql+asyncpg://db")
-    monkeypatch.setattr(extensions, "SQLALCHEMY_ECHO", True)
-    monkeypatch.setattr(extensions, "DB_POOL_PRE_PING", True)
-    monkeypatch.setattr(extensions, "DB_POOL_SIZE", 15)
-    monkeypatch.setattr(extensions, "DB_MAX_OVERFLOW", 5)
-    monkeypatch.setattr(extensions, "DB_POOL_TIMEOUT_SECONDS", 12)
-    monkeypatch.setattr(extensions, "DB_POOL_RECYCLE_SECONDS", 120)
+    monkeypatch.setattr(extensions.settings.db, "postgres_url", "postgresql+asyncpg://db")
+    monkeypatch.setattr(extensions.settings.db, "sqlalchemy_echo", True)
+    monkeypatch.setattr(extensions.settings.db, "pool_pre_ping", True)
+    monkeypatch.setattr(extensions.settings.db, "pool_size", 15)
+    monkeypatch.setattr(extensions.settings.db, "max_overflow", 5)
+    monkeypatch.setattr(extensions.settings.db, "pool_timeout_seconds", 12)
+    monkeypatch.setattr(extensions.settings.db, "pool_recycle_seconds", 120)
 
     engine = extensions.build_engine()
 

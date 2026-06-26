@@ -12,7 +12,7 @@ from db_monitor.auth import (
     get_api_key_hash,
 )
 from db_monitor.extensions import AsyncSessionLocal
-from db_monitor.models import ApiKey
+from db_monitor.core.models import ApiKey
 
 
 async def create_admin_api_key(owner_name: str, ttl_days: int) -> str:

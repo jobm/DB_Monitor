@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from db_monitor.ingestion.quota import IngestionQuotaLimiter
-from db_monitor.models import KafkaEvent
+from db_monitor.core.models import KafkaEvent
 
 
 # ── CI-safe timing constants for quota throttling tests ─────────────────

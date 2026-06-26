@@ -86,8 +86,9 @@ select = ["E9", "F63", "F7", "F82"]
 [tool.mypy]
 python_version = "3.11"
 files = ["src/db_monitor"]
+plugins = ["sqlalchemy.ext.mypy.plugin"]
 ignore_missing_imports = true
-follow_imports = "skip"
+follow_imports = "normal"
 warn_return_any = true
 warn_unused_configs = true
 show_error_codes = true

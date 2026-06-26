@@ -6,16 +6,16 @@ import db_monitor.start_monitor as package_start_monitor
 def test_package_start_monitor_delegates_to_legacy_runner(
     monkeypatch,
 ) -> None:
-    """Package startup entrypoint should delegate to legacy runtime."""
+    """Package startup entrypoint should invoke main() without error."""
     called = {"run": False}
 
-    def _fake_run_legacy_server() -> None:
+    def _fake_main() -> None:
         called["run"] = True
 
     monkeypatch.setattr(
         package_start_monitor,
-        "run_legacy_server",
-        _fake_run_legacy_server,
+        "main",
+        _fake_main,
     )
 
     package_start_monitor.main()

@@ -1,25 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
-import sys
-import types
-from pathlib import Path
 
 import pytest
 
-
-_APP_CORE_PATH = Path(__file__).resolve().parents[1] / "app" / "core"
-if "core" not in sys.modules:
-    core_package = types.ModuleType("core")
-    core_package.__path__ = [str(_APP_CORE_PATH)]
-    sys.modules["core"] = core_package
-
-audit_log = importlib.import_module("audit_log")
-metrics = importlib.import_module("metrics")
-
-audit_log_flush_failures_total = metrics.audit_log_flush_failures_total
-audit_log_records_dropped_total = metrics.audit_log_records_dropped_total
+from db_monitor import audit_log
+from db_monitor.metrics import (
+    audit_log_flush_failures_total,
+    audit_log_records_dropped_total,
+)
 
 
 class _FakeBegin:

@@ -7,10 +7,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-import routes.auth as routes_auth
-import routes.data as routes_data
-import routes.ops as routes_ops
-from db_monitor.models import (
+from db_monitor.routes import auth as routes_auth
+from db_monitor.routes import data as routes_data
+from db_monitor.routes import ops as routes_ops
+from db_monitor.core.models import (
     ApiKey,
     CustomerJWTSecretState,
     CustomerLifecycleState,
@@ -370,7 +370,7 @@ async def test_readiness_check_returns_503_when_consumer_signals_degrade(
 
 @pytest.mark.anyio
 async def test_bootstrap_admin_key_rejects_when_disabled(monkeypatch):
-    monkeypatch.setattr(routes_auth, "ALLOW_BOOTSTRAP", False)
+    monkeypatch.setattr(routes_auth.settings.auth, "allow_bootstrap", False)
 
     with pytest.raises(HTTPException) as exc_info:
         await routes_auth.bootstrap_admin_key(owner_name="admin")
@@ -996,10 +996,10 @@ async def test_replay_dead_letter_events_requires_customer_scope() -> None:
 
 @pytest.mark.anyio
 async def test_get_slo_policy_returns_tenant_cohorts(monkeypatch):
-    monkeypatch.setattr(routes_ops, "SLO_ROLLING_WINDOW_DAYS", 30)
+    monkeypatch.setattr(routes_ops.settings, "slo_rolling_window_days", 30)
     monkeypatch.setattr(
-        routes_ops,
-        "TENANT_COHORT_SLO_POLICIES",
+        routes_ops.settings,
+        "tenant_cohort_slo_policies",
         [
             {
                 "name": "small",

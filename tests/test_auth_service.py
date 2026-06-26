@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from db_monitor import auth as auth_mod
-from db_monitor.models import ApiKey
+from db_monitor.core.models import ApiKey
 
 
 def test_is_api_key_usable_rejects_expired_key() -> None:

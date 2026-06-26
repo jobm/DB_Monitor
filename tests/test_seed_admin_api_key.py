@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 import scripts.seed_admin_api_key as seed_admin_api_key
-from db_monitor.models import ApiKey
+from db_monitor.core.models import ApiKey
 
 
 class _FakeScalarResult:

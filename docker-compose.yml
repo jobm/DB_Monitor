@@ -111,7 +111,7 @@ services:
   monitor-server:
     build:
       context: .
-      dockerfile: app/Dockerfile
+      dockerfile: Dockerfile
     command: ["sh", "/app/container-entrypoint.sh"]
     init: true
     restart: unless-stopped

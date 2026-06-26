@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import retention
+from db_monitor import retention
 
 
 class _FakeColumn:
@@ -33,7 +33,7 @@ class _FakeRow:
 
 
 def test_append_archive_rows_writes_jsonl(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(retention, "RETENTION_ARCHIVE_DIR", str(tmp_path))
+    monkeypatch.setattr(retention.settings.retention, "archive_dir", str(tmp_path))
 
     now = datetime(2026, 5, 24, 12, 0, tzinfo=timezone.utc)
     rows = [

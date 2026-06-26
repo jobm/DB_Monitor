@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from db_monitor.ingestion import schema as schema_discovery_module
-from db_monitor.models import KafkaEvent
+from db_monitor.core.models import KafkaEvent
 from db_monitor.ingestion.schema import SchemaDiscovery
 
 

@@ -8,7 +8,7 @@ model definition and SQL-level behaviour so the bug does not regress.
 from __future__ import annotations
 
 import pytest
-from db_monitor.models import KafkaEvent
+from db_monitor.core.models import KafkaEvent
 from sqlalchemy import Index, UniqueConstraint
 
 
@@ -64,9 +64,9 @@ async def test_pg_constraint_is_unique_type() -> None:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from core.config import POSTGRES_URL
+    from db_monitor.core.config import settings
 
-    engine = create_async_engine(POSTGRES_URL)
+    engine = create_async_engine(settings.db.postgres_url)
     try:
         async with engine.connect() as conn:
             result = await conn.execute(
@@ -111,12 +111,12 @@ async def test_on_conflict_insert_succeeds_on_partitioned_events() -> None:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from core.config import POSTGRES_URL
+    from db_monitor.core.config import settings
 
     now = datetime.now(timezone.utc)
     kafka_offset = 999_999_999
 
-    engine = create_async_engine(POSTGRES_URL)
+    engine = create_async_engine(settings.db.postgres_url)
     try:
         async with engine.begin() as conn:
             # First insert — should succeed.

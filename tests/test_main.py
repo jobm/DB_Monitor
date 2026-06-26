@@ -7,7 +7,7 @@ import pytest
 from fastapi import Response
 from starlette.requests import Request
 
-import main
+from db_monitor import main
 
 
 async def _receive() -> dict[str, Any]:
@@ -199,8 +199,8 @@ async def test_lifespan_manager_starts_one_consumer_per_cluster(
         fake_start_backplane_listener,
     )
     monkeypatch.setattr(
-        main,
-        "BROKER_CLUSTERS",
+        main.settings.broker,
+        "broker_clusters",
         [
             {
                 "name": "primary",
@@ -227,6 +227,22 @@ async def test_lifespan_manager_starts_one_consumer_per_cluster(
                 "dlq_destination": "db-monitor-dlq-rabbit",
             },
         ],
+    )
+
+    monkeypatch.setattr(
+        main.settings.broker,
+        "dlq_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        main.settings.broker,
+        "batch_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        main.settings.broker,
+        "batch_size",
+        100,
     )
 
     async with main.lifespan_manager(main.app):
@@ -294,8 +310,8 @@ async def test_lifespan_manager_passes_topic_partitions_to_consumer(
         fake_start_backplane_listener,
     )
     monkeypatch.setattr(
-        main,
-        "BROKER_CLUSTERS",
+        main.settings.broker,
+        "broker_clusters",
         [
             {
                 "name": "primary",
@@ -310,6 +326,21 @@ async def test_lifespan_manager_passes_topic_partitions_to_consumer(
                 "dlq_destination": "db-monitor-dlq",
             }
         ],
+    )
+    monkeypatch.setattr(
+        main.settings.broker,
+        "dlq_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        main.settings.broker,
+        "batch_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        main.settings.broker,
+        "batch_size",
+        100,
     )
 
     async with main.lifespan_manager(main.app):
@@ -374,8 +405,8 @@ async def test_lifespan_manager_passes_rabbitmq_cluster_args(
         fake_start_backplane_listener,
     )
     monkeypatch.setattr(
-        main,
-        "BROKER_CLUSTERS",
+        main.settings.broker,
+        "broker_clusters",
         [
             {
                 "name": "rabbit",
@@ -390,6 +421,22 @@ async def test_lifespan_manager_passes_rabbitmq_cluster_args(
                 "dlq_destination": "db-monitor-rabbit-dlq",
             }
         ],
+    )
+
+    monkeypatch.setattr(
+        main.settings.broker,
+        "dlq_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        main.settings.broker,
+        "batch_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        main.settings.broker,
+        "batch_size",
+        100,
     )
 
     async with main.lifespan_manager(main.app):
@@ -407,9 +454,9 @@ async def test_lifespan_manager_passes_rabbitmq_cluster_args(
             "queue_names": ["cdc.orders"],
             "prefetch_count": 25,
             "dlq_destination": "db-monitor-rabbit-dlq",
-            "enable_dlq": main.DLQ_ENABLED,
-            "enable_batch": main.BATCH_ENABLED,
-            "batch_size": main.BATCH_SIZE,
+            "enable_dlq": main.settings.broker.dlq_enabled,
+            "enable_batch": main.settings.broker.batch_enabled,
+            "batch_size": main.settings.broker.batch_size,
         }
     ]
 
@@ -478,7 +525,7 @@ async def test_lifespan_manager_starts_retention_task_when_enabled(
         "retention_cleanup_task",
         fake_retention_cleanup_task,
     )
-    monkeypatch.setattr(main, "RETENTION_CLEANUP_ENABLED", True)
+    monkeypatch.setattr(main.settings.retention, "cleanup_enabled", True)
 
     async with main.lifespan_manager(main.app):
         await asyncio.sleep(0)
@@ -495,7 +542,7 @@ def test_configure_tracing_skips_when_disabled(
         nonlocal called
         called = True
 
-    monkeypatch.setattr(main, "OTEL_TRACING_ENABLED", False)
+    monkeypatch.setattr(main.settings.observability, "otel_tracing_enabled", False)
     monkeypatch.setattr(main, "initialize_tracing", fake_initialize_tracing)
 
     main._configure_tracing(main.app)
@@ -511,11 +558,11 @@ def test_configure_tracing_initializes_when_enabled(
     def fake_initialize_tracing(**kwargs) -> None:
         captured.update(kwargs)
 
-    monkeypatch.setattr(main, "OTEL_TRACING_ENABLED", True)
-    monkeypatch.setattr(main, "OTEL_SERVICE_NAME", "db-monitor-test")
-    monkeypatch.setattr(main, "OTEL_EXPORTER", "console")
-    monkeypatch.setattr(main, "OTEL_EXPORTER_OTLP_ENDPOINT", None)
-    monkeypatch.setattr(main, "OTEL_EXPORTER_OTLP_HEADERS", None)
+    monkeypatch.setattr(main.settings.observability, "otel_tracing_enabled", True)
+    monkeypatch.setattr(main.settings.observability, "otel_service_name", "db-monitor-test")
+    monkeypatch.setattr(main.settings.observability, "otel_exporter", "console")
+    monkeypatch.setattr(main.settings.observability, "otel_exporter_otlp_endpoint", None)
+    monkeypatch.setattr(main.settings.observability, "otel_exporter_otlp_headers", None)
     monkeypatch.setattr(main, "initialize_tracing", fake_initialize_tracing)
 
     main._configure_tracing(main.app)

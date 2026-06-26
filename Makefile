@@ -64,16 +64,16 @@ monitor-recovery: ## One-command recovery: start sandbox + register connectors +
 	$(PODMAN_COMPOSE) ps monitor-server
 
 monitor-dev: ## Run FastAPI app locally for debugging (Docker handles this - prefer 'make monitor-up')
-	cd app && PYTHONPATH=../src:. uv run python -m uvicorn db_monitor.main:app --reload --port 8001
+	uv run python -m uvicorn db_monitor.asgi:app --reload --port 8001
 
 monitor-migrate: ## Apply tracked database migrations locally
-	cd app && PYTHONPATH=../src:. uv run python -m db_monitor.cli migrate apply
+	uv run python -m db_monitor.cli migrate apply
 
 monitor-test: ## Run all core-platform tests
 	$(MAKE) monitor-test-core
 
 monitor-test-core: ## Run reusable core-platform pytest coverage
-	cd app && uv run --group dev python -m pytest -m core ../tests/
+	uv run --group dev python -m pytest -m core tests/
 
 monitor-lint: ## Run Ruff lint checks for package and tests
 	uv run --group dev python -m ruff check src/db_monitor tests
@@ -109,10 +109,10 @@ monitor-test-container-readyz: ## Start monitor container and validate readiness
 	$(PODMAN_COMPOSE) rm -fv monitor-server postgres-monitor kafka zookeeper 2>/dev/null || true
 
 monitor-test-integration: ## Run sandbox-backed live integration checks
-	cd app && uv run --group dev python ../examples/sandbox/run_integration_tests.py
+	uv run --group dev python examples/sandbox/run_integration_tests.py
 
 monitor-test-sandbox-pytest: ## Run sandbox-only pytest checks against a live stack
-	cd app && uv run --group dev python -m pytest -m sandbox ../tests/
+	uv run --group dev python -m pytest -m sandbox tests/
 
 monitor-test-sandbox: ## Run the full sandbox verification flow
 	$(MAKE) monitor-test-sandbox-pytest
@@ -120,14 +120,13 @@ monitor-test-sandbox: ## Run the full sandbox verification flow
 	$(MAKE) monitor-test-smoke
 
 monitor-test-smoke: ## Run the sandbox smoke-load gate against a running stack
-	cd app && uv run --group dev python ../examples/sandbox/load_test.py --workers 8 --requests 10 --targets events,stats,tables,checkpoints --max-failures 0 --min-success-rate 1.0 --max-p95-ms 2000
+	uv run --group dev python examples/sandbox/load_test.py --workers 8 --requests 10 --targets events,stats,tables,checkpoints --max-failures 0 --min-success-rate 1.0 --max-p95-ms 2000
 
 monitor-test-scale: ## Validate cross-replica websocket delivery with two local app instances
-	cd app && uv run --group dev python ../scripts/run_horizontal_scaling_validation.py
+	uv run --group dev python scripts/run_horizontal_scaling_validation.py
 
 monitor-test-scale-target: ## Run scale validation at target throughput (100-DB profile)
-	cd app && PYTHONPATH=../src:. uv run python ../scripts/scale_test.py \
-		--sources 10 --rate 500 --duration 300
+	uv run python scripts/scale_test.py --sources 10 --rate 500 --duration 300
 
 monitor-tui-build: ## Build/install TUI dependencies
 	cd tui && uv sync

@@ -25,12 +25,10 @@ _preflight = importlib.import_module("examples.sandbox.preflight")
 require_live_sandbox = _preflight.require_live_sandbox
 resolve_admin_api_key = _preflight.resolve_admin_api_key
 
-from consumer_service import (  # noqa: E402
-    _serialize_broker_fields,
-    _store_event_graph_with_retries,
-)
-from extensions import AsyncSessionLocal  # noqa: E402
-from models import DeadLetterEvent, KafkaEvent  # noqa: E402
+from db_monitor.ingestion.recovery import _serialize_broker_fields  # noqa: E402
+from db_monitor.ingestion.event_storage import _store_event_graph_with_retries  # noqa: E402
+from db_monitor.extensions import AsyncSessionLocal  # noqa: E402
+from db_monitor.core.models import DeadLetterEvent, KafkaEvent  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 

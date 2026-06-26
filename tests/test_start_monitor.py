@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 import pytest
 
-import start_monitor
+from db_monitor import start_monitor
 
 
 def test_derived_topics_from_manifest_skips_disabled_and_deduplicates(

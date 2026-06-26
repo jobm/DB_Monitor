@@ -1,14 +1,15 @@
 # Module Inventory: Dual Codebase Consolidation
 
-**Status:** Audit complete — consolidation **not yet started**
-**Target:** Move all real logic from `app/` into `src/db_monitor/`, eliminate `legacy_runtime.py`, remove `app/` directory
+**Status:** ✅ Consolidation complete (Workstream A). Config unification complete (Workstream B).
+**Target:** All real logic lives in `src/db_monitor/`. The `app/` directory, `legacy_runtime.py`, and all proxies have been removed.
 
-> **Current state (2026-06-23):** The dual codebase still exists.
-> `legacy_runtime.py` remains active in `src/db_monitor/` — all proxy, wrapper,
-> and delegation modules still use `ensure_legacy_path()` to import from `app/`
-> at runtime. This inventory remains accurate as a migration roadmap. The
-> consolidation is tracked as Workstream A in
-> `docs/system-quality-improvement-plan.md`.
+> **Current state (2026-06-25):** The dual-codebase has been fully resolved.
+> All real logic lives in `src/db_monitor/`. The `app/` directory was deleted.
+> Config was rewritten as `@dataclass AppSettings` in `src/db_monitor/core/config.py`
+> with lazy loading via `from db_monitor.core.config import settings`.
+> The old `src/db_monitor/config.py` (module-level `os.getenv()`) was deleted.
+> All 16 consumer modules and 9 test files have been updated.
+> 236 core tests + 6 sandbox tests + integration tests all pass.
 
 ---
 
@@ -34,9 +35,9 @@
 
 ### `config.py`
 
-| app/ | src/db_monitor/ | Verdict |
-|------|----------------|---------|
-| **REAL** — 700+ lines. Module-level `os.getenv()` calls, cluster loading, validation, SLO policies. Imports `from db_monitor.core.config_loader import ...`. | **PROXY** — `ensure_legacy_path()` + `importlib.import_module("config")` | `app/` → MOVE to `src/db_monitor/config.py`. Rewrite as `@dataclass` (see config workstream). Remove proxy. |
+| app/ | src/db_monitor/core/ | Verdict |
+|------|----------------------|---------|
+| **DELETED** — Old 700+ line module-level config. Replaced by typed `@dataclass`. | **NEW** — `config.py` (`@dataclass AppSettings` with lazy loading, nested sub-settings, `validate()` method). Imports helpers from `config_loader.py`. | ✅ DONE. `app/config.py` deleted. `src/db_monitor/config.py` deleted. `src/db_monitor/core/config.py` is the single canonical config module. |
 
 ### `main.py`
 
@@ -131,8 +132,8 @@ These `src/db_monitor/` modules import specific names rather than using `__getat
 
 | app/ | src/db_monitor/ | Verdict |
 |------|----------------|---------|
-| `core/__init__.py` — Lazy submodule loader | `core/__init__.py` — Simple namespace exports | KEEP `src/db_monitor/core/__init__.py`, DELETE `app/core/__init__.py` |
-| `core/config.py` — Proxy to `app/config.py` | `core/config.py` — **PROXY** to `app/config.py` | Both are proxies! The real config is `app/config.py`. After moving config, these become obsolete. |
+| `core/__init__.py` — Lazy submodule loader | `core/__init__.py` — Simple namespace exports `config_loader` | ✅ `src/db_monitor/core/__init__.py` kept. `app/core/__init__.py` deleted. |
+| `core/config.py` — Does not exist in app/ | `core/config.py` — **NEW** `@dataclass AppSettings` with lazy loading, typed fields, `validate()`, `from_env()`. | ✅ The canonical config module. ~1200 lines with all sub-settings, computed fields, and validation. |
 | `core/config_loader.py` — Does not exist | **UNIQUE** — Utility functions (get_env_or_file, parse_csv_list, config_error) | KEEP, this is the canonical config utility module |
 | `core/db.py` — Does not exist | `core/db.py` — **PROXY** to `app/extensions.py` | REMOVE after `extensions.py` is moved |
 | `core/lifecycle.py` — Does not exist | `core/lifecycle.py` — **PROXY** to `app/lifecycle_manager.py` | REMOVE after `lifecycle_manager.py` is moved |

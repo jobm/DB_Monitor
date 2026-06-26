@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from db_monitor import auth as auth_mod
 import pytest
 
-import routes.auth as routes_auth
-from db_monitor.models import ApiKey
+from db_monitor.routes import auth as routes_auth
+from db_monitor.core.models import ApiKey
 
 
 def _api_key() -> ApiKey:
@@ -41,8 +41,6 @@ def test_ws_token_rejects_wrong_token_type() -> None:
 
 
 def test_decode_session_token_accepts_next_secret(monkeypatch) -> None:
-    import auth as _legacy_auth
-
     issued_at = datetime.now(timezone.utc)
     payload = {
         "sub": "7",
@@ -54,19 +52,19 @@ def test_decode_session_token_accepts_next_secret(monkeypatch) -> None:
     }
 
     monkeypatch.setattr(
-        _legacy_auth,
-        "JWT_SECRET",
+        auth_mod.settings.auth,
+        "jwt_secret",
         "current-secret-12345678901234567890",
     )
     monkeypatch.setattr(
-        _legacy_auth,
-        "JWT_SECRET_NEXT",
+        auth_mod.settings.auth,
+        "jwt_secret_next",
         "next-secret-123456789012345678901234",
     )
     token = auth_mod.jwt.encode(
         payload,
-        auth_mod.JWT_SECRET_NEXT,
-        algorithm=auth_mod.JWT_ALGORITHM,
+        auth_mod.settings.auth.jwt_secret_next,
+        algorithm=auth_mod.settings.auth.jwt_algorithm,
     )
 
     claims = auth_mod.decode_session_token(token, expected_token_type="access")

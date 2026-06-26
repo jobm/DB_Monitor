@@ -1,23 +1,41 @@
+"""Tests for the unified AppSettings dataclass configuration module.
+
+Uses ``monkeypatch.setattr`` on the module-level ``settings`` singleton
+instead of the old ``importlib.reload`` + ``os.environ`` pattern.
+"""
+
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 import pytest
 
+from db_monitor.core.config import AppSettings
 
-CONFIG_PATH = Path(__file__).resolve().parents[1] / "app" / "config.py"
+
+def _reload_settings():
+    """Clear the cached settings and reload from the current environment."""
+    from db_monitor.core.config import _get_settings
+    _get_settings.cache_clear()
+    from db_monitor.core.config import settings as _settings
+    # Trigger reload
+    return _settings
 
 
-def _load_config_module(module_name: str):
-    """Load the config module under an isolated module name."""
-    spec = importlib.util.spec_from_file_location(module_name, CONFIG_PATH)
-    assert spec is not None
-    assert spec.loader is not None
+@pytest.fixture(autouse=True)
+def _reset_settings():
+    """Reset the settings cache after each test to isolate side effects."""
+    from db_monitor.core.config import _get_settings
+    _get_settings.cache_clear()
+    yield
+    _get_settings.cache_clear()
 
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+
+def _build_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> AppSettings:
+    """Build a fresh AppSettings from the current monkeypatched environment."""
+    from db_monitor.core.config import _get_settings
+    _get_settings.cache_clear()
+    return AppSettings.from_env()
 
 
 def test_config_loads_secret_files_in_production(
@@ -49,15 +67,15 @@ def test_config_loads_secret_files_in_production(
     monkeypatch.setenv("JWT_SECRET_FILE", str(jwt_secret_file))
     monkeypatch.setenv("JWT_SECRET_NEXT_FILE", str(jwt_secret_next_file))
 
-    config = _load_config_module("config_from_secret_files")
+    config = _build_settings_from_env(monkeypatch)
 
     assert (
-        config.POSTGRES_URL
+        config.db.postgres_url
         == "postgresql+asyncpg://user:pass@db:5432/postgres"
     )
-    assert config.JWT_SECRET == "current-secret-123456789012345678901234"
+    assert config.auth.jwt_secret == "current-secret-123456789012345678901234"
     assert (
-        config.JWT_SECRET_NEXT
+        config.auth.jwt_secret_next
         == "next-secret-1234567890123456789012345678"
     )
 
@@ -85,10 +103,28 @@ def test_config_rejects_missing_jwt_secret_in_production(
         ValueError,
         match="JWT_SECRET must be explicitly configured in production",
     ):
-        _load_config_module("config_missing_secret")
+        _build_settings_from_env(monkeypatch)
+
+
+def test_config_loads_schema_mode_from_file_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """DB_SCHEMA_MODE_FILE should override the env var when set."""
+    schema_mode_file = tmp_path / "db_schema_mode"
+    schema_mode_file.write_text("validate\n", encoding="utf-8")
+
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("DB_SCHEMA_MODE", raising=False)
+    monkeypatch.setenv("DB_SCHEMA_MODE_FILE", str(schema_mode_file))
+
+    config = _build_settings_from_env(monkeypatch)
+
+    assert config.db_schema_mode == "validate"
 
 
 def test_config_rejects_invalid_schema_mode_with_hint(
+
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Config errors should identify invalid schema mode values clearly."""
@@ -99,7 +135,7 @@ def test_config_rejects_invalid_schema_mode_with_hint(
         ValueError,
         match="Invalid DB_SCHEMA_MODE='broken'.*apply, validate, skip",
     ):
-        _load_config_module("config_invalid_schema_mode")
+        _build_settings_from_env(monkeypatch)
 
 
 def test_config_reports_missing_secret_file_with_remediation(
@@ -126,7 +162,7 @@ def test_config_reports_missing_secret_file_with_remediation(
             "set JWT_SECRET directly"
         ),
     ):
-        _load_config_module("config_missing_secret_file")
+        _build_settings_from_env(monkeypatch)
 
 
 def test_config_loads_multiple_kafka_clusters(
@@ -143,9 +179,9 @@ def test_config_loads_multiple_kafka_clusters(
         ),
     )
 
-    config = _load_config_module("config_multiple_kafka_clusters")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.KAFKA_CLUSTERS == [
+    assert config.broker.kafka_clusters == [
         {
             "name": "primary",
             "bootstrap_servers": ["kafka-a:9092"],
@@ -158,7 +194,7 @@ def test_config_loads_multiple_kafka_clusters(
             "bootstrap_servers": ["kafka-b:9092"],
             "topics": ["shipping.events"],
             "topic_partitions": None,
-            "consumer_group": config.KAFKA_CONSUMER_GROUP,
+            "consumer_group": config.broker.kafka_consumer_group,
         },
     ]
 
@@ -179,7 +215,7 @@ def test_config_rejects_duplicate_kafka_cluster_names(
         ValueError,
         match="Duplicate Kafka cluster name 'dup'",
     ):
-        _load_config_module("config_duplicate_kafka_clusters")
+        _build_settings_from_env(monkeypatch)
 
 
 def test_config_loads_topic_partition_assignments(
@@ -195,9 +231,9 @@ def test_config_loads_topic_partition_assignments(
         ),
     )
 
-    config = _load_config_module("config_topic_partitions")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.KAFKA_CLUSTERS == [
+    assert config.broker.kafka_clusters == [
         {
             "name": "primary",
             "bootstrap_servers": ["kafka-a:9092"],
@@ -228,7 +264,7 @@ def test_config_rejects_mismatched_topics_and_topic_partitions(
         ValueError,
         match="topics and topic_partitions must describe the same topics",
     ):
-        _load_config_module("config_mismatched_topic_partitions")
+        _build_settings_from_env(monkeypatch)
 
 
 def test_config_requires_otlp_endpoint_when_tracing_enabled(
@@ -243,7 +279,7 @@ def test_config_requires_otlp_endpoint_when_tracing_enabled(
         ValueError,
         match="OTEL_EXPORTER_OTLP_ENDPOINT is required",
     ):
-        _load_config_module("config_missing_otlp_endpoint")
+        _build_settings_from_env(monkeypatch)
 
 
 def test_config_accepts_console_exporter_when_tracing_enabled(
@@ -254,10 +290,10 @@ def test_config_accepts_console_exporter_when_tracing_enabled(
     monkeypatch.setenv("OTEL_EXPORTER", "console")
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
 
-    config = _load_config_module("config_console_tracing")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.OTEL_TRACING_ENABLED is True
-    assert config.OTEL_EXPORTER == "console"
+    assert config.observability.otel_tracing_enabled is True
+    assert config.observability.otel_exporter == "console"
 
 
 def test_config_loads_webhook_settings(
@@ -275,18 +311,18 @@ def test_config_loads_webhook_settings(
     monkeypatch.setenv("WEBHOOK_CIRCUIT_BREAKER_THRESHOLD", "6")
     monkeypatch.setenv("WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS", "12")
 
-    config = _load_config_module("config_webhooks")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.WEBHOOK_URLS == [
+    assert config.webhook.urls == [
         "https://hooks.example/a",
         "https://hooks.example/b",
     ]
-    assert config.WEBHOOK_TIMEOUT_SECONDS == 9.5
-    assert config.WEBHOOK_SHARED_SECRET == "shared-secret"
-    assert config.WEBHOOK_MAX_RETRIES == 4
-    assert config.WEBHOOK_RETRY_BACKOFF_SECONDS == 0.75
-    assert config.WEBHOOK_CIRCUIT_BREAKER_THRESHOLD == 6
-    assert config.WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS == 12.0
+    assert config.webhook.timeout_seconds == 9.5
+    assert config.webhook.shared_secret == "shared-secret"
+    assert config.webhook.max_retries == 4
+    assert config.webhook.retry_backoff_seconds == 0.75
+    assert config.webhook.circuit_breaker_threshold == 6
+    assert config.webhook.circuit_breaker_recovery_seconds == 12.0
 
 
 def test_config_loads_rabbitmq_broker_clusters(
@@ -305,20 +341,20 @@ def test_config_loads_rabbitmq_broker_clusters(
         ),
     )
 
-    config = _load_config_module("config_broker_clusters")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.BROKER_CLUSTERS == [
+    assert config.broker.broker_clusters == [
         {
             "name": "rabbit-primary",
             "broker_kind": "rabbitmq",
             "bootstrap_servers": None,
             "topics": ["cdc.orders", "cdc.shipments"],
             "topic_partitions": None,
-            "consumer_group": config.KAFKA_CONSUMER_GROUP,
+            "consumer_group": config.broker.kafka_consumer_group,
             "connection_url": "amqp://rabbit/",
             "queue_names": ["cdc.orders", "cdc.shipments"],
             "prefetch_count": 25,
-            "dlq_destination": config.RABBITMQ_DLQ_QUEUE,
+            "dlq_destination": config.broker.rabbitmq_dlq_queue,
         },
         {
             "name": "kafka-secondary",
@@ -326,7 +362,7 @@ def test_config_loads_rabbitmq_broker_clusters(
             "bootstrap_servers": ["kafka-a:9092"],
             "topics": ["orders.events"],
             "topic_partitions": None,
-            "consumer_group": config.KAFKA_CONSUMER_GROUP,
+            "consumer_group": config.broker.kafka_consumer_group,
             "connection_url": None,
             "queue_names": None,
             "prefetch_count": None,
@@ -343,20 +379,20 @@ def test_config_defaults_to_rabbitmq_cluster_when_requested(
     monkeypatch.setenv("RABBITMQ_URL", "amqp://rabbitmq/")
     monkeypatch.setenv("RABBITMQ_QUEUES", "cdc.orders,cdc.shipments")
 
-    config = _load_config_module("config_default_rabbitmq_cluster")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.BROKER_CLUSTERS == [
+    assert config.broker.broker_clusters == [
         {
             "name": "default",
             "broker_kind": "rabbitmq",
             "bootstrap_servers": None,
             "topics": ["cdc.orders", "cdc.shipments"],
             "topic_partitions": None,
-            "consumer_group": config.KAFKA_CONSUMER_GROUP,
+            "consumer_group": config.broker.kafka_consumer_group,
             "connection_url": "amqp://rabbitmq/",
             "queue_names": ["cdc.orders", "cdc.shipments"],
-            "prefetch_count": config.RABBITMQ_PREFETCH_COUNT,
-            "dlq_destination": config.RABBITMQ_DLQ_QUEUE,
+            "prefetch_count": config.broker.rabbitmq_prefetch_count,
+            "dlq_destination": config.broker.rabbitmq_dlq_queue,
         }
     ]
 
@@ -376,18 +412,18 @@ def test_config_loads_retention_controls(
     monkeypatch.setenv("DEAD_LETTER_RETENTION_DAYS", "45")
     monkeypatch.setenv("API_AUDIT_LOG_RETENTION_DAYS", "120")
 
-    config = _load_config_module("config_retention_controls")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.RETENTION_CLEANUP_ENABLED is True
-    assert config.RETENTION_CLEANUP_INTERVAL_SECONDS == 900
-    assert config.RETENTION_CLEANUP_BATCH_SIZE == 250
-    assert config.RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE == 7
-    assert config.RETENTION_ARCHIVE_BEFORE_DELETE is True
-    assert config.RETENTION_ARCHIVE_DIR == "/tmp/db-monitor-archive"
-    assert config.EVENT_RETENTION_DAYS == 14
-    assert config.COLUMN_CHANGES_RETENTION_DAYS == 21
-    assert config.DEAD_LETTER_RETENTION_DAYS == 45
-    assert config.API_AUDIT_LOG_RETENTION_DAYS == 120
+    assert config.retention.cleanup_enabled is True
+    assert config.retention.cleanup_interval_seconds == 900
+    assert config.retention.cleanup_batch_size == 250
+    assert config.retention.cleanup_max_batches_per_table == 7
+    assert config.retention.archive_before_delete is True
+    assert config.retention.archive_dir == "/tmp/db-monitor-archive"
+    assert config.retention.event_retention_days == 14
+    assert config.retention.column_changes_retention_days == 21
+    assert config.retention.dead_letter_retention_days == 45
+    assert config.retention.api_audit_log_retention_days == 120
 
 
 def test_config_rejects_non_positive_retention_interval(
@@ -400,7 +436,7 @@ def test_config_rejects_non_positive_retention_interval(
         ValueError,
         match="RETENTION_CLEANUP_INTERVAL_SECONDS must be greater than zero",
     ):
-        _load_config_module("config_invalid_retention_interval")
+        _build_settings_from_env(monkeypatch)
 
 
 def test_config_rejects_negative_event_retention_days(
@@ -413,7 +449,7 @@ def test_config_rejects_negative_event_retention_days(
         ValueError,
         match="EVENT_RETENTION_DAYS cannot be negative",
     ):
-        _load_config_module("config_invalid_event_retention_days")
+        _build_settings_from_env(monkeypatch)
 
 
 def test_config_loads_ingestion_quota_controls(
@@ -441,19 +477,19 @@ def test_config_loads_ingestion_quota_controls(
         '{"tenant-a":250,"tenant-b":100}',
     )
 
-    config = _load_config_module("config_ingestion_quota")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.INGESTION_QUOTA_ENABLED is True
-    assert config.INGESTION_QUOTA_WINDOW_SECONDS == 120
-    assert config.INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW == 1500
-    assert config.INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW == 300
-    assert config.INGESTION_QUOTA_MODE == "drop"
-    assert config.INGESTION_QUOTA_MAX_THROTTLE_SECONDS == 2.5
-    assert config.INGESTION_SOURCE_QUOTAS == {
+    assert config.ingestion.quota_enabled is True
+    assert config.ingestion.quota_window_seconds == 120
+    assert config.ingestion.source_default_events_per_window == 1500
+    assert config.ingestion.tenant_default_events_per_window == 300
+    assert config.ingestion.quota_mode == "drop"
+    assert config.ingestion.quota_max_throttle_seconds == 2.5
+    assert config.ingestion.source_quotas == {
         "orderdb": 1200,
         "shippingdb": 600,
     }
-    assert config.INGESTION_TENANT_QUOTAS == {
+    assert config.ingestion.tenant_quotas == {
         "tenant-a": 250,
         "tenant-b": 100,
     }
@@ -469,7 +505,7 @@ def test_config_rejects_invalid_ingestion_quota_mode(
         ValueError,
         match="Invalid INGESTION_QUOTA_MODE='pause'",
     ):
-        _load_config_module("config_invalid_ingestion_quota_mode")
+        _build_settings_from_env(monkeypatch)
 
 
 def test_config_loads_ingestion_bulk_write_flag(
@@ -478,9 +514,9 @@ def test_config_loads_ingestion_bulk_write_flag(
     """Bulk-write toggle should parse as a boolean feature flag."""
     monkeypatch.setenv("INGESTION_BULK_WRITE_ENABLED", "false")
 
-    config = _load_config_module("config_ingestion_bulk_write")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.INGESTION_BULK_WRITE_ENABLED is False
+    assert config.ingestion.bulk_write_enabled is False
 
 
 def test_config_loads_tenant_cohort_slo_policies(
@@ -504,10 +540,10 @@ def test_config_loads_tenant_cohort_slo_policies(
         ),
     )
 
-    config = _load_config_module("config_slo_policy")
+    config = _build_settings_from_env(monkeypatch)
 
-    assert config.SLO_ROLLING_WINDOW_DAYS == 28
-    assert config.TENANT_COHORT_SLO_POLICIES == [
+    assert config.slo_rolling_window_days == 28
+    assert config.tenant_cohort_slo_policies == [
         {
             "name": "small",
             "max_sources": 10,
@@ -549,4 +585,4 @@ def test_config_rejects_invalid_slo_availability_target(
         ValueError,
         match=r"availability_target must be in \(0, 100\]",
     ):
-        _load_config_module("config_invalid_slo_availability")
+        _build_settings_from_env(monkeypatch)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-import routes.ops as routes_ops
+from db_monitor.routes import ops as routes_ops
 
 
 @pytest.mark.anyio

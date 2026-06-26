@@ -2,21 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import gc
-import importlib
-import sys
-import types
-from pathlib import Path
 
 import pytest
 
-
-_APP_CORE_PATH = Path(__file__).resolve().parents[1] / "app" / "core"
-if "core" not in sys.modules:
-    core_package = types.ModuleType("core")
-    core_package.__path__ = [str(_APP_CORE_PATH)]
-    sys.modules["core"] = core_package
-
-lifecycle_module = importlib.import_module("lifecycle_manager")
+from db_monitor import lifecycle_manager as lifecycle_module
 
 
 @pytest.mark.anyio

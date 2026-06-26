@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-import routes.ops as routes_ops
+from db_monitor.routes import ops as routes_ops
 
 
 @pytest.mark.anyio
@@ -71,17 +71,13 @@ async def test_replay_repository_with_fake_session(monkeypatch):
         def add(self, model):
             self.added.append(model)
 
-    # Patch both package and app-level module paths to be robust in tests
+    # Patch the canonical package path
     monkeypatch.setattr(
         "db_monitor.repositories.audit_log_replay.AsyncSessionLocal",
         lambda: FakeSession(),
     )
-    monkeypatch.setattr(
-        "repositories.audit_log_replay.AsyncSessionLocal",
-        lambda: FakeSession(),
-    )
 
-    from repositories.audit_log_replay import replay_spill_entries
+    from db_monitor.repositories.audit_log_replay import replay_spill_entries
 
     result = await replay_spill_entries(limit=10)
     assert result["attempted"] == 2
@@ -143,10 +139,10 @@ async def test_replay_marks_spill_with_actor_and_ids(monkeypatch):
                 pass
 
     monkeypatch.setattr(
-        "repositories.audit_log_replay.AsyncSessionLocal",
+        "db_monitor.repositories.audit_log_replay.AsyncSessionLocal",
         lambda: FakeSession(),
     )
-    from repositories.audit_log_replay import replay_spill_entries
+    from db_monitor.repositories.audit_log_replay import replay_spill_entries
 
     result = await replay_spill_entries(ids=[101], actor="script-user")
     assert result["attempted"] == 1

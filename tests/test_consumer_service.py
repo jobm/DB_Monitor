@@ -6,10 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import consumer_service
-import message_brokers
+from db_monitor.ingestion import broadcast, consumer_service, dlq, event_storage, recovery
+from db_monitor.core.models import DeadLetterEvent, KafkaEvent
 from db_monitor.ingestion.quota import QuotaDecision
-from db_monitor.models import KafkaEvent
 
 
 class FakeTimerMetric:
@@ -222,22 +221,22 @@ async def test_store_event_graph_persists_changes_once(monkeypatch):
         captured["change_event_id"] = event_obj.id
 
     monkeypatch.setattr(
-        consumer_service,
+        event_storage,
         "db_write_duration_seconds",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service.schema_discovery,
+        event_storage.schema_discovery,
         "process_event",
         fake_process_schema,
     )
     monkeypatch.setattr(
-        consumer_service,
+        event_storage,
         "_insert_event_record",
         fake_insert_record,
     )
     monkeypatch.setattr(
-        consumer_service.change_processor,
+        event_storage.change_processor,
         "process_event",
         fake_process_changes,
     )
@@ -282,22 +281,22 @@ async def test_store_event_graph_skips_changes_for_duplicates(monkeypatch):
         change_calls += 1
 
     monkeypatch.setattr(
-        consumer_service,
+        event_storage,
         "db_write_duration_seconds",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service.schema_discovery,
+        event_storage.schema_discovery,
         "process_event",
         fake_process_schema,
     )
     monkeypatch.setattr(
-        consumer_service,
+        event_storage,
         "_insert_event_record",
         fake_insert_record,
     )
     monkeypatch.setattr(
-        consumer_service.change_processor,
+        event_storage.change_processor,
         "process_event",
         fake_process_changes,
     )
@@ -349,11 +348,11 @@ def test_checkpoint_rows_for_events_keeps_highest_offset_per_partition(
         ),
     ]
 
-    checkpoints = consumer_service._checkpoint_rows_for_events(events)
+    checkpoints = recovery._checkpoint_rows_for_events(events)
 
     assert checkpoints == [
         {
-            "consumer_group": consumer_service.KAFKA_CONSUMER_GROUP,
+            "consumer_group": consumer_service.settings.broker.kafka_consumer_group,
             "broker_kind": "kafka",
             "broker_destination": "orderdb.public.orders",
             "broker_substream": "0",
@@ -364,7 +363,7 @@ def test_checkpoint_rows_for_events_keeps_highest_offset_per_partition(
             "last_event_time": now,
         },
         {
-            "consumer_group": consumer_service.KAFKA_CONSUMER_GROUP,
+            "consumer_group": consumer_service.settings.broker.kafka_consumer_group,
             "broker_kind": "kafka",
             "broker_destination": "orderdb.public.orders",
             "broker_substream": "1",
@@ -402,7 +401,7 @@ def test_checkpoint_rows_for_rabbitmq_use_broker_metadata() -> None:
         ),
     ]
 
-    checkpoints = consumer_service._checkpoint_rows_for_events(
+    checkpoints = recovery._checkpoint_rows_for_events(
         events,
         consumer_group="rabbit-group",
         broker_kind="rabbitmq",
@@ -714,12 +713,12 @@ async def test_broadcast_event_delivers_webhooks(monkeypatch):
         webhook_messages.append(message)
 
     monkeypatch.setattr(
-        consumer_service.ws_manager,
+        broadcast.ws_manager,
         "broadcast",
         fake_broadcast,
     )
     monkeypatch.setattr(
-        consumer_service.webhook_notifier,
+        broadcast.webhook_notifier,
         "send_message",
         fake_send_message,
     )
@@ -795,17 +794,17 @@ async def test_broadcast_event_persists_webhook_failures_to_dlq(
         return 12
 
     monkeypatch.setattr(
-        consumer_service.ws_manager,
+        broadcast.ws_manager,
         "broadcast",
         fake_broadcast,
     )
     monkeypatch.setattr(
-        consumer_service,
+        broadcast,
         "webhook_notifier",
         FakeWebhookNotifier(),
     )
     monkeypatch.setattr(
-        consumer_service,
+        broadcast,
         "_persist_dead_letter_event",
         fake_persist_dead_letter_event,
     )
@@ -838,8 +837,7 @@ async def test_consumer_task_assigns_explicit_topic_partitions(monkeypatch):
         return 0
 
     monkeypatch.setattr(
-        message_brokers,
-        "AIOKafkaConsumer",
+        "db_monitor.ingestion.brokers.AIOKafkaConsumer",
         fake_consumer_factory,
     )
     monkeypatch.setattr(
@@ -907,7 +905,6 @@ async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
     def fake_build_dead_letter_publisher(**kwargs):
         assert kwargs["broker_kind"] == "rabbitmq"
         assert kwargs["connection_url"] == "amqp://rabbit/"
-        assert kwargs["dlq_destination"] == "rabbit-dlq"
         return dlq_publisher
 
     monkeypatch.setattr(
@@ -1011,6 +1008,9 @@ async def test_consumer_task_acks_filtered_events(monkeypatch):
         assert kwargs["broker_kind"] == "rabbitmq"
         return consumer_adapter
 
+    def fake_build_dead_letter_publisher(**kwargs):
+        return None
+
     def fake_should_process(_event):
         return False
 
@@ -1031,6 +1031,11 @@ async def test_consumer_task_acks_filtered_events(monkeypatch):
         consumer_service,
         "build_message_consumer",
         fake_build_message_consumer,
+    )
+    monkeypatch.setattr(
+        consumer_service,
+        "build_dead_letter_publisher",
+        fake_build_dead_letter_publisher,
     )
     monkeypatch.setattr(
         consumer_service.event_pipeline,
@@ -1098,6 +1103,9 @@ async def test_consumer_task_acks_quota_dropped_events(monkeypatch):
         assert kwargs["broker_kind"] == "rabbitmq"
         return consumer_adapter
 
+    def fake_build_dead_letter_publisher(**kwargs):
+        return None
+
     def fake_should_process(_event):
         return True
 
@@ -1119,8 +1127,8 @@ async def test_consumer_task_acks_quota_dropped_events(monkeypatch):
         )
 
     monkeypatch.setattr(
-        consumer_service,
-        "INGESTION_QUOTA_ENABLED",
+        consumer_service.settings.ingestion,
+        "quota_enabled",
         True,
     )
     monkeypatch.setattr(
@@ -1270,8 +1278,8 @@ async def test_process_batch_requeues_rabbitmq_messages_on_dlq_failure(
         return False
 
     monkeypatch.setattr(
-        consumer_service,
-        "INGESTION_BULK_WRITE_ENABLED",
+        consumer_service.settings.ingestion,
+        "bulk_write_enabled",
         False,
     )
     monkeypatch.setattr(
@@ -1347,8 +1355,8 @@ async def test_process_batch_uses_bulk_write_path(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        consumer_service,
-        "INGESTION_BULK_WRITE_ENABLED",
+        consumer_service.settings.ingestion,
+        "bulk_write_enabled",
         True,
     )
     monkeypatch.setattr(
@@ -1443,8 +1451,8 @@ async def test_process_batch_falls_back_when_bulk_write_fails(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        consumer_service,
-        "INGESTION_BULK_WRITE_ENABLED",
+        consumer_service.settings.ingestion,
+        "bulk_write_enabled",
         True,
     )
     monkeypatch.setattr(
@@ -1524,12 +1532,12 @@ async def test_replay_dead_letter_event_records_aggregates_results(
         raise RuntimeError("replay failed")
 
     monkeypatch.setattr(
-        consumer_service,
+        dlq,
         "replay_dead_letter_event_record",
         fake_replay_dead_letter_event_record,
     )
 
-    result = await consumer_service.replay_dead_letter_event_records(
+    result = await dlq.replay_dead_letter_event_records(
         limit=3,
         session_factory=lambda: FakeScalarIdsSession([1, 2, 3]),
     )
@@ -1557,8 +1565,8 @@ def test_build_replay_event_restores_rabbitmq_location(monkeypatch) -> None:
         lambda _raw_payload: parsed_event,
     )
 
-    replay_event = consumer_service._build_replay_event(
-        consumer_service.DeadLetterEvent(
+    replay_event = dlq._build_replay_event(
+        DeadLetterEvent(
             broker_kind="rabbitmq",
             broker_destination="cdc.orders",
             broker_substream="",

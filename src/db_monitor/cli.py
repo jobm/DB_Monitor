@@ -7,9 +7,37 @@ operations to compatibility adapters while namespace migration is in progress.
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Sequence
 
-from db_monitor.legacy_runtime import run_legacy_migrate, run_legacy_server
+from db_monitor.start_monitor import main as run_legacy_server
+
+
+def run_legacy_migrate(migrate_args: Sequence[str] | None = None) -> int:
+    """Run the migration CLI, optionally forwarding arguments."""
+    import asyncio
+
+    from db_monitor.core import migrations
+    from db_monitor.extensions import AsyncSessionLocal, engine
+
+    command = migrate_args[0] if migrate_args else "apply"
+
+    async def _run(cmd: str) -> int:
+        if cmd == "validate":
+            await migrations.validate_migrations(engine)
+            print("Database schema validation succeeded.")
+            return 0
+        applied_versions = await migrations.apply_migrations(
+            AsyncSessionLocal,
+            engine,
+        )
+        if applied_versions:
+            print("Applied migrations:", ", ".join(applied_versions))
+        else:
+            print("No pending migrations.")
+        return 0
+
+    return asyncio.run(_run(command))
 
 
 def _build_parser() -> argparse.ArgumentParser:

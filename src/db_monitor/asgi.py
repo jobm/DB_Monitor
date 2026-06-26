@@ -1,17 +1,12 @@
-"""ASGI compatibility export for package-based server startup."""
+"""ASGI application entrypoint.
+
+Re-exports the application instance from the canonical :mod:`db_monitor.main`
+module for compatibility with ASGI servers (uvicorn, hypercorn, etc.).
+"""
 
 from __future__ import annotations
 
-import importlib
+from db_monitor.main import app
 
-from db_monitor.legacy_runtime import ensure_legacy_path
+__all__ = ["app"]
 
-
-def _load_legacy_app():
-    """Load and return the FastAPI app from the legacy module."""
-    ensure_legacy_path()
-    legacy_main = importlib.import_module("main")
-    return legacy_main.app
-
-
-app = _load_legacy_app()

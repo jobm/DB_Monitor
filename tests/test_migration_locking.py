@@ -97,18 +97,22 @@ async def test_concurrent_migration_locking(monkeypatch: pytest.MonkeyPatch):
         return None
 
     monkeypatch.setattr(
-        "migrations._acquire_migration_lock", fake_acquire_lock
+        "db_monitor.core.migrations._acquire_migration_lock",
+        fake_acquire_lock,
     )
     monkeypatch.setattr(
-        "migrations._release_migration_lock", fake_release_lock
+        "db_monitor.core.migrations._release_migration_lock",
+        fake_release_lock,
     )
     monkeypatch.setattr(
-        "migrations._get_applied_versions", fake_get_applied_versions
+        "db_monitor.core.migrations._get_applied_versions",
+        fake_get_applied_versions,
     )
     monkeypatch.setattr(
-        "migrations._ensure_migration_table", fake_ensure_table
+        "db_monitor.core.migrations._ensure_migration_table",
+        fake_ensure_table,
     )
-    monkeypatch.setattr("migrations.MIGRATIONS", ())
+    monkeypatch.setattr("db_monitor.core.migrations.MIGRATIONS", ())
 
     fake_engine = await _make_fake_engine()
 
@@ -173,18 +177,22 @@ async def test_migration_lock_released_after_completion(
         return None
 
     monkeypatch.setattr(
-        "migrations._acquire_migration_lock", fake_acquire_lock
+        "db_monitor.core.migrations._acquire_migration_lock",
+        fake_acquire_lock,
     )
     monkeypatch.setattr(
-        "migrations._release_migration_lock", fake_release_lock
+        "db_monitor.core.migrations._release_migration_lock",
+        fake_release_lock,
     )
     monkeypatch.setattr(
-        "migrations._get_applied_versions", fake_get_applied_versions
+        "db_monitor.core.migrations._get_applied_versions",
+        fake_get_applied_versions,
     )
     monkeypatch.setattr(
-        "migrations._ensure_migration_table", fake_ensure_table
+        "db_monitor.core.migrations._ensure_migration_table",
+        fake_ensure_table,
     )
-    monkeypatch.setattr("migrations.MIGRATIONS", ())
+    monkeypatch.setattr("db_monitor.core.migrations.MIGRATIONS", ())
 
     fake_engine = await _make_fake_engine()
 

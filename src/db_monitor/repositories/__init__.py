@@ -1,14 +1,5 @@
-"""Canonical repositories namespace package."""
+"""Repository layer modules for query and persistence boundaries."""
 
-from db_monitor.repositories.audit_log_replay import replay_spill_entries
-from db_monitor.repositories.audit_log_spill import (
-    list_audit_log_spill_snapshot,
-)
 from db_monitor.repositories.events import EventQueryFilters, EventsRepository
 
-__all__ = [
-    "EventQueryFilters",
-    "EventsRepository",
-    "list_audit_log_spill_snapshot",
-    "replay_spill_entries",
-]
+__all__ = ["EventQueryFilters", "EventsRepository"]

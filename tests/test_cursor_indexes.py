@@ -1,4 +1,4 @@
-from db_monitor.models import ColumnChange, KafkaEvent
+from db_monitor.core.models import ColumnChange, KafkaEvent
 
 
 def test_cursor_pagination_indexes_are_defined() -> None:

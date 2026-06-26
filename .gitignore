@@ -16,3 +16,4 @@ secrets/*
 !secrets/README.md
 !secrets/*.example
 retention-archive/
+dist/
