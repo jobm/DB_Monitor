@@ -92,38 +92,38 @@ The entire config unification has been executed. All config is loaded from a sin
 
 ---
 
-### Workstream C: Break Up Monoliths (Priority: P1, Effort: 5-8 days, Depends on: A, B)
+### Workstream C: Break Up Monoliths (Priority: P1, Effort: 5-8 days, Depends on: A, B) ✅
 
-#### C.1 — Split `consumer_service.py` (~1300 lines)
+#### C.1 — Split `consumer_service.py` (~1300→0 lines)
 
-- [ ] Extract `db_monitor/consumer/consumer.py` — main message loop + connection management
-- [ ] Extract `db_monitor/consumer/batch.py` — batch processing logic
-- [ ] Extract `db_monitor/consumer/dlq.py` — dead-letter queue operations
-- [ ] Extract `db_monitor/consumer/checkpoint.py` — offset checkpoint management
-- [ ] Extract `db_monitor/consumer/webhook.py` — webhook delivery (from `_broadcast_event`)
+- [x] Extract `db_monitor/consumer/consumer.py` — main message loop + connection management
+- [x] Extract `db_monitor/consumer/batch/` — batch processing sub-package (`core.py`, `helpers.py`, `processing.py`)
+- [x] Extract `db_monitor/consumer/dlq.py` — dead-letter queue operations
+- [x] Extract `db_monitor/consumer/checkpoint.py` — offset checkpoint management
+- [x] Webhook already extracted to `ingestion/broadcast.py` — no separate module needed
 
-**Done when:** `consumer_service.py` is removed. Each new module is <300 lines and focused on one concern.
+**Done when:** `consumer_service.py` is removed. Each new module is <300 lines and focused on one concern. ✅
 
 #### C.2 — Split `app/config.py` (after consolidation to dataclass)
 
-- [ ] Create `db_monitor/core/config/__init__.py` — exports unified `AppSettings`
-- [ ] Create `db_monitor/core/config/settings.py` — dataclass definitions
-- [ ] Create `db_monitor/core/config/loaders.py` — file loading, CSV parsing, JSON loading
-- [ ] Create `db_monitor/core/config/validators.py` — cross-field validation rules
+- [x] Create `db_monitor/core/config/__init__.py` — exports unified `AppSettings`
+- [x] Create `db_monitor/core/config/dataclasses/` — dataclass definitions for all setting domains
+- [x] Create `db_monitor/core/config/loaders.py` — file loading, CSV parsing, JSON loading
+- [x] Create `db_monitor/core/config/normalizers/` — cross-field validation rules (urls, quotas, SLO, clusters)
 
 #### C.3 — Refactor API routes
 
-- [ ] Ensure `/events`, `/changes`, `/tables` each have their own route module
-- [ ] Extract middleware and dependency injection into a separate module
+- [x] Ensure `/events`, `/changes`, `/tables` each have their own route module in `routes/data/`
+- [x] Extract middleware and dependency injection into `routes/data/factories.py`
 
 #### C.4 — Split `consumer_task` (~500 lines)
 
-- [ ] Extract `_connect_with_retry()` — connection loop
-- [ ] Extract `_process_message()` — single message handling
-- [ ] Extract `_quota_check()` — quota enforcement step
-- [ ] Extract `_handle_error()` — error path with DLQ fallback
+- [x] Extract `consumer/connection.py` — connection loop (`_connect_with_retry`)
+- [x] Extract `consumer/loop.py` — main consumer task loop
+- [x] Extract `consumer/handlers.py` — message handling and quota enforcement
+- [x] Extract `consumer/dlq.py` — error path with DLQ fallback
 
-**Done when:** Each extracted function is <80 lines and has unit tests.
+**Done when:** Each extracted function is <80 lines and has unit tests. ✅
 
 ---
 
