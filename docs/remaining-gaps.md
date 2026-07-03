@@ -1,6 +1,6 @@
 # Remaining Gaps — Comprehensive TODO
 
-**Generated:** 2026-06-23
+**Generated:** 2026-07-04
 **Source:** Aggregated from all `docs/*.md` files, `TODO.md`, and codebase audit.
 
 ---
@@ -141,7 +141,7 @@ The entire config unification has been executed. All config is loaded from a sin
 
 - [x] Add test that runs all migrations on a fresh database — `test_all_migrations_on_fresh_database` in `test_migration_schema.py`
 - [x] Verify final schema matches SQLAlchemy model definitions — both static DDL analysis and live integration test verify column coverage
-- [ ] Add test for rollback/down migrations (if supported) — deferred (optional per spec)
+- [ ] Add test for rollback/down migrations (if supported) — ⏳ deferred (not part of current migration framework design)
 
 #### D.3 — Document migration workflow
 
@@ -259,7 +259,7 @@ The entire config unification has been executed. All config is loaded from a sin
 #### H.1 — Version management ✅
 
 - [x] Add `__version__` to `src/db_monitor/__init__.py` readable without `importlib.metadata` — static fallback `"0.0.1"` string set before trying the installed-package version
-- [ ] Tag releases in git with `v*.*.*` — deferred (requires first release)
+- [x] Tag releases in git with `v*.*.*` — `v0.1.0` tagged
 
 #### H.2 — CI/CD pipeline ✅
 
@@ -295,9 +295,9 @@ The entire config unification has been executed. All config is loaded from a sin
 
 #### OS-2 — CONTRIBUTING.md, CHANGELOG.md, CODE_OF_CONDUCT.md
 
-- [ ] Create `CONTRIBUTING.md` (see also F.3 above)
-- [ ] Create `CHANGELOG.md` (see also F.4 above)
-- [ ] Create `CODE_OF_CONDUCT.md`
+- [x] Create `CONTRIBUTING.md` (see also F.3 above)
+- [x] Create `CHANGELOG.md` (see also F.4 above)
+- [ ] Create `CODE_OF_CONDUCT.md` — not yet created
 
 **Done when:** All three files exist at repo root with realistic content.
 
