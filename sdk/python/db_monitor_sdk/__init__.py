@@ -1,5 +1,12 @@
-"""Public package exports for the DB Monitor Python SDK."""
+"""Public package exports for the DB Monitor Python SDK.
 
-from .client import DBMonitorClient
+Provides both synchronous and asynchronous API clients:
 
-__all__ = ["DBMonitorClient"]
+.. code:: python
+
+    from db_monitor_sdk import DBMonitorClient, AsyncDBMonitorClient
+"""
+
+from .client import AsyncDBMonitorClient, DBMonitorClient
+
+__all__ = ["AsyncDBMonitorClient", "DBMonitorClient"]

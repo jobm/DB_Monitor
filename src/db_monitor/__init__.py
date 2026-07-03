@@ -1,20 +1,22 @@
 """Top-level package for DB Monitor.
 
 This package is the canonical namespace for distribution-focused imports.
-During the current migration phase, runtime behavior is delegated to legacy
-`app/` modules to preserve compatibility.
 """
 
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
+# Static fallback version — used when importlib.metadata is unavailable
+# (e.g., editable installs, local checkouts). Updated during the release
+# process.
+__version__: str = "0.0.1"
 
 try:
+    # Prefer the installed-package version when available
     __version__ = version("db-monitor")
 except PackageNotFoundError:
-    # Editable/local source checkouts may not have installed metadata.
-    __version__ = "0.0.0"
+    pass
 
 
 __all__ = ["__version__"]

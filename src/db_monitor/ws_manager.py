@@ -1,3 +1,18 @@
+"""WebSocket connection management and cross-replica broadcast.
+
+Manages connected WebSocket clients, broadcasts events to all subscribers,
+and provides a Postgres LISTEN/NOTIFY backplane for cross-replica event
+fan-out in horizontally scaled deployments.
+
+Key exports:
+    - WebSocketManager: Manages client connections, broadcasting, and backplane
+    - ws_manager: Singleton instance for application-wide use
+
+Related modules:
+    - :mod:`db_monitor.main` — wires ws_manager into the WebSocket route
+    - :mod:`db_monitor.lifespan` — starts/stops the backplane listener
+"""
+
 import asyncio
 import json
 import logging

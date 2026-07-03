@@ -1509,7 +1509,15 @@ async def test_process_batch_falls_back_when_bulk_write_fails(monkeypatch):
 
 @pytest.mark.anyio
 async def test_refresh_dead_letter_backlog_metric_updates_runtime_and_gauge():
-    consumer_mod.consumer_runtime["dlq_messages_total"] = 0
+    """The function updates ``consumer_runtimes`` (plural, the per-cluster
+    runtime dicts) and sets ``dlq_records_pending`` gauge.  It does **not**
+    modify ``consumer_runtime`` (singular) directly — register a cluster
+    to verify the update.
+    """
+    # Register a cluster runtime so the function has something to update
+    cluster_name = "test-cluster"
+    runtime = consumer_mod._get_consumer_runtime(cluster_name)
+    runtime["dlq_messages_total"] = 0
     consumer_mod.dlq_records_pending.set(0)
 
     pending_count = await consumer_mod.refresh_dead_letter_backlog_metric(
@@ -1517,7 +1525,11 @@ async def test_refresh_dead_letter_backlog_metric_updates_runtime_and_gauge():
     )
 
     assert pending_count == 3
-    assert consumer_mod.consumer_runtime["dlq_messages_total"] == 3
+    # The function writes to consumer_runtimes (plural), not consumer_runtime
+    assert (
+        consumer_mod.consumer_runtimes[cluster_name]["dlq_messages_total"]
+        == 3
+    )
     assert consumer_mod.dlq_records_pending._value.get() == 3
 
 

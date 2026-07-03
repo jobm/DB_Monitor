@@ -1,0 +1,34 @@
+{
+  "name": "db-monitor-client",
+  "version": "0.0.1",
+  "description": "Lightweight JavaScript client for the DB Monitor HTTP API",
+  "keywords": [
+    "cdc",
+    "debezium",
+    "api-client",
+    "db-monitor"
+  ],
+  "license": "MIT",
+  "author": "DB Monitor maintainers",
+  "homepage": "https://github.com/jobm/DB_Monitor#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jobm/DB_Monitor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jobm/DB_Monitor/issues"
+  },
+  "main": "db_monitor_client.mjs",
+  "exports": {
+    ".": {
+      "import": "./db_monitor_client.mjs"
+    }
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "db_monitor_client.mjs"
+  ]
+}

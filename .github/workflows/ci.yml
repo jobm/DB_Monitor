@@ -24,7 +24,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
 
       - name: Install app dependencies
-        working-directory: app
+        working-directory: .
         run: uv sync --group dev --frozen
 
       - name: Validate .goosemem coverage
@@ -63,7 +63,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Install dependencies (root project installs db-monitor + deps)
+      - name: Install dependencies
         run: uv sync --group dev --frozen
 
       - name: Start sandbox and core services
@@ -191,11 +191,10 @@ jobs:
             --text-endpoints /metrics
 
       - name: Seed sandbox admin key
-        working-directory: app
         env:
           POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5437/postgres
         run: |
-          sandbox_key="$(uv run python ../scripts/seed_admin_api_key.py --owner-name ci-sandbox)"
+          sandbox_key="$(uv run python scripts/seed_admin_api_key.py --owner-name ci-sandbox)"
           echo "DB_MONITOR_ADMIN_API_KEY=$sandbox_key" >> "$GITHUB_ENV"
 
       - name: Run sandbox pytest checks

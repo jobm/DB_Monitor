@@ -1,4 +1,4 @@
-.PHONY: monitor-help monitor-up monitor-validate-goosemem monitor-up-sandbox monitor-down monitor-down-sandbox monitor-logs monitor-logs-sandbox monitor-register monitor-dev monitor-migrate monitor-test monitor-test-core monitor-test-integration monitor-test-sandbox monitor-test-sandbox-pytest monitor-test-smoke monitor-test-scale monitor-test-scale-target monitor-test-container-readyz monitor-lint monitor-typecheck monitor-package-smoke monitor-recovery monitor-tui monitor-tui-build
+.PHONY: monitor-help monitor-up monitor-validate-goosemem monitor-up-sandbox monitor-down monitor-down-sandbox monitor-logs monitor-logs-sandbox monitor-register monitor-dev monitor-migrate monitor-test monitor-test-core monitor-test-integration monitor-test-sandbox monitor-test-sandbox-pytest monitor-test-smoke monitor-test-scale monitor-test-scale-target monitor-test-container-readyz monitor-lint monitor-lint-fix monitor-typecheck monitor-package-smoke monitor-recovery monitor-tui monitor-tui-build monitor-test-quota monitor-test-lifecycle test lint typecheck
 
 PODMAN_COMPOSE ?= $(shell command -v podman-compose 2>/dev/null || echo "docker compose")
 
@@ -78,8 +78,46 @@ monitor-test-core: ## Run reusable core-platform pytest coverage
 monitor-lint: ## Run Ruff lint checks for package and tests
 	uv run --group dev python -m ruff check src/db_monitor tests
 
+monitor-lint-fix: ## Auto-fix lint issues where possible
+	uv run --group dev python -m ruff check --fix src/db_monitor tests
+
 monitor-typecheck: ## Run mypy checks for the package namespace
 	uv run --group dev python -m mypy
+
+monitor-test-quota: ## Run ingestion quota tests (unit + property-based)
+	uv run --group dev python -m pytest tests/test_ingestion_quota.py tests/test_ingestion_quota_property.py -v --tb=short
+
+monitor-test-lifecycle: ## Run lifecycle manager tests
+	uv run --group dev python -m pytest tests/test_lifecycle_manager.py -v --tb=short
+
+# ── Short aliases ─────────────────────────────────────────────────────
+# These mirror the canonical monitor-* targets for muscle-memory convenience.
+
+test: ## Short alias for monitor-test-core
+	$(MAKE) monitor-test-core
+
+lint: ## Short alias for monitor-lint
+	$(MAKE) monitor-lint
+
+typecheck: ## Short alias for monitor-typecheck
+	$(MAKE) monitor-typecheck
+
+monitor-publish: ## Build wheel/sdist and publish to PyPI (use TWINE_USERNAME + TWINE_PASSWORD)
+	uv run --group dev python -m build
+	uv run --group dev python -m twine upload dist/*
+
+monitor-publish-test: ## Build wheel/sdist and publish to Test PyPI
+	uv run --group dev python -m build
+	uv run --group dev python -m twine upload --repository-url https://test.pypi.org/legacy/ dist/*
+
+monitor-publish-sdk: ## Build and publish the Python SDK package separately
+	cd sdk/python && uv run --group dev python -m build
+	cd sdk/python && uv run --group dev python -m twine upload dist/*
+
+monitor-container-publish: ## Build and push the container image to GitHub Container Registry
+	$(PODMAN_COMPOSE) build monitor-server
+	docker tag db-monitor_monitor-server ghcr.io/jobm/db-monitor:latest
+	docker push ghcr.io/jobm/db-monitor:latest
 
 monitor-package-smoke: ## Build wheel/sdist and verify package import in clean venv
 	rm -rf dist .pkg-smoke-wheel .pkg-smoke-sdist

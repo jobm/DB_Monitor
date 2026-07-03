@@ -163,6 +163,29 @@ sandbox_pytest_skip_reason = importlib.import_module(
 ).sandbox_pytest_skip_reason
 
 
+# ── Module-level state that must be reset between tests ────────────────
+# These dicts are mutated by tests in test_consumer_service.py and can
+# cause order-dependent failures if not cleaned up.
+_CONSUMER_MODULE_STATE_ATTRS = (
+    ("consumer.consumer", "consumer_runtime"),
+    ("consumer.consumer", "consumer_runtimes"),
+    ("consumer.consumer", "cluster_circuit_breakers"),
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_consumer_module_state() -> None:
+    """Clear module-level consumer state before each test to prevent
+    order-dependent test pollution."""
+    import importlib
+
+    for mod_name, attr_name in _CONSUMER_MODULE_STATE_ATTRS:
+        mod = importlib.import_module(f"db_monitor.{mod_name}")
+        obj = getattr(mod, attr_name, None)
+        if obj is not None and isinstance(obj, dict):
+            obj.clear()
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Default repository tests to the core-platform marker.
 

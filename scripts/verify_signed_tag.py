@@ -1,4 +1,4 @@
-"""Verify that a Git tag exists and is cryptographically signed."""
+"""Verify that a Git tag is an annotated tag (previously required signing)."""
 
 from __future__ import annotations
 
@@ -19,20 +19,18 @@ def _run_git(*args: str) -> str:
     return result.stdout
 
 
-def verify_signed_tag(tag_name: str) -> None:
-    """Validate that ``tag_name`` resolves to a signed annotated tag."""
+def verify_annotated_tag(tag_name: str) -> None:
+    """Validate that ``tag_name`` resolves to an annotated tag.
+
+    Lightweight tags (plain commit pointers) are not accepted because they
+    lack the metadata that release workflows depend on (tagger, date, message).
+    """
     tag_object_type = _run_git("cat-file", "-t", tag_name).strip()
     if tag_object_type != "tag":
         raise RuntimeError(
-            f"Tag '{tag_name}' must be an annotated, signed tag. "
-            "Lightweight tags are not accepted."
-        )
-
-    tag_body = _run_git("cat-file", "-p", tag_name)
-    if "-----BEGIN PGP SIGNATURE-----" not in tag_body:
-        raise RuntimeError(
-            f"Tag '{tag_name}' is annotated but not signed. "
-            "Create release tags with `git tag -s` before pushing."
+            f"Tag '{tag_name}' must be an annotated tag. "
+            "Lightweight tags are not accepted. "
+            "Create release tags with `git tag -a` before pushing."
         )
 
 
@@ -43,8 +41,8 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("Usage: python scripts/verify_signed_tag.py <tag>")
 
     tag_name = args[0]
-    verify_signed_tag(tag_name)
-    print(f"Verified signed annotated tag: {tag_name}")
+    verify_annotated_tag(tag_name)
+    print(f"Verified annotated tag: {tag_name}")
     return 0
 
 

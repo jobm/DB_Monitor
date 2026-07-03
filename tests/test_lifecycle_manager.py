@@ -104,9 +104,14 @@ async def test_noncritical_task_failure_does_not_shutdown(
 
     monkeypatch.setattr(manager, "_cleanup_database", fake_cleanup_database)
 
+    crashed = asyncio.Event()
+
     async def noncritical_crash() -> None:
         await failure_gate.wait()
-        raise RuntimeError("noncritical boom")
+        try:
+            raise RuntimeError("noncritical boom")
+        finally:
+            crashed.set()
 
     async def stable_task() -> None:
         try:
@@ -121,8 +126,12 @@ async def test_noncritical_task_failure_does_not_shutdown(
 
     failure_gate.set()
 
-    # give the manager a moment to observe the exception
-    await asyncio.sleep(0.5)
+    # Wait until the crashing task actually finishes (exception propagated)
+    await asyncio.wait_for(crashed.wait(), timeout=1.0)
+
+    # Give the event loop one cycle so the shutdown manager observes the
+    # exception and removes the task from its registry.
+    await asyncio.sleep(0)
 
     # non-critical failure should not trigger shutdown
     assert manager.has_task_failure is False

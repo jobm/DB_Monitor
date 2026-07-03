@@ -1,0 +1,40 @@
+# See https://pre-commit.com for documentation and installation.
+# Install with: uv run pre-commit install
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.0
+    hooks:
+      - id: ruff
+        name: ruff check
+        args: [--fix]
+        files: ^(src/db_monitor/|tests/)
+      - id: ruff-format
+        name: ruff format
+        files: ^(src/db_monitor/|tests/)
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.0
+    hooks:
+      - id: mypy
+        name: mypy type check
+        files: ^src/db_monitor/
+        args: []
+        additional_dependencies:
+          - sqlalchemy[mypy]>=2.0.25
+        pass_filenames: false
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        name: trim trailing whitespace
+        files: ^(src/db_monitor/|tests/)
+      - id: end-of-file-fixer
+        name: ensure files end with newline
+        files: ^(src/db_monitor/|tests/)
+      - id: check-yaml
+        name: check YAML syntax
+      - id: check-json
+        name: check JSON syntax
+        files: ^connectors/
