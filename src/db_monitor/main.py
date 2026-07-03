@@ -23,8 +23,8 @@ from db_monitor.auth import authenticate_credentials
 from db_monitor.core.config import settings
 from db_monitor.extensions import engine
 from db_monitor.lifecycle_manager import lifecycle_manager
-from db_monitor.ingestion.consumer import consumer_task
-from db_monitor.ingestion.schema import schema_cache_backplane
+from db_monitor.consumer import consumer_task
+from db_monitor.schema import schema_cache_backplane
 from db_monitor.lifespan import managed_lifespan
 from db_monitor.metrics import (
     api_request_duration_seconds,

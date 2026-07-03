@@ -6,7 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from db_monitor.ingestion import broadcast, consumer_service, dlq, event_storage, recovery
+from db_monitor.ingestion import broadcast, dlq, event_storage, recovery
+from db_monitor.consumer import batch as consumer_batch
+from db_monitor.consumer.batch import core as batch_core
+from db_monitor.consumer.batch import processing as batch_processing
+from db_monitor.consumer import checkpoint as consumer_checkpoint
+from db_monitor.consumer import consumer as consumer_mod
+from db_monitor.consumer import dlq as consumer_dlq
+from db_monitor.core.config import settings
 from db_monitor.core.models import DeadLetterEvent, KafkaEvent
 from db_monitor.ingestion.quota import QuotaDecision
 
@@ -221,8 +228,7 @@ async def test_store_event_graph_persists_changes_once(monkeypatch):
         captured["change_event_id"] = event_obj.id
 
     monkeypatch.setattr(
-        event_storage,
-        "db_write_duration_seconds",
+        "db_monitor.ingestion.event_storage.persist.db_write_duration_seconds",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
@@ -231,8 +237,7 @@ async def test_store_event_graph_persists_changes_once(monkeypatch):
         fake_process_schema,
     )
     monkeypatch.setattr(
-        event_storage,
-        "_insert_event_record",
+        "db_monitor.ingestion.event_storage.persist._insert_event_record",
         fake_insert_record,
     )
     monkeypatch.setattr(
@@ -241,7 +246,7 @@ async def test_store_event_graph_persists_changes_once(monkeypatch):
         fake_process_changes,
     )
 
-    inserted = await consumer_service._store_event_graph_with_retries(
+    inserted = await event_storage._store_event_graph_with_retries(
         lambda: FakeSession(),
         event,
     )
@@ -281,8 +286,7 @@ async def test_store_event_graph_skips_changes_for_duplicates(monkeypatch):
         change_calls += 1
 
     monkeypatch.setattr(
-        event_storage,
-        "db_write_duration_seconds",
+        "db_monitor.ingestion.event_storage.persist.db_write_duration_seconds",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
@@ -291,8 +295,7 @@ async def test_store_event_graph_skips_changes_for_duplicates(monkeypatch):
         fake_process_schema,
     )
     monkeypatch.setattr(
-        event_storage,
-        "_insert_event_record",
+        "db_monitor.ingestion.event_storage.persist._insert_event_record",
         fake_insert_record,
     )
     monkeypatch.setattr(
@@ -301,7 +304,7 @@ async def test_store_event_graph_skips_changes_for_duplicates(monkeypatch):
         fake_process_changes,
     )
 
-    inserted = await consumer_service._store_event_graph_with_retries(
+    inserted = await event_storage._store_event_graph_with_retries(
         lambda: FakeSession(),
         event,
     )
@@ -352,7 +355,7 @@ def test_checkpoint_rows_for_events_keeps_highest_offset_per_partition(
 
     assert checkpoints == [
         {
-            "consumer_group": consumer_service.settings.broker.kafka_consumer_group,
+            "consumer_group": settings.broker.kafka_consumer_group,
             "broker_kind": "kafka",
             "broker_destination": "orderdb.public.orders",
             "broker_substream": "0",
@@ -363,7 +366,7 @@ def test_checkpoint_rows_for_events_keeps_highest_offset_per_partition(
             "last_event_time": now,
         },
         {
-            "consumer_group": consumer_service.settings.broker.kafka_consumer_group,
+            "consumer_group": settings.broker.kafka_consumer_group,
             "broker_kind": "kafka",
             "broker_destination": "orderdb.public.orders",
             "broker_substream": "1",
@@ -459,34 +462,34 @@ async def test_process_single_event_commits_after_dlq_persist(monkeypatch):
         commit_recorded.append(True)
 
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_store_event_graph_with_retries",
         fake_store,
     )
-    monkeypatch.setattr(consumer_service, "send_to_dlq", fake_send_to_dlq)
+    monkeypatch.setattr(batch_processing, "send_to_dlq", fake_send_to_dlq)
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "persist_consumer_checkpoints",
         fake_persist_checkpoints,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_record_successful_commit",
         fake_record_successful_commit,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "kafka_commit_duration_seconds",
         FakeTimerMetric(),
     )
 
-    await consumer_service._process_single_event(
+    await consumer_batch._process_single_event(
         event,
         consumer,
         producer=None,
         enable_dlq=True,
         raw_data=event.raw_payload,
-        runtime=consumer_service.consumer_runtime,
+        runtime=consumer_mod.consumer_runtime,
     )
 
     assert consumer.commit_calls == 1
@@ -510,7 +513,7 @@ async def test_process_single_event_acks_duplicates(monkeypatch):
     )
     message = FakeBrokerMessage("orderdb.public.orders", event.raw_payload)
     persisted: list[list[KafkaEvent]] = []
-    runtime = consumer_service._get_consumer_runtime("duplicate-cluster")
+    runtime = consumer_mod._get_consumer_runtime("duplicate-cluster")
     runtime["last_commit_at"] = None
 
     async def fake_store(*_args, **_kwargs):
@@ -528,22 +531,22 @@ async def test_process_single_event_acks_duplicates(monkeypatch):
         persisted.append(list(events))
 
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_store_event_graph_with_retries",
         fake_store,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "persist_consumer_checkpoints",
         fake_persist_consumer_checkpoints,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "kafka_commit_duration_seconds",
         FakeTimerMetric(),
     )
 
-    processed = await consumer_service._process_single_event(
+    processed = await consumer_batch._process_single_event(
         event,
         message,
         runtime=runtime,
@@ -588,13 +591,13 @@ async def test_handle_message_processing_error_continues_after_dlq(
         return True
 
     monkeypatch.setattr(
-        consumer_service,
+        consumer_dlq,
         "events_failed_total",
         metrics_state["failed"],
     )
-    monkeypatch.setattr(consumer_service, "send_to_dlq", fake_send_to_dlq)
+    monkeypatch.setattr(consumer_dlq, "send_to_dlq", fake_send_to_dlq)
 
-    should_continue = await consumer_service._handle_message_processing_error(
+    should_continue = await consumer_dlq._handle_message_processing_error(
         msg=msg,
         raw_payload="{bad-json}",
         exc=ValueError("parse failed"),
@@ -632,13 +635,13 @@ async def test_handle_message_processing_error_stops_when_dlq_persist_fails(
         return False
 
     monkeypatch.setattr(
-        consumer_service,
+        consumer_dlq,
         "events_failed_total",
         metrics_state["failed"],
     )
-    monkeypatch.setattr(consumer_service, "send_to_dlq", fake_send_to_dlq)
+    monkeypatch.setattr(consumer_dlq, "send_to_dlq", fake_send_to_dlq)
 
-    should_continue = await consumer_service._handle_message_processing_error(
+    should_continue = await consumer_dlq._handle_message_processing_error(
         msg=msg,
         raw_payload="{}",
         exc=RuntimeError("boom"),
@@ -667,12 +670,12 @@ async def test_handle_message_processing_error_stops_when_dlq_disabled(
     }
 
     monkeypatch.setattr(
-        consumer_service,
+        consumer_dlq,
         "events_failed_total",
         metrics_state["failed"],
     )
 
-    should_continue = await consumer_service._handle_message_processing_error(
+    should_continue = await consumer_dlq._handle_message_processing_error(
         msg=msg,
         raw_payload="{}",
         exc=RuntimeError("boom"),
@@ -723,7 +726,7 @@ async def test_broadcast_event_delivers_webhooks(monkeypatch):
         fake_send_message,
     )
 
-    await consumer_service._broadcast_event(event)
+    await broadcast._broadcast_event(event)
 
     assert websocket_messages == [
         (
@@ -809,7 +812,7 @@ async def test_broadcast_event_persists_webhook_failures_to_dlq(
         fake_persist_dead_letter_event,
     )
 
-    await consumer_service._broadcast_event(event)
+    await broadcast._broadcast_event(event)
 
     assert persisted == [
         (
@@ -837,16 +840,16 @@ async def test_consumer_task_assigns_explicit_topic_partitions(monkeypatch):
         return 0
 
     monkeypatch.setattr(
-        "db_monitor.ingestion.brokers.AIOKafkaConsumer",
+        "db_monitor.ingestion.brokers.kafka.AIOKafkaConsumer",
         fake_consumer_factory,
     )
     monkeypatch.setattr(
-        consumer_service,
+        consumer_mod,
         "refresh_dead_letter_backlog_metric",
         fake_refresh_dead_letter_backlog_metric,
     )
 
-    await consumer_service.consumer_task(
+    await consumer_mod.consumer_task(
         cluster_name="placement-test",
         bootstrap_servers=["kafka-a:9092"],
         consumer_group="group-a",
@@ -868,7 +871,7 @@ async def test_consumer_task_assigns_explicit_topic_partitions(monkeypatch):
 
 @pytest.mark.anyio
 async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
-    runtime = consumer_service._get_consumer_runtime("rabbit-cluster")
+    runtime = consumer_mod._get_consumer_runtime("rabbit-cluster")
     broker_message = FakeBrokerMessage(
         "cdc.orders",
         '{"event_type": "u", "after": {"id": 7}}',
@@ -908,27 +911,26 @@ async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
         return dlq_publisher
 
     monkeypatch.setattr(
-        consumer_service,
+        consumer_mod,
         "refresh_dead_letter_backlog_metric",
         fake_refresh_dead_letter_backlog_metric,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_store_event_graph_with_retries",
         fake_store_event_graph_with_retries,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "persist_consumer_checkpoints",
         fake_persist_consumer_checkpoints,
     )
     monkeypatch.setattr(
-        consumer_service,
-        "build_message_consumer",
+        "db_monitor.consumer.connection.build_message_consumer",
         fake_build_message_consumer,
     )
     monkeypatch.setattr(
-        consumer_service,
+        consumer_mod,
         "build_dead_letter_publisher",
         fake_build_dead_letter_publisher,
     )
@@ -937,27 +939,41 @@ async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_broadcast_event",
         fake_broadcast_event,
     )
     monkeypatch.setattr(
-        consumer_service,
-        "events_consumed_total",
+        batch_core,
+        "_broadcast_event",
+        fake_broadcast_event,
+    )
+    monkeypatch.setattr(
+        "db_monitor.consumer.loop.events_consumed_total",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "events_processed_total",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_core,
+        "events_processed_total",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        batch_processing,
+        "kafka_commit_duration_seconds",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        batch_core,
         "kafka_commit_duration_seconds",
         FakeTimerMetric(),
     )
 
-    await consumer_service.consumer_task(
+    await consumer_mod.consumer_task(
         cluster_name="rabbit-cluster",
         broker_kind="rabbitmq",
         consumer_group="rabbit-group",
@@ -981,7 +997,7 @@ async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
 
 @pytest.mark.anyio
 async def test_consumer_task_acks_filtered_events(monkeypatch):
-    runtime = consumer_service._get_consumer_runtime("rabbit-filtered")
+    runtime = consumer_mod._get_consumer_runtime("rabbit-filtered")
     runtime["last_commit_at"] = None
     broker_message = FakeBrokerMessage(
         "cdc.orders",
@@ -1018,47 +1034,44 @@ async def test_consumer_task_acks_filtered_events(monkeypatch):
         raise AssertionError("Filtered events should not be persisted")
 
     monkeypatch.setattr(
-        consumer_service,
+        consumer_mod,
         "refresh_dead_letter_backlog_metric",
         fake_refresh_dead_letter_backlog_metric,
     )
     monkeypatch.setattr(
-        consumer_service,
+        consumer_checkpoint,
         "persist_consumer_checkpoints",
         fake_persist_consumer_checkpoints,
     )
     monkeypatch.setattr(
-        consumer_service,
-        "build_message_consumer",
+        "db_monitor.consumer.connection.build_message_consumer",
         fake_build_message_consumer,
     )
     monkeypatch.setattr(
-        consumer_service,
+        consumer_mod,
         "build_dead_letter_publisher",
         fake_build_dead_letter_publisher,
     )
     monkeypatch.setattr(
-        consumer_service.event_pipeline,
-        "should_process",
-        fake_should_process,
-    )
-    monkeypatch.setattr(
-        consumer_service,
+        consumer_batch,
         "_store_event_graph_with_retries",
         fail_store_event_graph,
     )
     monkeypatch.setattr(
-        consumer_service,
-        "events_consumed_total",
+        "db_monitor.consumer.loop.events_consumed_total",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service,
+        consumer_checkpoint,
         "kafka_commit_duration_seconds",
         FakeTimerMetric(),
     )
+    monkeypatch.setattr(
+        "db_monitor.consumer.loop.event_pipeline.should_process",
+        fake_should_process,
+    )
 
-    await consumer_service.consumer_task(
+    await consumer_mod.consumer_task(
         cluster_name="rabbit-filtered",
         broker_kind="rabbitmq",
         consumer_group="rabbit-group",
@@ -1076,7 +1089,7 @@ async def test_consumer_task_acks_filtered_events(monkeypatch):
 
 @pytest.mark.anyio
 async def test_consumer_task_acks_quota_dropped_events(monkeypatch):
-    runtime = consumer_service._get_consumer_runtime("rabbit-quota")
+    runtime = consumer_mod._get_consumer_runtime("rabbit-quota")
     runtime["last_commit_at"] = None
     broker_message = FakeBrokerMessage(
         "cdc.orders",
@@ -1127,72 +1140,64 @@ async def test_consumer_task_acks_quota_dropped_events(monkeypatch):
         )
 
     monkeypatch.setattr(
-        consumer_service.settings.ingestion,
+        settings.ingestion,
         "quota_enabled",
         True,
     )
     monkeypatch.setattr(
-        consumer_service,
+        consumer_mod,
         "refresh_dead_letter_backlog_metric",
         fake_refresh_dead_letter_backlog_metric,
     )
     monkeypatch.setattr(
-        consumer_service,
+        consumer_checkpoint,
         "persist_consumer_checkpoints",
         fake_persist_consumer_checkpoints,
     )
     monkeypatch.setattr(
-        consumer_service,
-        "build_message_consumer",
+        "db_monitor.consumer.connection.build_message_consumer",
         fake_build_message_consumer,
     )
     monkeypatch.setattr(
-        consumer_service.event_pipeline,
-        "should_process",
-        fake_should_process,
-    )
-    monkeypatch.setattr(
-        consumer_service.event_pipeline,
-        "transform",
-        fake_transform,
-    )
-    monkeypatch.setattr(
-        consumer_service,
+        consumer_batch,
         "_store_event_graph_with_retries",
         fail_store_event_graph,
     )
     monkeypatch.setattr(
-        consumer_service.quota_limiter,
-        "apply",
-        fake_apply_quota,
-    )
-    monkeypatch.setattr(
-        consumer_service,
-        "events_consumed_total",
+        "db_monitor.consumer.loop.events_consumed_total",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service,
+        consumer_checkpoint,
         "kafka_commit_duration_seconds",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service,
-        "ingestion_quota_dropped_total",
+        "db_monitor.consumer.handlers.ingestion_quota_dropped_total",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service,
-        "ingestion_quota_throttled_total",
+        "db_monitor.consumer.loop.ingestion_quota_throttled_total",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service,
-        "ingestion_quota_sleep_seconds",
+        "db_monitor.consumer.loop.ingestion_quota_sleep_seconds",
         FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        "db_monitor.consumer.loop.event_pipeline.should_process",
+        fake_should_process,
+    )
+    monkeypatch.setattr(
+        "db_monitor.consumer.loop.event_pipeline.transform",
+        fake_transform,
+    )
+    monkeypatch.setattr(
+        "db_monitor.consumer.loop.quota_limiter.apply",
+        fake_apply_quota,
     )
 
-    await consumer_service.consumer_task(
+    await consumer_mod.consumer_task(
         cluster_name="rabbit-quota",
         broker_kind="rabbitmq",
         consumer_group="rabbit-group",
@@ -1233,18 +1238,18 @@ async def test_process_single_event_requeues_rabbitmq_message_on_dlq_failure(
         return False
 
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_store_event_graph_with_retries",
         fake_store,
     )
-    monkeypatch.setattr(consumer_service, "send_to_dlq", fake_send_to_dlq)
+    monkeypatch.setattr(batch_processing, "send_to_dlq", fake_send_to_dlq)
 
-    processed = await consumer_service._process_single_event(
+    processed = await consumer_batch._process_single_event(
         event,
         message,
         enable_dlq=True,
         raw_data=event.raw_payload,
-        runtime=consumer_service.consumer_runtime,
+        runtime=consumer_mod.consumer_runtime,
         broker_kind="rabbitmq",
     )
 
@@ -1278,24 +1283,24 @@ async def test_process_batch_requeues_rabbitmq_messages_on_dlq_failure(
         return False
 
     monkeypatch.setattr(
-        consumer_service.settings.ingestion,
+        settings.ingestion,
         "bulk_write_enabled",
         False,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_store_event_graph_with_retries",
         fake_store,
     )
-    monkeypatch.setattr(consumer_service, "send_to_dlq", fake_send_to_dlq)
+    monkeypatch.setattr(batch_processing, "send_to_dlq", fake_send_to_dlq)
 
-    processed = await consumer_service._process_batch(
+    processed = await consumer_batch._process_batch(
         [(event, event.raw_payload, message)],
         lambda _messages: None,
         dlq_publisher=FakeDeadLetterPublisher(),
         dlq_destination="rabbit-dlq",
         enable_dlq=True,
-        runtime=consumer_service.consumer_runtime,
+        runtime=consumer_mod.consumer_runtime,
         consumer_group="rabbit-group",
         broker_kind="rabbitmq",
     )
@@ -1355,48 +1360,48 @@ async def test_process_batch_uses_bulk_write_path(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        consumer_service.settings.ingestion,
+        settings.ingestion,
         "bulk_write_enabled",
         True,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_core,
         "_store_batch_graph_with_retries",
         fake_store_batch,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_store_event_graph_with_retries",
         fail_individual_store,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_core,
         "persist_consumer_checkpoints",
         fake_persist_checkpoints,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_core,
         "_broadcast_event",
         fake_broadcast,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_core,
         "kafka_commit_duration_seconds",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_core,
         "events_processed_total",
         FakeTimerMetric(),
     )
 
-    processed = await consumer_service._process_batch(
+    processed = await consumer_batch._process_batch(
         [(event, event.raw_payload, message)],
         fake_ack,
         dlq_publisher=FakeDeadLetterPublisher(),
         dlq_destination="rabbit-dlq",
         enable_dlq=True,
-        runtime=consumer_service.consumer_runtime,
+        runtime=consumer_mod.consumer_runtime,
         consumer_group="rabbit-group",
         broker_kind="rabbitmq",
     )
@@ -1451,48 +1456,48 @@ async def test_process_batch_falls_back_when_bulk_write_fails(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        consumer_service.settings.ingestion,
+        settings.ingestion,
         "bulk_write_enabled",
         True,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_core,
         "_store_batch_graph_with_retries",
         fail_store_batch,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_store_event_graph_with_retries",
         fake_store,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_core,
         "persist_consumer_checkpoints",
         fake_persist_checkpoints,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "_broadcast_event",
         fake_broadcast,
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_core,
         "kafka_commit_duration_seconds",
         FakeTimerMetric(),
     )
     monkeypatch.setattr(
-        consumer_service,
+        batch_processing,
         "events_processed_total",
         FakeTimerMetric(),
     )
 
-    processed = await consumer_service._process_batch(
+    processed = await consumer_batch._process_batch(
         [(event, event.raw_payload, message)],
         fake_ack,
         dlq_publisher=FakeDeadLetterPublisher(),
         dlq_destination="rabbit-dlq",
         enable_dlq=True,
-        runtime=consumer_service.consumer_runtime,
+        runtime=consumer_mod.consumer_runtime,
         consumer_group="rabbit-group",
         broker_kind="rabbitmq",
     )
@@ -1504,16 +1509,16 @@ async def test_process_batch_falls_back_when_bulk_write_fails(monkeypatch):
 
 @pytest.mark.anyio
 async def test_refresh_dead_letter_backlog_metric_updates_runtime_and_gauge():
-    consumer_service.consumer_runtime["dlq_messages_total"] = 0
-    consumer_service.dlq_records_pending.set(0)
+    consumer_mod.consumer_runtime["dlq_messages_total"] = 0
+    consumer_mod.dlq_records_pending.set(0)
 
-    pending_count = await consumer_service.refresh_dead_letter_backlog_metric(
+    pending_count = await consumer_mod.refresh_dead_letter_backlog_metric(
         lambda: FakeCountSession(3)
     )
 
     assert pending_count == 3
-    assert consumer_service.consumer_runtime["dlq_messages_total"] == 3
-    assert consumer_service.dlq_records_pending._value.get() == 3
+    assert consumer_mod.consumer_runtime["dlq_messages_total"] == 3
+    assert consumer_mod.dlq_records_pending._value.get() == 3
 
 
 @pytest.mark.anyio
@@ -1560,7 +1565,7 @@ def test_build_replay_event_restores_rabbitmq_location(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(
-        consumer_service,
+        dlq,
         "parse_event_payload",
         lambda _raw_payload: parsed_event,
     )
@@ -1585,8 +1590,8 @@ def test_build_replay_event_restores_rabbitmq_location(monkeypatch) -> None:
 
 
 def test_get_consumer_health_aggregates_multiple_cluster_runtimes() -> None:
-    consumer_service.consumer_runtime.clear()
-    consumer_service.consumer_runtime.update(
+    consumer_mod.consumer_runtime.clear()
+    consumer_mod.consumer_runtime.update(
         {
             "running": True,
             "connected": True,
@@ -1599,10 +1604,10 @@ def test_get_consumer_health_aggregates_multiple_cluster_runtimes() -> None:
             "dlq_messages_total": 2,
         }
     )
-    consumer_service.consumer_runtimes.clear()
-    consumer_service.consumer_runtimes.update(
+    consumer_mod.consumer_runtimes.clear()
+    consumer_mod.consumer_runtimes.update(
         {
-            "default": consumer_service.consumer_runtime,
+            "default": consumer_mod.consumer_runtime,
             "secondary": {
                 "running": True,
                 "connected": False,
@@ -1616,20 +1621,20 @@ def test_get_consumer_health_aggregates_multiple_cluster_runtimes() -> None:
             },
         }
     )
-    consumer_service.cluster_circuit_breakers.clear()
-    consumer_service.cluster_circuit_breakers.update(
+    consumer_mod.cluster_circuit_breakers.clear()
+    consumer_mod.cluster_circuit_breakers.update(
         {
-            "default": consumer_service.CircuitBreaker(
+            "default": consumer_mod.CircuitBreaker(
                 metric_name="test_default"
             ),
-            "secondary": consumer_service.CircuitBreaker(
+            "secondary": consumer_mod.CircuitBreaker(
                 metric_name="test_secondary"
             ),
         }
     )
-    consumer_service.cluster_circuit_breakers["secondary"].state = "open"
+    consumer_mod.cluster_circuit_breakers["secondary"].state = "open"
 
-    health = consumer_service.get_consumer_health()
+    health = consumer_mod.get_consumer_health()
 
     assert health["status"] == "unhealthy"
     assert health["running"] is True

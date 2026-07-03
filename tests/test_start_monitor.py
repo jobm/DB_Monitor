@@ -162,7 +162,7 @@ def test_manifest_validation_uses_schema_file_rules(
         )
     )
     monkeypatch.setattr(
-        start_monitor,
+        start_monitor.paths,
         "CONNECTOR_MANIFEST_SCHEMA",
         custom_schema_path,
     )

@@ -87,10 +87,8 @@ def test_app_package_facades_are_importable() -> None:
     assert hasattr(dm_repo_spill, "list_audit_log_spill_snapshot")
     assert callable(dm_lifespan.managed_lifespan)
 
-    # Modules migrated to db_monitor (Phase 1d — consumer service and runtime)
-    dm_consumer_service = importlib.import_module(
-        "db_monitor.ingestion.consumer_service"
-    )
+    # Modules migrated to db_monitor (Phase 1d — consumer package and runtime)
+    dm_consumer = importlib.import_module("db_monitor.consumer")
     dm_consumer_runtime = importlib.import_module(
         "db_monitor.ingestion.runtime_state"
     )
@@ -98,8 +96,8 @@ def test_app_package_facades_are_importable() -> None:
         "db_monitor.ingestion.recovery"
     )
 
-    assert hasattr(dm_consumer_service, "consumer_task")
-    assert hasattr(dm_consumer_service, "get_consumer_health")
+    assert hasattr(dm_consumer, "consumer_task")
+    assert hasattr(dm_consumer, "get_consumer_health")
     assert hasattr(dm_consumer_runtime, "CircuitBreaker")
     assert hasattr(dm_consumer_runtime, "get_consumer_health")
     assert hasattr(dm_consumer_recovery, "list_consumer_checkpoints_snapshot")

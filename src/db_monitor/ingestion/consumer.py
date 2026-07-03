@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from db_monitor.ingestion.consumer_service import (
+from db_monitor.consumer import (
     consumer_task,
     get_consumer_health,
 )

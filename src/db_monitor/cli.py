@@ -24,12 +24,13 @@ def run_legacy_migrate(migrate_args: Sequence[str] | None = None) -> int:
 
     async def _run(cmd: str) -> int:
         if cmd == "validate":
-            await migrations.validate_migrations(engine)
+            await migrations.validate_migrations(engine, migrations.MIGRATIONS)
             print("Database schema validation succeeded.")
             return 0
         applied_versions = await migrations.apply_migrations(
             AsyncSessionLocal,
             engine,
+            migrations.MIGRATIONS,
         )
         if applied_versions:
             print("Applied migrations:", ", ".join(applied_versions))

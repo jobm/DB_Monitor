@@ -11,8 +11,7 @@ async def test_replay_endpoint_calls_repository(monkeypatch):
         return {"attempted": 2, "replayed": 2, "failed": 0}
 
     monkeypatch.setattr(
-        routes_ops,
-        "replay_spill_entries",
+        "db_monitor.routes.ops.dlq.replay_spill_entries",
         fake_replay,
     )
 

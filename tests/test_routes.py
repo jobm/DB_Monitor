@@ -149,7 +149,9 @@ class FakeWriteSession:
 @pytest.fixture(autouse=True)
 def control_plane_session(monkeypatch):
     session = FakeWriteSession()
-    monkeypatch.setattr(routes_ops, "AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr("db_monitor.routes.ops.health.AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr("db_monitor.routes.ops.lifecycle.AsyncSessionLocal", lambda: session)
+    monkeypatch.setattr("db_monitor.routes.ops.provisioning.persistence.AsyncSessionLocal", lambda: session)
     yield session
 
 
@@ -170,13 +172,11 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
         return [{"id": 10, "event_id": 77, "column_name": "status"}], None
 
     monkeypatch.setattr(
-        routes_data,
-        "get_schema_discovery",
+        "db_monitor.routes.data.changes.get_schema_discovery",
         lambda: SimpleNamespace(get_table_by_name=fake_get_table_by_name),
     )
     monkeypatch.setattr(
-        routes_data,
-        "get_change_processor",
+        "db_monitor.routes.data.changes.get_change_processor",
         lambda: SimpleNamespace(get_changes=fake_get_changes),
     )
 
@@ -253,8 +253,7 @@ async def test_get_value_at_time_legacy_resolves_service_from_table_name(
         return "shipped"
 
     monkeypatch.setattr(
-        routes_data,
-        "get_change_processor",
+        "db_monitor.routes.data.changes.get_change_processor",
         lambda: SimpleNamespace(get_value_at_time=fake_get_value_at_time),
     )
 
@@ -283,13 +282,11 @@ async def test_get_value_at_time_legacy_resolves_service_from_table_name(
 @pytest.mark.anyio
 async def test_health_check_reports_database_and_consumer_state(monkeypatch):
     monkeypatch.setattr(
-        routes_ops,
-        "AsyncSessionLocal",
+        "db_monitor.routes.ops.health.AsyncSessionLocal",
         lambda: FakeSession(),
     )
     monkeypatch.setattr(
-        routes_ops,
-        "get_consumer_health",
+        "db_monitor.routes.ops.health.get_consumer_health",
         lambda: {
             "status": "healthy",
             "running": True,
@@ -328,13 +325,11 @@ async def test_readiness_check_returns_503_when_consumer_signals_degrade(
     monkeypatch,
 ):
     monkeypatch.setattr(
-        routes_ops,
-        "AsyncSessionLocal",
+        "db_monitor.routes.ops.health.AsyncSessionLocal",
         lambda: FakeSession(),
     )
     monkeypatch.setattr(
-        routes_ops,
-        "get_consumer_health",
+        "db_monitor.routes.ops.health.get_consumer_health",
         lambda: {
             "status": "healthy",
             "running": True,
@@ -386,8 +381,11 @@ async def test_bootstrap_customer_auth_scope_creates_admin_key_and_jwt_state(
     routes_auth.CUSTOMER_JWT_SECRET_STATE.clear()
     fake_session = FakeWriteSession()
     monkeypatch.setattr(
-        routes_auth,
-        "AsyncSessionLocal",
+        "db_monitor.routes.auth.key_routes.keys.AsyncSessionLocal",
+        lambda: fake_session,
+    )
+    monkeypatch.setattr(
+        "db_monitor.routes.auth.jwt_routes.AsyncSessionLocal",
         lambda: fake_session,
     )
 
@@ -413,8 +411,11 @@ async def test_rotate_and_recover_customer_jwt_secrets(monkeypatch) -> None:
     routes_auth.CUSTOMER_JWT_SECRET_STATE.clear()
     fake_session = FakeWriteSession()
     monkeypatch.setattr(
-        routes_auth,
-        "AsyncSessionLocal",
+        "db_monitor.routes.auth.key_routes.keys.AsyncSessionLocal",
+        lambda: fake_session,
+    )
+    monkeypatch.setattr(
+        "db_monitor.routes.auth.jwt_routes.AsyncSessionLocal",
         lambda: fake_session,
     )
 
@@ -480,8 +481,11 @@ async def test_get_customer_jwt_state_requires_bootstrap_first(
 ) -> None:
     routes_auth.CUSTOMER_JWT_SECRET_STATE.clear()
     monkeypatch.setattr(
-        routes_auth,
-        "AsyncSessionLocal",
+        "db_monitor.routes.auth.key_routes.keys.AsyncSessionLocal",
+        lambda: FakeWriteSession(),
+    )
+    monkeypatch.setattr(
+        "db_monitor.routes.auth.jwt_routes.AsyncSessionLocal",
         lambda: FakeWriteSession(),
     )
 
@@ -563,7 +567,7 @@ async def test_get_events_parses_time_filters(monkeypatch):
     ]
     fake_session = FakeEventsSession(events)
 
-    monkeypatch.setattr(routes_data, "AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr("db_monitor.routes.data.factories.AsyncSessionLocal", lambda: fake_session)
 
     response = await routes_data.get_events(
         service_name="orderdb",
@@ -607,7 +611,7 @@ async def test_get_events_supports_record_filters(monkeypatch):
     ]
     fake_session = FakeEventsSession(events)
 
-    monkeypatch.setattr(routes_data, "AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr("db_monitor.routes.data.factories.AsyncSessionLocal", lambda: fake_session)
 
     response = await routes_data.get_events(
         service_name="orderdb",
@@ -673,8 +677,7 @@ async def test_get_events_supports_cursor_pagination(monkeypatch):
         return events, None
 
     monkeypatch.setattr(
-        routes_data,
-        "get_events_repository",
+        "db_monitor.routes.data.events.get_events_repository",
         lambda: SimpleNamespace(list_events=fake_list_events),
     )
 
@@ -733,8 +736,7 @@ async def test_get_changes_reports_table_discovery_hint(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        routes_data,
-        "get_schema_discovery",
+        "db_monitor.routes.data.factories.get_schema_discovery",
         lambda: SimpleNamespace(get_table_by_name=fake_get_table_by_name),
     )
 
@@ -764,8 +766,7 @@ async def test_get_consumer_checkpoints_returns_snapshot(monkeypatch):
         ]
 
     monkeypatch.setattr(
-        routes_ops,
-        "list_consumer_checkpoints_snapshot",
+        "db_monitor.routes.ops.dlq.list_consumer_checkpoints_snapshot",
         fake_snapshot,
     )
 
@@ -808,7 +809,8 @@ async def test_list_api_keys_filters_inactive_by_default(monkeypatch):
         ),
     ]
     fake_session = FakeApiKeysSession(api_keys)
-    monkeypatch.setattr(routes_auth, "AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr("db_monitor.routes.auth.key_routes.keys.AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr("db_monitor.routes.auth.jwt_routes.AsyncSessionLocal", lambda: fake_session)
 
     response = await routes_auth.list_api_keys(
         include_inactive=False,
@@ -845,7 +847,8 @@ async def test_list_api_keys_can_include_inactive(monkeypatch):
         ),
     ]
     fake_session = FakeApiKeysSession(api_keys)
-    monkeypatch.setattr(routes_auth, "AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr("db_monitor.routes.auth.key_routes.keys.AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr("db_monitor.routes.auth.jwt_routes.AsyncSessionLocal", lambda: fake_session)
 
     response = await routes_auth.list_api_keys(
         include_inactive=True,
@@ -878,8 +881,7 @@ async def test_get_dead_letter_events_returns_pending_records(monkeypatch):
         ]
 
     monkeypatch.setattr(
-        routes_ops,
-        "list_dead_letter_records",
+        "db_monitor.routes.ops.dlq.list_dead_letter_records",
         fake_list_dead_letters,
     )
 
@@ -911,8 +913,7 @@ async def test_replay_dead_letter_events_returns_batch_summary(monkeypatch):
         }
 
     monkeypatch.setattr(
-        routes_ops,
-        "replay_dead_letter_event_records",
+        "db_monitor.routes.ops.dlq.replay_dead_letter_event_records",
         fake_replay_many,
     )
 
@@ -941,8 +942,7 @@ async def test_replay_dead_letter_event_returns_replay_result(monkeypatch):
         }
 
     monkeypatch.setattr(
-        routes_ops,
-        "replay_dead_letter_event_record",
+        "db_monitor.routes.ops.dlq.replay_dead_letter_event_record",
         fake_replay,
     )
 
@@ -964,8 +964,7 @@ async def test_replay_dead_letter_event_returns_404_when_missing(monkeypatch):
         raise LookupError("DLQ event not found")
 
     monkeypatch.setattr(
-        routes_ops,
-        "replay_dead_letter_event_record",
+        "db_monitor.routes.ops.dlq.replay_dead_letter_event_record",
         fake_replay,
     )
 
@@ -1362,8 +1361,7 @@ async def test_customer_provision_execute_persists_adapter_result(
         }
 
     monkeypatch.setattr(
-        routes_ops,
-        "execute_provisioning_step",
+        "db_monitor.routes.ops.execution.execute_provisioning_step",
         fake_execute_provisioning_step,
     )
 
@@ -1409,8 +1407,7 @@ async def test_customer_provision_execute_maps_adapter_error_to_step_failure(
         )
 
     monkeypatch.setattr(
-        routes_ops,
-        "execute_provisioning_step",
+        "db_monitor.routes.ops.execution.execute_provisioning_step",
         fake_execute_provisioning_step,
     )
 
@@ -1516,8 +1513,7 @@ async def test_customer_bootstrap_step_marks_lifecycle_active(
         }
 
     monkeypatch.setattr(
-        routes_ops,
-        "execute_provisioning_step",
+        "db_monitor.routes.ops.execution.execute_provisioning_step",
         fake_execute_provisioning_step,
     )
 

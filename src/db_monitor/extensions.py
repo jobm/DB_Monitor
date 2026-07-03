@@ -91,13 +91,17 @@ AsyncSessionLocal = sessionmaker(
 
 async def init_db():
     """Initialize database state according to the configured schema mode."""
-    from db_monitor.core.migrations import apply_migrations, validate_migrations
+    from db_monitor.core.migrations import (
+        MIGRATIONS,
+        apply_migrations,
+        validate_migrations,
+    )
 
     if settings.db_schema_mode == "skip":
         return
 
     if settings.db_schema_mode == "apply":
-        await apply_migrations(AsyncSessionLocal, engine)
+        await apply_migrations(AsyncSessionLocal, engine, MIGRATIONS)
         return
 
-    await validate_migrations(engine)
+    await validate_migrations(engine, MIGRATIONS)

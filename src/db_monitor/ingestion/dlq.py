@@ -24,7 +24,7 @@ from db_monitor.ingestion.recovery import (
     refresh_dead_letter_backlog_metric,
 )
 from db_monitor.ingestion.runtime_state import consumer_runtime
-from db_monitor.ingestion.schema import extract_operation
+from db_monitor.schema import extract_operation
 from db_monitor.ingestion.event_storage import _store_event_graph_with_retries
 from db_monitor.ingestion.broadcast import _broadcast_event
 from db_monitor.metrics import dlq_messages_total

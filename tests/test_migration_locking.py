@@ -97,19 +97,19 @@ async def test_concurrent_migration_locking(monkeypatch: pytest.MonkeyPatch):
         return None
 
     monkeypatch.setattr(
-        "db_monitor.core.migrations._acquire_migration_lock",
+        "db_monitor.core.migrations.core._acquire_migration_lock",
         fake_acquire_lock,
     )
     monkeypatch.setattr(
-        "db_monitor.core.migrations._release_migration_lock",
+        "db_monitor.core.migrations.core._release_migration_lock",
         fake_release_lock,
     )
     monkeypatch.setattr(
-        "db_monitor.core.migrations._get_applied_versions",
+        "db_monitor.core.migrations.core._get_applied_versions",
         fake_get_applied_versions,
     )
     monkeypatch.setattr(
-        "db_monitor.core.migrations._ensure_migration_table",
+        "db_monitor.core.migrations.core._ensure_migration_table",
         fake_ensure_table,
     )
     monkeypatch.setattr("db_monitor.core.migrations.MIGRATIONS", ())
@@ -120,7 +120,7 @@ async def test_concurrent_migration_locking(monkeypatch: pytest.MonkeyPatch):
         return None
 
     async def runner() -> list[str]:
-        return await apply_migrations(fake_session_factory, fake_engine)
+        return await apply_migrations(fake_session_factory, fake_engine, ())
 
     t1 = asyncio.create_task(runner())
     t2 = asyncio.create_task(runner())
@@ -177,19 +177,19 @@ async def test_migration_lock_released_after_completion(
         return None
 
     monkeypatch.setattr(
-        "db_monitor.core.migrations._acquire_migration_lock",
+        "db_monitor.core.migrations.core._acquire_migration_lock",
         fake_acquire_lock,
     )
     monkeypatch.setattr(
-        "db_monitor.core.migrations._release_migration_lock",
+        "db_monitor.core.migrations.core._release_migration_lock",
         fake_release_lock,
     )
     monkeypatch.setattr(
-        "db_monitor.core.migrations._get_applied_versions",
+        "db_monitor.core.migrations.core._get_applied_versions",
         fake_get_applied_versions,
     )
     monkeypatch.setattr(
-        "db_monitor.core.migrations._ensure_migration_table",
+        "db_monitor.core.migrations.core._ensure_migration_table",
         fake_ensure_table,
     )
     monkeypatch.setattr("db_monitor.core.migrations.MIGRATIONS", ())
@@ -199,7 +199,7 @@ async def test_migration_lock_released_after_completion(
     def fake_session_factory():
         return None
 
-    await apply_migrations(fake_session_factory, fake_engine)
+    await apply_migrations(fake_session_factory, fake_engine, ())
 
     assert call_count == 1, "Lock should have been acquired once"
     assert (

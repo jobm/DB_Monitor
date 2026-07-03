@@ -10,13 +10,13 @@ async def test_init_db_applies_migrations_in_apply_mode(monkeypatch: pytest.Monk
     """Apply mode should run tracked migrations instead of validation."""
     called: list[str] = []
 
-    async def fake_apply(session_factory, db_engine) -> list[str]:
+    async def fake_apply(session_factory, db_engine, _migrations) -> list[str]:
         called.append("apply")
         assert session_factory is extensions.AsyncSessionLocal
         assert db_engine is extensions.engine
         return []
 
-    async def fake_validate(db_engine) -> None:
+    async def fake_validate(db_engine, _migrations) -> None:
         called.append("validate")
 
     monkeypatch.setattr(extensions.settings, "db_schema_mode", "apply")
@@ -37,11 +37,11 @@ async def test_init_db_validates_in_validate_mode(monkeypatch: pytest.MonkeyPatc
     """Validate mode should not attempt to mutate schema on startup."""
     called: list[str] = []
 
-    async def fake_apply(session_factory, db_engine) -> list[str]:
+    async def fake_apply(session_factory, db_engine, _migrations) -> list[str]:
         called.append("apply")
         return []
 
-    async def fake_validate(db_engine) -> None:
+    async def fake_validate(db_engine, _migrations) -> None:
         called.append("validate")
         assert db_engine is extensions.engine
 
