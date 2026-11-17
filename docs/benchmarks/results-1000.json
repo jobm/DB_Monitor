@@ -1,0 +1,21 @@
+{
+  "benchmark": "BM-2 — Full benchmark matrix (100/500/1000/5000 ev/s)",
+  "run": 2,
+  "target_rate": 1000,
+  "duration_seconds": 300,
+  "sources": 10,
+  "kafka_broker": "localhost:9093",
+  "timestamp": "2026-07-05T17:43:00Z",
+  "results": {
+    "throughput_ev_s": 572.98,
+    "latency_ms": {
+      "p50": 12.43,
+      "p95": 408.82,
+      "p99": 483.04
+    },
+    "total_events_ingested": 171894,
+    "dlq_count": 0,
+    "passed": false,
+    "notes": "Throughput 57% of target. Single-partition Kafka topic limits consumer parallelism. API latency targets were exceeded at p95=408ms (target <200ms). Need topic partitioning to scale."
+  }
+}

@@ -6,6 +6,12 @@ The sandbox allows you to run a complete local Change Data Capture (CDC) pipelin
 
 ## Sandbox Architecture
 
+This sandbox is powered by the **Source Manifest** at
+`connectors/sources.json`, which registers the three demo databases with
+Debezium. For details on how to configure your own sources, see the
+[Source Manifest Configuration](configuration.md#source-manifest-configuration)
+section in the configuration reference.
+
 When you spin up the evaluation stack, Docker Compose provisions the following components:
 
 ```text

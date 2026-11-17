@@ -3,7 +3,7 @@
 **Status:** Executed  
 **Date:** 2026-06-23  
 **Deciders:** Project leads  
-**Context:** [docs/module-inventory.md](../module-inventory.md), [Workstream A](../../docs/remaining-gaps.md#workstream-a-resolve-the-dual-codebase-priority-p0-effort-5-7-days-)
+**Context:** [docs/module-inventory.md](../module-inventory.md), [Workstream A](../remaining-gaps.md#workstream-a-resolve-the-dual-codebase-priority-p0-effort-5-7-days-)
 
 ---
 

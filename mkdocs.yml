@@ -1,0 +1,94 @@
+site_name: DB Monitor
+site_description: Framework-first CDC monitoring platform and audit-log service for PostgreSQL
+site_url: https://jobm.github.io/DB_Monitor/
+repo_url: https://github.com/jobm/DB_Monitor
+repo_name: jobm/DB_Monitor
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    primary: indigo
+    accent: indigo
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.tabs.link
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/jobm/DB_Monitor
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: true
+
+nav:
+  - Home:
+      - Overview: index.md
+      - Architecture: architecture.md
+      - API Stability: api-stability.md
+  - Getting Started:
+      - Quick Start: index.md
+      - Bring Your Own Database: guides/byo-database.md
+      - Example Sandbox: example-sandbox.md
+  - Reference:
+      - Configuration: configuration.md
+      - API Reference: api-reference.html
+      - API Docs: api-docs.md
+      - Migrations: migrations.md
+      - Deployment: deployment.md
+      - Module Inventory: module-inventory.md
+  - Operations:
+      - Troubleshooting: troubleshooting.md
+      - Runbooks:
+          - Alerts & Thresholds: runbooks/alerts-and-thresholds.md
+          - Recovery & Validation: runbooks/recovery-and-validation.md
+  - Decisions:
+      - "ADR-001: Dual Codebase Consolidation": adr/ADR-001-dual-codebase-consolidation.md
+      - "ADR-002: RabbitMQ Support": adr/ADR-002-rabbitmq-support.md
+      - "ADR-003: Quota Throttle Loop": adr/ADR-003-quota-throttle-sleep.md
+      - "ADR-004: WebSocket Token TTL": adr/ADR-004-websocket-token-ttl.md
+  - Project:
+      - Contributing: CONTRIBUTING.md
+      - Changelog: CHANGELOG.md
+      - Code of Conduct: CODE_OF_CONDUCT.md
+      - Security: SECURITY.md
+  - More:
+      - Remaining Gaps: remaining-gaps.md
+      - Framework Transition Plan: framework-transition-plan.md
+      - System Quality Plan: system-quality-improvement-plan.md
+      - OS Release Readiness: os-release-readiness-assessment.md
+      - Readiness Review: readiness-review-principal-2026-05-24.md
+      - Pre-v1 Tenant Isolation: pre-v1-tenant-isolation-strategy.md
+      - Benchmarks: benchmarks/ingestion-throughput.md
+      - Benchmark Results: benchmarks/README.md
+
+plugins:
+  - search
+  - offline
+
+watch:
+  - docs

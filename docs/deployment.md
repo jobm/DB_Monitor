@@ -4,9 +4,54 @@ This guide covers the supported local and production-like deployment workflows
 for DB Monitor.
 
 For the pre-v1 customer isolation decision and rollout model, see
-`docs/pre-v1-tenant-isolation-strategy.md`.
+[pre-v1-tenant-isolation-strategy.md](pre-v1-tenant-isolation-strategy.md).
 
-## 1. Local Example Sandbox (Docker Compose)
+## 1. Choose Your Deployment Model
+
+DB Monitor supports two deployment models depending on your isolation
+requirements. The choice depends on whether you are monitoring databases
+for a single team or serving multiple customers with strict data boundaries.
+
+### Model A: Per-Startup / Single-Tenant Deployment
+
+**Best for:** A single team, project, or organization that deploys DB Monitor
+as a dedicated audit-log service for its own CDC pipeline.
+
+- One DB Monitor instance, one monitor database, one broker namespace.
+- Simplest to operate: single Helm release or Docker Compose stack.
+- No cross-tenant isolation concerns — all data belongs to one tenant.
+- Use this model when you don't need to segregate data by customer.
+
+### Model B: Multi-Tenant with Isolated Customer Cells
+
+**Best for:** A platform team offering DB Monitor as a service to multiple
+internal or external customers.
+
+- **Shared control plane:** onboarding API, deployment templates, aggregate
+  monitoring, and operator tooling.
+- **Isolated customer cells:** one DB Monitor runtime instance per customer,
+  each with a dedicated Postgres database (or server), unique broker
+  namespace, and per-customer credentials.
+- This is *not* a fully shared multi-tenant data plane — each customer
+  gets their own isolated deployment.
+
+| Dimension | Single-Tenant | Isolated Cells |
+|-----------|--------------|----------------|
+| DB Monitor instances | 1 | 1 per customer |
+| Postgres | 1 database | 1 database (or server) per customer |
+| Broker namespace | 1 topic prefix | 1 topic prefix per customer |
+| Secrets | 1 set | 1 set per customer |
+| Operational complexity | Low | Medium (automated onboarding) |
+| Isolation guarantee | N/A | Strong (dedicated per cell) |
+
+See [`docs/pre-v1-tenant-isolation-strategy.md`](pre-v1-tenant-isolation-strategy.md)
+for the full strategy document covering the recommended cell architecture,
+Kubernetes namespace layout, security baseline, onboarding flow, and
+operational guardrails.
+
+---
+
+## 2. Local Example Sandbox (Docker Compose)
 
 The easiest way to evaluate DB Monitor locally is to run the bundled Docker Compose sandbox stack, which includes simulated source databases, Debezium configurations, and test data generators.
 
@@ -71,7 +116,7 @@ cd app
 PYTHONPATH=../src:. uv run python -m db_monitor.start_monitor
 ```
 
-Expected local `.env` values are documented in [docs/configuration.md](docs/configuration.md).
+Expected local `.env` values are documented in [configuration.md](configuration.md).
 
 ## 3. Production-Like Expectations
 
@@ -217,7 +262,7 @@ ALLOW_BOOTSTRAP=false
 
 3. Provide secrets through mounted files where possible.
 
-Use the production `*_FILE` examples in `docs/configuration.md` for the
+Use the production `*_FILE` examples in [configuration.md](configuration.md) for the
 authoritative variable list and naming.
 
 4. Validate readiness after startup.
@@ -228,7 +273,7 @@ curl http://localhost:8000/readyz
 
 5. Enable and validate retention cleanup policy.
 
-Use the retention settings in `docs/configuration.md` to define cleanup
+Use the retention settings in [configuration.md](configuration.md) to define cleanup
 windows and optional archival. For production-like deployments:
 
 - keep `RETENTION_CLEANUP_ENABLED=true`
@@ -238,14 +283,79 @@ windows and optional archival. For production-like deployments:
 
 6. Enable ingestion quota controls for burst protection.
 
-Use ingestion quota settings from `docs/configuration.md` when you need
+Use ingestion quota settings from [configuration.md](configuration.md) when you need
 per-source or per-tenant protection during traffic spikes:
 
 - keep `INGESTION_QUOTA_ENABLED=true` for bounded ingestion
 - use `INGESTION_QUOTA_MODE=throttle` to absorb spikes gradually
 - use `INGESTION_QUOTA_MODE=drop` only for strict fail-fast pressure control
 
-7. Understand partition management and migration safety.
+7. Configure Kafka topic partition count.
+
+**Important:** Benchmark results show that with 1 partition per topic,
+throughput plateaus at ~400-500 ev/s regardless of injection rate.
+Production deployments should configure topics with multiple partitions
+to enable consumer parallelism.
+
+The recommended partition count depends on your throughput target:
+
+| Target Throughput | Recommended Partitions | Consumer Replicas |
+|------------------|----------------------|-------------------|
+| < 500 ev/s | 1 | 1-2 |
+| 500-2000 ev/s | 6 | 2-4 |
+| 2000-5000 ev/s | 12 | 4-6 |
+| > 5000 ev/s | 24+ | 6-10 |
+
+**Via Helm chart:**
+
+```yaml
+kafka:
+  topicPartitionCount: 6
+  topicNames:
+    - orderdb.public.orders
+    - orderdb.public.customers
+    - catalogdb.public.products
+```
+
+The Helm chart's pre-install Job will create topics with the configured
+partition count if they don't exist, or increase partitions on existing
+topics. Note that Kafka partition count can only be increased, never
+decreased — choose an initial count that allows room for growth.
+
+**Manual (Kafka CLI):**
+
+```bash
+# Create a topic with 6 partitions
+kafka-topics --bootstrap-server localhost:9092 \
+  --create --topic my-topic \
+  --partitions 6 --replication-factor 1
+
+# Increase partitions on an existing topic (cannot decrease)
+kafka-topics --bootstrap-server localhost:9092 \
+  --alter --topic my-topic \
+  --partitions 6
+```
+
+**With the Terraform module:**
+
+The `deploy/terraform/main.tf` has a commented-out `kafka_topic` resource
+block. Uncomment it and set `kafka_topic_partitions` variable to match your
+target partition count.
+
+**Consumer behavior:**
+
+The consumer auto-assigns all partitions when `KAFKA_TOPIC_PARTITIONS` is
+not set. With N partitions and a single consumer, the consumer processes
+all N partitions sequentially (not in parallel). To achieve parallel
+consumption, either:
+
+- Run multiple consumer replicas (scale `replicaCount` or use HPA)
+- Set `KAFKA_CLUSTERS` with multiple consumer instances per partition group
+
+Each replica in the same consumer group will be assigned a subset of the
+partitions, allowing parallel processing.
+
+8. Understand partition management and migration safety.
 
 The `events` and `column_changes` tables are automatically converted to
 time-range-partitioned tables (monthly partitions) by migration 0013.
@@ -257,8 +367,8 @@ Only one pod can run migrations at a time; concurrent attempts log a clear
 "lock held by another process" message and exit cleanly. This is validated
 by integration tests.
 
-See `docs/configuration.md` for retention settings and
-`docs/runbooks/recovery-and-validation.md` for operational workflows.
+See [configuration.md](configuration.md) for retention settings and
+[runbooks/recovery-and-validation.md](runbooks/recovery-and-validation.md) for operational workflows.
 
 ## 4. Post-Deploy Validation
 

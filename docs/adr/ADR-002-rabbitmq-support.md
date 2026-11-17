@@ -3,7 +3,7 @@
 **Status:** Implemented  
 **Date:** 2026-06-23  
 **Deciders:** Project leads  
-**Context:** [Multi-broker configuration](../../docs/configuration.md#multiple-broker-clusters)
+**Context:** [Multi-broker configuration](../configuration.md#multiple-broker-clusters)
 
 ---
 

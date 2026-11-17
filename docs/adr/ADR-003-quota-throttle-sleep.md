@@ -3,7 +3,7 @@
 **Status:** Implemented  
 **Date:** 2026-06-23  
 **Deciders:** Project leads  
-**Context:** [Ingestion quota configuration](../../docs/configuration.md#ingestion-quota-and-throttling-settings)
+**Context:** [Ingestion quota configuration](../configuration.md#ingestion-quota-and-throttling-settings)
 
 ---
 

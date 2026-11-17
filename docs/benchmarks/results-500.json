@@ -1,0 +1,19 @@
+{
+  "passed": false,
+  "benchmark": "BM-1: Baseline benchmark (500 ev/s, 5 min, 10 sources)",
+  "date": "2026-07-05",
+  "events_ingested": 26674,
+  "events_per_second": 382.05,
+  "p50_api_latency_ms": 15.35,
+  "p95_api_latency_ms": 134.21,
+  "p99_api_latency_ms": 199.22,
+  "dlq_count": 0,
+  "errors": [
+    "Throughput 382.1 ev/s below target 500 ev/s"
+  ],
+  "elapsed_seconds": 300.0,
+  "target_rate": 500,
+  "target_p95_api_latency_ms": 200,
+  "target_p95_ingestion_latency_ms": 500,
+  "notes": "API latency targets met (p95 134ms < 200ms). Throughput 76% of target — likely limited by single-threaded consumer or Kafka partition count."
+}

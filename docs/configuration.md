@@ -3,6 +3,12 @@
 DB Monitor reads configuration from environment variables and, for secrets,
 also supports `*_FILE` variants that point at files mounted into the runtime.
 
+> **Badge legend:**
+>
+> - ✅ **Required** — must be set for the app to start
+> - ⚙️ **Optional** — has a safe default or is conditionally required
+> - 🧪 **Demo** — only needed when running the bundled sandbox stack
+
 ## Common Local Development Example
 
 ```env
@@ -33,31 +39,31 @@ KAFKA_SSL_PASSWORD_FILE=/run/secrets/kafka_ssl_password
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `APP_ENV` | Environment mode used for safety defaults | `development` |
-| `DB_SCHEMA_MODE` | Schema handling policy: `apply`, `validate`, or `skip` | `apply` in dev, `validate` in prod |
-| `POSTGRES_URL` | Async SQLAlchemy connection string | local monitor DB |
-| `CONNECTOR_SOURCES_FILE` | Path to the public source manifest file | `/connectors/sources.json` in docker, else `connectors/sources.json` |
-| `MESSAGE_BROKER` | Active single-broker mode: `kafka` or `rabbitmq` | `kafka` |
-| `KAFKA_BROKER` | Kafka bootstrap server | `kafka:9092` |
-| `KAFKA_TOPIC` | Singular fallback Kafka topic if no topic derivation exists | `orderdb.public.orders` |
-| `KAFKA_TOPICS` | Explicit topic list. Overrides manifest-derived tracking if provided | derived from manifest |
-| `KAFKA_CONSUMER_GROUP` | Consumer group ID | `fastapi-consumer-group` |
-| `KAFKA_CLUSTERS` | JSON array of per-cluster config entries | unset |
-| `BROKER_CLUSTERS` | JSON array of mixed Kafka and RabbitMQ cluster entries | unset |
-| `RABBITMQ_URL` | RabbitMQ connection URL | `amqp://guest:guest@localhost/` |
-| `RABBITMQ_QUEUES` | Queue list for single-broker RabbitMQ mode | derived from `RABBITMQ_QUEUE` |
-| `RABBITMQ_PREFETCH_COUNT` | Prefetch window for RabbitMQ consumers | `100` |
-| `RABBITMQ_DLQ_QUEUE` | RabbitMQ dead-letter queue name | `db-monitor-dlq` |
+| `APP_ENV` | ⚙️ Environment mode used for safety defaults | `development` |
+| `DB_SCHEMA_MODE` | ⚙️ Schema handling policy: `apply`, `validate`, or `skip` | `apply` in dev, `validate` in prod |
+| `POSTGRES_URL` | ✅ Async SQLAlchemy connection string for the monitor database | local monitor DB |
+| `CONNECTOR_SOURCES_FILE` | ⚙️ Path to the source manifest JSON file | `/connectors/sources.json` in docker, else `connectors/sources.json` |
+| `MESSAGE_BROKER` | ⚙️ Active single-broker mode: `kafka` or `rabbitmq` | `kafka` |
+| `KAFKA_BROKER` | ✅ Kafka bootstrap server (required when using Kafka) | `kafka:9092` |
+| `KAFKA_TOPIC` | ⚙️ Singular fallback Kafka topic if no topic derivation exists | `orderdb.public.orders` |
+| `KAFKA_TOPICS` | ⚙️ Explicit topic list. Overrides manifest-derived tracking if provided | derived from manifest |
+| `KAFKA_CONSUMER_GROUP` | ⚙️ Consumer group ID | `fastapi-consumer-group` |
+| `KAFKA_CLUSTERS` | ⚙️ JSON array of per-cluster config entries | unset |
+| `BROKER_CLUSTERS` | ⚙️ JSON array of mixed Kafka and RabbitMQ cluster entries | unset |
+| `RABBITMQ_URL` | ⚙️ RabbitMQ connection URL (required when using RabbitMQ) | `amqp://guest:guest@localhost/` |
+| `RABBITMQ_QUEUES` | ⚙️ Queue list for single-broker RabbitMQ mode | derived from `RABBITMQ_QUEUE` |
+| `RABBITMQ_PREFETCH_COUNT` | ⚙️ Prefetch window for RabbitMQ consumers | `100` |
+| `RABBITMQ_DLQ_QUEUE` | ⚙️ RabbitMQ dead-letter queue name | `db-monitor-dlq` |
 
 ## Kafka TLS Settings
 
 | Variable | Purpose |
 | --- | --- |
-| `KAFKA_SECURITY_PROTOCOL` | `PLAINTEXT`, `SSL`, or `SASL_SSL` |
-| `KAFKA_SSL_CAFILE` | CA certificate path |
-| `KAFKA_SSL_CERTFILE` | Client certificate path |
-| `KAFKA_SSL_KEYFILE` | Client key path |
-| `KAFKA_SSL_PASSWORD` / `KAFKA_SSL_PASSWORD_FILE` | Private key password |
+| `KAFKA_SECURITY_PROTOCOL` | ⚙️ `PLAINTEXT`, `SSL`, or `SASL_SSL` |
+| `KAFKA_SSL_CAFILE` | ⚙️ CA certificate path |
+| `KAFKA_SSL_CERTFILE` | ⚙️ Client certificate path |
+| `KAFKA_SSL_KEYFILE` | ⚙️ Client key path |
+| `KAFKA_SSL_PASSWORD` / `KAFKA_SSL_PASSWORD_FILE` | ⚙️ Private key password |
 
 ## Multiple Kafka Clusters
 
@@ -122,49 +128,49 @@ through `KAFKA_CLUSTERS`, or uses the single-cluster RabbitMQ defaults when
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `DB_POOL_SIZE` | Base pool size | `10` |
-| `DB_MAX_OVERFLOW` | Extra burst capacity | `20` |
-| `DB_POOL_TIMEOUT_SECONDS` | Wait time for pooled connection checkout | `30` |
-| `DB_POOL_RECYCLE_SECONDS` | Recycle interval for pooled connections | `1800` |
-| `DB_POOL_PRE_PING` | Validate pooled connections before use | `true` |
+| `DB_POOL_SIZE` | ⚙️ Base pool size | `10` |
+| `DB_MAX_OVERFLOW` | ⚙️ Extra burst capacity | `20` |
+| `DB_POOL_TIMEOUT_SECONDS` | ⚙️ Wait time for pooled connection checkout | `30` |
+| `DB_POOL_RECYCLE_SECONDS` | ⚙️ Recycle interval for pooled connections | `1800` |
+| `DB_POOL_PRE_PING` | ⚙️ Validate pooled connections before use | `true` |
 
 ## Auth And Session Settings
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `ALLOW_BOOTSTRAP` | Allows one-time admin bootstrap | `true` in dev, `false` in prod |
-| `API_KEY_DEFAULT_TTL_DAYS` | Default API-key lifetime | `90` |
-| `JWT_SECRET` / `JWT_SECRET_FILE` | Active signing secret | dev placeholder |
-| `JWT_SECRET_NEXT` / `JWT_SECRET_NEXT_FILE` | Rotation overlap secret | unset |
-| `JWT_ALGORITHM` | JWT algorithm | `HS256` |
-| `ACCESS_TOKEN_TTL_MINUTES` | Bearer token lifetime | `15` |
-| `WS_SESSION_TOKEN_TTL_SECONDS` | WebSocket session-token lifetime | `60` |
+| `ALLOW_BOOTSTRAP` | ⚙️ Allows one-time admin bootstrap | `true` in dev, `false` in prod |
+| `API_KEY_DEFAULT_TTL_DAYS` | ⚙️ Default API-key lifetime | `90` |
+| `JWT_SECRET` / `JWT_SECRET_FILE` | ✅ Active signing secret (must be changed in production) | dev placeholder |
+| `JWT_SECRET_NEXT` / `JWT_SECRET_NEXT_FILE` | ⚙️ Rotation overlap secret | unset |
+| `JWT_ALGORITHM` | ⚙️ JWT algorithm | `HS256` |
+| `ACCESS_TOKEN_TTL_MINUTES` | ⚙️ Bearer token lifetime | `15` |
+| `WS_SESSION_TOKEN_TTL_SECONDS` | ⚙️ WebSocket session-token lifetime | `60` |
 
 ## Consumer And Recovery Settings
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `BATCH_ENABLED` | Enables batch processing | `true` |
-| `BATCH_SIZE` | Batch size for consumer writes | `100` |
-| `CUSTOM_EVENT_PROCESSORS` | Comma-separated processor import paths | unset |
-| `DLQ_ENABLED` | Persists failures to the DLQ table | `true` |
-| `READINESS_MAX_COMMIT_AGE_SECONDS` | Readiness threshold for stale commits | `300` |
-| `READINESS_MAX_CONSUMER_LAG` | Readiness threshold for lag backlog | `1000` |
-| `READINESS_MAX_DLQ_MESSAGES` | Readiness threshold for pending DLQ rows | `0` |
+| `BATCH_ENABLED` | ⚙️ Enables batch processing | `true` |
+| `BATCH_SIZE` | ⚙️ Batch size for consumer writes | `100` |
+| `CUSTOM_EVENT_PROCESSORS` | ⚙️ Comma-separated processor import paths | unset |
+| `DLQ_ENABLED` | ⚙️ Persists failures to the DLQ table | `true` |
+| `READINESS_MAX_COMMIT_AGE_SECONDS` | ⚙️ Readiness threshold for stale commits | `300` |
+| `READINESS_MAX_CONSUMER_LAG` | ⚙️ Readiness threshold for lag backlog | `1000` |
+| `READINESS_MAX_DLQ_MESSAGES` | ⚙️ Readiness threshold for pending DLQ rows | `0` |
 
 ## Ingestion Quota And Throttling Settings
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `INGESTION_QUOTA_ENABLED` | Enable source/tenant ingestion quota checks | `false` |
-| `INGESTION_QUOTA_WINDOW_SECONDS` | Quota enforcement window size in seconds | `60` |
-| `INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW` | Default per-source event limit per window (`0` disables) | `0` |
-| `INGESTION_SOURCE_QUOTAS` | JSON source overrides for per-window limits | unset |
-| `INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW` | Default per-tenant event limit per window (`0` disables) | `0` |
-| `INGESTION_TENANT_QUOTAS` | JSON tenant overrides for per-window limits | unset |
-| `INGESTION_QUOTA_MODE` | Over-limit behavior: `throttle` or `drop` | `throttle` |
-| `INGESTION_QUOTA_MAX_THROTTLE_SECONDS` | Max sleep per throttle cycle before retry | `5.0` |
-| `INGESTION_BULK_WRITE_ENABLED` | Enable bulk event insert path for batch ingestion | `true` |
+| `INGESTION_QUOTA_ENABLED` | ⚙️ Enable source/tenant ingestion quota checks | `false` |
+| `INGESTION_QUOTA_WINDOW_SECONDS` | ⚙️ Quota enforcement window size in seconds | `60` |
+| `INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW` | ⚙️ Default per-source event limit per window (`0` disables) | `0` |
+| `INGESTION_SOURCE_QUOTAS` | ⚙️ JSON source overrides for per-window limits | unset |
+| `INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW` | ⚙️ Default per-tenant event limit per window (`0` disables) | `0` |
+| `INGESTION_TENANT_QUOTAS` | ⚙️ JSON tenant overrides for per-window limits | unset |
+| `INGESTION_QUOTA_MODE` | ⚙️ Over-limit behavior: `throttle` or `drop` | `throttle` |
+| `INGESTION_QUOTA_MAX_THROTTLE_SECONDS` | ⚙️ Max sleep per throttle cycle before retry | `5.0` |
+| `INGESTION_BULK_WRITE_ENABLED` | ⚙️ Enable bulk event insert path for batch ingestion | `true` |
 
 Example:
 
@@ -206,16 +212,16 @@ place or return a replacement `KafkaEvent`.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `WS_BACKPLANE_ENABLED` | Enable Postgres-backed cross-replica fanout | `true` |
-| `WS_BACKPLANE_CHANNEL` | Postgres notification channel name | `db_monitor_ws_events` |
+| `WS_BACKPLANE_ENABLED` | ⚙️ Enable Postgres-backed cross-replica fanout | `true` |
+| `WS_BACKPLANE_CHANNEL` | ⚙️ Postgres notification channel name | `db_monitor_ws_events` |
 
 ## Webhook Notifications
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `WEBHOOK_URLS` | Comma-separated outbound webhook targets | unset |
-| `WEBHOOK_TIMEOUT_SECONDS` | Per-request webhook timeout | `5.0` |
-| `WEBHOOK_SHARED_SECRET` / `WEBHOOK_SHARED_SECRET_FILE` | Optional HMAC signing secret | unset |
+| `WEBHOOK_URLS` | ⚙️ Comma-separated outbound webhook targets | unset |
+| `WEBHOOK_TIMEOUT_SECONDS` | ⚙️ Per-request webhook timeout | `5.0` |
+| `WEBHOOK_SHARED_SECRET` / `WEBHOOK_SHARED_SECRET_FILE` | ⚙️ Optional HMAC signing secret | unset |
 
 Example:
 
@@ -233,11 +239,11 @@ set, deliveries include `X-DB-Monitor-Signature` using `sha256=<hex>` HMAC.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `OTEL_TRACING_ENABLED` | Enable OpenTelemetry tracing | `false` |
-| `OTEL_SERVICE_NAME` | Service name attached to exported spans | `db-monitor` |
-| `OTEL_EXPORTER` | Trace exporter mode: `otlp` or `console` | `otlp` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint when using `otlp` | unset |
-| `OTEL_EXPORTER_OTLP_HEADERS` | Comma-separated OTLP headers as `k=v` pairs | unset |
+| `OTEL_TRACING_ENABLED` | ⚙️ Enable OpenTelemetry tracing | `false` |
+| `OTEL_SERVICE_NAME` | ⚙️ Service name attached to exported spans | `db-monitor` |
+| `OTEL_EXPORTER` | ⚙️ Trace exporter mode: `otlp` or `console` | `otlp` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | ⚙️ OTLP collector endpoint when using `otlp` | unset |
+| `OTEL_EXPORTER_OTLP_HEADERS` | ⚙️ Comma-separated OTLP headers as `k=v` pairs | unset |
 
 Local console example:
 
@@ -264,17 +270,18 @@ fanout.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `AUDIT_LOG_QUEUE_MAXSIZE` | In-memory audit queue limit | `10000` |
-| `AUDIT_LOG_BATCH_SIZE` | Audit flush batch size | `100` |
-| `AUDIT_LOG_FLUSH_INTERVAL_SECONDS` | Audit flush cadence | `1.0` |
-| `APP_SHUTDOWN_TIMEOUT_SECONDS` | Graceful shutdown timeout | `45` |
+| `AUDIT_LOG_QUEUE_MAXSIZE` | ⚙️ In-memory audit queue limit | `10000` |
+| `AUDIT_LOG_QUEUE_MODE` | ⚙️ Backpressure policy when queue is full: ``drop``, ``block``, or ``spill`` | `drop` |
+| `AUDIT_LOG_BATCH_SIZE` | ⚙️ Audit flush batch size | `100` |
+| `AUDIT_LOG_FLUSH_INTERVAL_SECONDS` | ⚙️ Audit flush cadence | `1.0` |
+| `APP_SHUTDOWN_TIMEOUT_SECONDS` | ⚙️ Graceful shutdown timeout | `45` |
 
 ## Tenant Cohort SLO Policy Settings
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `SLO_ROLLING_WINDOW_DAYS` | Rolling window used for SLO/error budget tracking | `30` |
-| `TENANT_COHORT_SLO_POLICIES` | JSON array of cohort SLO/error-budget policy objects | built-in small/medium/large defaults |
+| `SLO_ROLLING_WINDOW_DAYS` | ⚙️ Rolling window used for SLO/error budget tracking | `30` |
+| `TENANT_COHORT_SLO_POLICIES` | ⚙️ JSON array of cohort SLO/error-budget policy objects | built-in small/medium/large defaults |
 
 Policy object fields:
 
@@ -301,16 +308,17 @@ TENANT_COHORT_SLO_POLICIES=[
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `RETENTION_CLEANUP_ENABLED` | Enable background retention cleanup task | `false` |
-| `RETENTION_CLEANUP_INTERVAL_SECONDS` | Seconds between cleanup cycles | `3600` |
-| `RETENTION_CLEANUP_BATCH_SIZE` | Rows deleted per cleanup batch | `1000` |
-| `RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE` | Max batches per table in one cycle | `10` |
-| `RETENTION_ARCHIVE_BEFORE_DELETE` | Archive rows to JSONL before deleting | `false` |
-| `RETENTION_ARCHIVE_DIR` | Directory for JSONL archive files | `retention-archive` |
-| `EVENT_RETENTION_DAYS` | Retention window for `events` rows | `30` |
-| `COLUMN_CHANGES_RETENTION_DAYS` | Retention window for `column_changes` rows | `30` |
-| `DEAD_LETTER_RETENTION_DAYS` | Retention window for `dead_letter_events` rows | `30` |
-| `API_AUDIT_LOG_RETENTION_DAYS` | Retention window for `api_audit_logs` rows | `90` |
+| `RETENTION_CLEANUP_ENABLED` | ⚙️ Enable background retention cleanup task | `false` |
+| `RETENTION_CLEANUP_INTERVAL_SECONDS` | ⚙️ Seconds between cleanup cycles | `3600` |
+| `RETENTION_CLEANUP_BATCH_SIZE` | ⚙️ Rows deleted per cleanup batch | `1000` |
+| `RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE` | ⚙️ Max batches per table in one cycle | `10` |
+| `RETENTION_ARCHIVE_BEFORE_DELETE` | ⚙️ Archive rows to JSONL before deleting | `false` |
+| `RETENTION_ARCHIVE_DIR` | ⚙️ Directory for JSONL archive files | `retention-archive` |
+| `EVENT_RETENTION_DAYS` | ⚙️ Retention window for `events` rows | `30` |
+| `COLUMN_CHANGES_RETENTION_DAYS` | ⚙️ Retention window for `column_changes` rows | `30` |
+| `DEAD_LETTER_RETENTION_DAYS` | ⚙️ Retention window for `dead_letter_events` rows | `30` |
+| `API_AUDIT_LOG_RETENTION_DAYS` | ⚙️ Retention window for `api_audit_logs` rows | `90` |
+| `SPILL_RETENTION_DAYS` | ⚙️ Retention window for replayed `api_audit_log_spill` rows | `30` |
 
 Example production-like configuration:
 
@@ -342,15 +350,48 @@ Notes:
   `connectors/sources.json`, so you often do not need to set `KAFKA_TOPICS`
   manually.
 
-## Source Manifest Contract (`CONNECTOR_SOURCES_FILE`)
+## Source Manifest Configuration
 
-The monitoring core of DB Monitor is driven by a declarative configuration contract called the **Source Manifest**. This is a JSON document located at `connectors/sources.json` by default (or custom configured via `CONNECTOR_SOURCES_FILE`).
+DB Monitor is driven by a declarative configuration contract called the
+**Source Manifest**. This is a JSON document that defines which source
+databases to monitor, their connection details, and which tables to capture.
 
-To formally declare, dry-run, or publish your custom databases and tables, provide a manifest that conforms to the JSON Schema at [connectors/sources.schema.json](../connectors/sources.schema.json).
+### Manifest Files
+
+| File | Purpose |
+| --- | --- |
+| `connectors/sources.json` | Default runtime manifest (checked into repo with sandbox examples for the demo stack) |
+| `connectors/sources.template.json` | Blank template you can copy and customize for your own sources |
+| `connectors/sources.schema.json` | JSON Schema for validation — all manifests must conform to this contract |
+
+### Providing a Custom Manifest
+
+The manifest path is controlled by the `CONNECTOR_SOURCES_FILE` environment
+variable. By default, the app looks for:
+
+- `/connectors/sources.json` inside a Docker container, or
+- `connectors/sources.json` relative to the project root in local development
+
+To use your own manifest:
+
+```bash
+# Point to a custom manifest path
+CONNECTOR_SOURCES_FILE=/etc/db-monitor/my-sources.json
+
+# Or simply copy the template and edit it
+cp connectors/sources.template.json connectors/my-sources.json
+CONNECTOR_SOURCES_FILE=connectors/my-sources.json
+```
+
+If no manifest is found or it contains no enabled sources, the app logs a
+WARNING at startup and CDC ingestion will not start until sources are
+configured.
 
 ### Schema Specification
 
-The manifest consists of a root `"connectors"` array containing one or more source databases:
+The manifest consists of a root `"connectors"` array containing one or more
+source databases. The full contract is defined at
+[connectors/sources.schema.json](https://github.com/jobm/DB_Monitor/blob/main/connectors/sources.schema.json).
 
 | Field | Type | Description | Required | Default / Fallback |
 | --- | --- | --- | --- | --- |
@@ -363,20 +404,43 @@ The manifest consists of a root `"connectors"` array containing one or more sour
 | `history_topic` | String | Custom name for internal schema changes tracker topic. | No | `"dbhistory.{source_name}"` |
 | `config_overrides` | Object | Arbitrary extra key/values properties passed directly to the Debezium engine. | No | `{}` |
 
-### Minimal Manifest Example
+### Quick Start: Using the Template
 
-```json
-{
-  "connectors": [
-    {
-      "source_name": "inventory_db",
-      "database_hostname": "postgres-inventory-prod",
-      "tables": [
-        "public.items",
-        "public.categories"
-      ],
-      "enabled": true
-    }
-  ]
-}
-```
+1. Copy the template:
+   ```bash
+   cp connectors/sources.template.json connectors/my-sources.json
+   ```
+2. Edit `connectors/my-sources.json` with your source database details:
+   ```json
+   {
+     "connectors": [
+       {
+         "source_name": "inventory_db",
+         "database_hostname": "postgres-inventory-prod",
+         "tables": [
+           "public.items",
+           "public.categories"
+         ],
+         "enabled": true
+       }
+     ]
+   }
+   ```
+3. Start the app pointing at your manifest:
+   ```bash
+   CONNECTOR_SOURCES_FILE=connectors/my-sources.json uv run db-monitor-serve
+   ```
+
+### Tips
+
+- The `connectors/sources.json` file in the repository is pre-configured for
+  the bundled demo sandbox. Do not edit it if you want to preserve the demo
+  stack — create your own manifest file instead.
+- Use `config_overrides` to pass Debezium-specific settings like
+  `publication.autocreate.mode` or `plugin.name`.
+- Validate your manifest against the JSON Schema before deploying:
+  ```bash
+  pip install check-jsonschema
+  check-jsonschema --schemafile connectors/sources.schema.json \
+    connectors/my-sources.json
+  ```

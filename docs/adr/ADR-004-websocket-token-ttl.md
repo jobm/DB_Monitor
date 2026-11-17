@@ -3,7 +3,7 @@
 **Status:** Implemented  
 **Date:** 2026-06-23  
 **Deciders:** Project leads  
-**Context:** [WebSocket endpoint](../../api-docs.md#realtime-endpoint), [WS token config](../../docs/configuration.md#auth-and-session-settings)
+**Context:** [WebSocket endpoint](../api-docs.md#realtime-endpoint), [WS token config](../configuration.md#auth-and-session-settings)
 
 ---
 

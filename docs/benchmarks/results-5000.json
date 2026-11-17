@@ -1,0 +1,21 @@
+{
+  "benchmark": "BM-2 — Full benchmark matrix (100/500/1000/5000 ev/s)",
+  "run": 1,
+  "target_rate": 5000,
+  "duration_seconds": 300,
+  "sources": 10,
+  "kafka_broker": "localhost:9093",
+  "timestamp": "2026-07-05T17:51:00Z",
+  "results": {
+    "throughput_ev_s": 462.80,
+    "latency_ms": {
+      "p50": 15.50,
+      "p95": 874.10,
+      "p99": 987.89
+    },
+    "total_events_ingested": 138840,
+    "dlq_count": 0,
+    "passed": false,
+    "notes": "Throughput 9.3% of target. At 5000 ev/s injection rate, the single-partition Kafka topic creates massive backlog. Consumer is processing at its max single-partition rate (~460-570 ev/s). Massive queue buildup drives p95 latency to 874ms. Severely partition-bound."
+  }
+}
