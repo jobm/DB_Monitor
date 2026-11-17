@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 from db_monitor.core.config import settings
 from db_monitor.ingestion.brokers import (
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 RECONNECT_INITIAL_DELAY_SECONDS = 1.0
 RECONNECT_MAX_DELAY_SECONDS = 60.0
+RECONNECT_RESET_AFTER_SECONDS = 60.0
 
 
 def get_consumer_health() -> dict[str, object]:
@@ -44,7 +46,7 @@ def get_consumer_health() -> dict[str, object]:
 
 def _reconnect_delay(attempt: int) -> float:
     """Return bounded exponential backoff for consumer reconnects."""
-    exponent = min(max(attempt - 1, 0), 5)
+    exponent = min(max(attempt - 1, 0), 6)
     return min(
         RECONNECT_INITIAL_DELAY_SECONDS * (2**exponent),
         RECONNECT_MAX_DELAY_SECONDS,
@@ -101,6 +103,7 @@ async def consumer_task(
     while True:
         consumer: object | None = None
         dlq_publisher: DeadLetterPublisher | None = None
+        connected_at: float | None = None
         try:
             consumer = await _connect_consumer(
                 cluster_name,
@@ -114,6 +117,7 @@ async def consumer_task(
                 prefetch_count=prefetch_count,
                 runtime=runtime,
             )
+            connected_at = time.monotonic()
             if enable_dlq:
                 dlq_publisher = build_dead_letter_publisher(
                     broker_kind=broker_kind,
@@ -147,7 +151,14 @@ async def consumer_task(
             runtime["reconnecting"] = False
             raise
         except Exception as exc:
-            reconnect_attempt += 1
+            if (
+                connected_at is not None
+                and time.monotonic() - connected_at
+                >= RECONNECT_RESET_AFTER_SECONDS
+            ):
+                reconnect_attempt = 1
+            else:
+                reconnect_attempt += 1
             runtime["running"] = True
             runtime["connected"] = False
             runtime["reconnecting"] = True

@@ -31,7 +31,6 @@ from tests.conftest_kafka_integration import (  # noqa: E402 — after pytest_pl
 
 pytestmark = [
     pytest.mark.slow,
-    pytest.mark.anyio,
 ]
 
 

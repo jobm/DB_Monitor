@@ -924,6 +924,74 @@ async def test_consumer_task_reconnects_after_message_loop_failure(monkeypatch):
     assert runtime["running"] is False
 
 
+def test_reconnect_delay_reaches_and_caps_at_60_seconds() -> None:
+    assert consumer_mod._reconnect_delay(1) == 1.0
+    assert consumer_mod._reconnect_delay(2) == 2.0
+    assert consumer_mod._reconnect_delay(5) == 16.0
+    assert consumer_mod._reconnect_delay(6) == 32.0
+    assert consumer_mod._reconnect_delay(7) == 60.0
+    assert consumer_mod._reconnect_delay(100) == 60.0
+
+
+@pytest.mark.anyio
+async def test_consumer_task_resets_backoff_after_healthy_connection(
+    monkeypatch,
+):
+    loop_calls = 0
+    delays = []
+
+    class FakeReconnectConsumer:
+        async def stop(self):
+            return None
+
+    async def fake_connect(*_args, **_kwargs):
+        return FakeReconnectConsumer()
+
+    async def fake_message_loop(*_args, **_kwargs):
+        nonlocal loop_calls
+        loop_calls += 1
+        if loop_calls < 3:
+            raise RuntimeError("broker disconnected")
+
+    async def fake_refresh_dead_letter_backlog_metric(*_args, **_kwargs):
+        return 0
+
+    monotonic_values = iter([0.0, 0.0, 100.0, 200.0, 300.0])
+
+    def fake_monotonic() -> float:
+        return next(monotonic_values)
+
+    def fake_reconnect_delay(attempt: int) -> float:
+        delays.append(attempt)
+        return 0.0
+
+    monkeypatch.setattr(consumer_mod, "_connect_consumer", fake_connect)
+    monkeypatch.setattr(consumer_mod, "_message_loop", fake_message_loop)
+    monkeypatch.setattr(consumer_mod, "_reconnect_delay", fake_reconnect_delay)
+    monkeypatch.setattr(
+        consumer_mod,
+        "time",
+        SimpleNamespace(monotonic=fake_monotonic),
+    )
+    monkeypatch.setattr(
+        consumer_mod,
+        "refresh_dead_letter_backlog_metric",
+        fake_refresh_dead_letter_backlog_metric,
+    )
+
+    await consumer_mod.consumer_task(
+        cluster_name="reconnect-healthy-reset",
+        broker_kind="kafka",
+        consumer_group="group-a",
+        topics=["orders.events"],
+        enable_dlq=False,
+        enable_batch=False,
+    )
+
+    assert loop_calls == 3
+    assert delays == [1, 1]
+
+
 @pytest.mark.anyio
 async def test_consumer_task_retries_after_connection_failure(monkeypatch):
     consumers = []

@@ -33,9 +33,11 @@ from db_monitor.consumer.handlers import _handle_filtered_event, _handle_quota_d
 
 logger = logging.getLogger(__name__)
 
+AnyConsumer = object  # Union of KafkaConsumerAdapter | RabbitMQConsumerAdapter
+
 
 async def _message_loop(
-    consumer: object,
+    consumer: AnyConsumer,
     *,
     cluster_name: str,
     broker_kind: str,
@@ -53,7 +55,7 @@ async def _message_loop(
     batch_timeout = 5.0
     last_batch_time: float = 0.0
 
-    async for msg in consumer:  # type: ignore[union-attr]
+    async for msg in consumer:  # type: ignore[union-attr,type-var]
         if not breaker.can_execute():
             logger.warning(
                 "Circuit breaker open for cluster '%s', skipping message processing",
@@ -162,7 +164,7 @@ async def _message_loop(
                     if len(batch) >= batch_size or batch_elapsed >= batch_timeout:
                         batch_processed = await _process_batch(
                             batch,
-                            consumer.ack_batch,
+                            consumer.ack_batch,  # type: ignore[union-attr]
                             dlq_publisher,
                             dlq_destination,
                             enable_dlq,
@@ -238,7 +240,7 @@ async def _message_loop(
     if batch:
         batch_processed = await _process_batch(
             batch,
-            consumer.ack_batch,
+            consumer.ack_batch,  # type: ignore[union-attr]
             dlq_publisher,
             dlq_destination,
             enable_dlq,
