@@ -34,6 +34,22 @@ router = APIRouter()
 CUSTOMER_JWT_SECRET_STATE: dict[str, dict[str, object]] = {}
 
 
+def _require_creator_customer_scope(
+    creator_api_key: ApiKey | None,
+    customer_scope: str,
+) -> None:
+    """Prevent a tenant-scoped admin from managing another customer."""
+    creator_tenant_id = getattr(creator_api_key, "tenant_id", None)
+    if creator_tenant_id is not None and creator_tenant_id != customer_scope:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "A tenant-scoped admin cannot manage another customer's "
+                "authentication scope."
+            ),
+        )
+
+
 @router.post("/admin/customers/{customer_id}/auth/bootstrap")
 async def bootstrap_customer_auth_scope(
     customer_id: str,
@@ -46,8 +62,8 @@ async def bootstrap_customer_auth_scope(
     creator_api_key: ApiKey = Depends(require_admin_role),
 ):
     """Bootstrap one customer scope for API key and JWT secret lifecycle."""
-    del creator_api_key
     scope = _require_customer_scope(customer_id, customer_header)
+    _require_creator_customer_scope(creator_api_key, scope)
 
     normalized_owner_suffix = owner_suffix.strip()
     if not normalized_owner_suffix:
@@ -60,7 +76,7 @@ async def bootstrap_customer_auth_scope(
     key_hash = get_api_key_hash(raw_key)
     expires_at = build_api_key_expiration(ttl_days)
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
         async with session.begin():
             new_key = ApiKey(
                 key_hash=key_hash,
@@ -68,6 +84,7 @@ async def bootstrap_customer_auth_scope(
                 role="admin",
                 is_active=True,
                 expires_at=expires_at,
+                tenant_id=scope,
             )
             session.add(new_key)
             await session.flush()
@@ -115,15 +132,18 @@ async def get_customer_jwt_state(
     creator_api_key: ApiKey = Depends(require_admin_role),
 ):
     """Return customer JWT secret lifecycle metadata for operators."""
-    del creator_api_key
     normalized_customer_id = customer_id.strip()
     if not normalized_customer_id:
         raise HTTPException(
             status_code=400,
             detail="customer_id path parameter must not be empty.",
         )
+    _require_creator_customer_scope(
+        creator_api_key,
+        normalized_customer_id,
+    )
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
         record = await _load_customer_jwt_state_row(
             session,
             normalized_customer_id,
@@ -164,8 +184,8 @@ async def rotate_customer_jwt_secrets(
     creator_api_key: ApiKey = Depends(require_admin_role),
 ):
     """Rotate JWT active/next secret material for one customer scope."""
-    del creator_api_key
     scope = _require_customer_scope(customer_id, customer_header)
+    _require_creator_customer_scope(creator_api_key, scope)
     async with AsyncSessionLocal() as session:
         async with session.begin():
             record = await _load_customer_jwt_state_row(session, scope)
@@ -225,8 +245,8 @@ async def recover_customer_jwt_secrets(
     creator_api_key: ApiKey = Depends(require_admin_role),
 ):
     """Recover prior active JWT secret material for one customer scope."""
-    del creator_api_key
     scope = _require_customer_scope(customer_id, customer_header)
+    _require_creator_customer_scope(creator_api_key, scope)
     async with AsyncSessionLocal() as session:
         async with session.begin():
             record = await _load_customer_jwt_state_row(session, scope)

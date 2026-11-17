@@ -27,15 +27,77 @@ from db_monitor.routes.utils import utc_now
 keys_router = APIRouter()
 
 
+def _normalize_tenant_id(tenant_id: str | None) -> str | None:
+    """Normalize and validate an optional tenant scope."""
+    if tenant_id is None:
+        return None
+    normalized = tenant_id.strip()
+    if not normalized:
+        raise HTTPException(
+            status_code=400,
+            detail="tenant_id must not be empty.",
+        )
+    if len(normalized) > 128:
+        raise HTTPException(
+            status_code=400,
+            detail="tenant_id must be 128 characters or fewer.",
+        )
+    return normalized
+
+
+def _resolve_tenant_scope(
+    creator_api_key: ApiKey,
+    requested_tenant_id: str | None,
+) -> str | None:
+    """Resolve key scope while preventing scoped admins from crossing tenants."""
+    creator_tenant_id = creator_api_key.tenant_id
+    if creator_tenant_id is None:
+        return requested_tenant_id
+    if (
+        requested_tenant_id is not None
+        and requested_tenant_id != creator_tenant_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "A tenant-scoped admin cannot manage keys for another "
+                "tenant."
+            ),
+        )
+    return creator_tenant_id
+
+
+def _require_key_tenant_scope(
+    creator_api_key: ApiKey,
+    target_key: ApiKey,
+) -> None:
+    """Reject cross-tenant key administration by a scoped admin."""
+    if (
+        creator_api_key.tenant_id is not None
+        and target_key.tenant_id != creator_api_key.tenant_id
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "A tenant-scoped admin cannot manage keys outside its "
+                "tenant."
+            ),
+        )
+
+
 @keys_router.post("/auth/keys")
 async def create_api_key(
     owner_name: str,
     role: str = Query("viewer", pattern="^(admin|viewer)$"),
     ttl_days: int = Query(settings.auth.api_key_default_ttl_days, ge=1, le=3650),
+    tenant_id: str | None = Query(None, max_length=128),
     creator_api_key: ApiKey = Depends(require_admin_role),
 ):
     """Create a new API Key (requires an existing Admin API key)."""
-    del creator_api_key
+    resolved_tenant_id = _resolve_tenant_scope(
+        creator_api_key,
+        _normalize_tenant_id(tenant_id),
+    )
     raw_key = generate_new_api_key()
     key_hash = get_api_key_hash(raw_key)
     expires_at = build_api_key_expiration(ttl_days)
@@ -48,6 +110,7 @@ async def create_api_key(
                 role=role,
                 is_active=True,
                 expires_at=expires_at,
+                tenant_id=resolved_tenant_id,
             )
             session.add(new_key)
             await session.flush()
@@ -64,10 +127,18 @@ async def list_api_keys(
     creator_api_key: ApiKey = Depends(require_admin_role),
 ):
     """List API keys for operator inventory and lifecycle actions."""
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(ApiKey).order_by(ApiKey.created_at.desc(), ApiKey.id.desc())
+    statement = select(ApiKey)
+    if creator_api_key.tenant_id is not None:
+        statement = statement.where(
+            ApiKey.tenant_id == creator_api_key.tenant_id
         )
+    statement = statement.order_by(
+        ApiKey.created_at.desc(),
+        ApiKey.id.desc(),
+    )
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(statement)
         api_keys = result.scalars().all()
 
     serialized = [
@@ -111,6 +182,7 @@ async def rotate_api_key(
                     status_code=409,
                     detail="API key is not active and cannot be rotated",
                 )
+            _require_key_tenant_scope(creator_api_key, existing_key)
 
             existing_key.is_active = False
             existing_key.revoked_at = utc_now()
@@ -121,6 +193,7 @@ async def rotate_api_key(
                 role=existing_key.role,
                 is_active=True,
                 expires_at=expires_at,
+                tenant_id=existing_key.tenant_id,
             )
             session.add(replacement_key)
             await session.flush()
@@ -169,6 +242,7 @@ async def revoke_api_key(
                     status_code=409,
                     detail="API key is already inactive, expired, or revoked",
                 )
+            _require_key_tenant_scope(creator_api_key, existing_key)
 
             existing_key.is_active = False
             existing_key.revoked_at = utc_now()

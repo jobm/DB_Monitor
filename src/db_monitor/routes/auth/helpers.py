@@ -18,6 +18,7 @@ def api_key_response(api_key: ApiKey, raw_key: str, message: str) -> dict:
         "api_key": f"{api_key.id}.{raw_key}",
         "owner_name": api_key.owner_name,
         "role": api_key.role,
+        "tenant_id": api_key.tenant_id,
         "expires_at": (
             api_key.expires_at.isoformat() if api_key.expires_at else None
         ),
@@ -46,6 +47,7 @@ def serialize_api_key_summary(
         "id": api_key.id,
         "owner_name": api_key.owner_name,
         "role": api_key.role,
+        "tenant_id": api_key.tenant_id,
         "status": status,
         "is_active": api_key.is_active,
         "created_at": (
