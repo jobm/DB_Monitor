@@ -45,3 +45,16 @@ class ObservabilitySettings:
         )
     )
     """Max seconds between audit-log flushes. Default: 1.0."""
+    audit_log_queue_mode: str = field(
+        default_factory=lambda: os.getenv("AUDIT_LOG_QUEUE_MODE", "drop").lower()
+    )
+    """
+    Backpressure policy when the in-memory audit queue is full.
+
+    - ``drop`` (default): discard the entry and increment the
+      ``audit_log_records_dropped_total`` counter.
+    - ``block``: await space in the queue (naturally throttles the
+      request caller until a flush frees a slot).
+    - ``spill``: persist the entry directly to the
+      ``api_audit_log_spill`` table so no records are lost.
+    """

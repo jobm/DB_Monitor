@@ -12,7 +12,7 @@ from typing import Any
 
 from db_monitor.core.config import settings
 from db_monitor.extensions import AsyncSessionLocal
-from db_monitor.core.models import ApiAuditLog, ColumnChange, DeadLetterEvent, KafkaEvent
+from db_monitor.core.models import ApiAuditLog, ApiAuditLogSpill, ColumnChange, DeadLetterEvent, KafkaEvent
 from sqlalchemy import delete, select, text
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,7 @@ class RetentionPolicy:
     model: Any
     timestamp_column: Any
     retention_days: int
+    extra_filter: Any = None
 
 
 def _utc_now() -> datetime:
@@ -93,6 +94,13 @@ def retention_policies() -> list[RetentionPolicy]:
             model=ApiAuditLog,
             timestamp_column=ApiAuditLog.timestamp,
             retention_days=settings.retention.api_audit_log_retention_days,
+        ),
+        RetentionPolicy(
+            name="api_audit_log_spill",
+            model=ApiAuditLogSpill,
+            timestamp_column=ApiAuditLogSpill.replayed_at,
+            retention_days=settings.retention.spill_retention_days,
+            extra_filter=ApiAuditLogSpill.replayed.is_(True),
         ),
     ]
 
@@ -170,12 +178,15 @@ async def _cleanup_delete_policy_once(
     for _ in range(settings.retention.cleanup_max_batches_per_table):
         async with session_factory() as session:
             async with session.begin():
-                result = await session.execute(
+                query = (
                     select(policy.model)
                     .where(policy.timestamp_column < cutoff)
                     .order_by(policy.model.id.asc())
                     .limit(settings.retention.cleanup_batch_size)
                 )
+                if policy.extra_filter is not None:
+                    query = query.where(policy.extra_filter)
+                result = await session.execute(query)
                 rows = result.scalars().all()
 
                 if not rows:

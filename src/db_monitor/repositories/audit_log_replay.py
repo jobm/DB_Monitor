@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-from sqlalchemy import select
+import logging
+
+from sqlalchemy import func, select
 
 from db_monitor.extensions import AsyncSessionLocal
 from db_monitor.core.models import ApiAuditLog, ApiAuditLogSpill
+
+logger = logging.getLogger(__name__)
+from db_monitor.metrics import (
+    audit_log_replay_attempts_total,
+    audit_log_spill_pending,
+)
 
 
 async def replay_spill_entries(
@@ -24,7 +32,7 @@ async def replay_spill_entries(
     replayed = 0
     failed = 0
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
         async with session.begin():
             if ids:
                 result = await session.execute(
@@ -65,4 +73,29 @@ async def replay_spill_entries(
                 except Exception:
                     failed += 1
 
+    audit_log_replay_attempts_total.labels(
+        result="success"
+    ).inc(replayed)
+    audit_log_replay_attempts_total.labels(
+        result="failure"
+    ).inc(failed)
+
+    # Refresh the pending gauge after replay (best-effort)
+    try:
+        await _refresh_spill_pending_gauge()
+    except Exception:
+        logger.warning("Failed to refresh spill pending gauge", exc_info=True)
+
     return {"attempted": attempted, "replayed": replayed, "failed": failed}
+
+
+async def _refresh_spill_pending_gauge() -> None:
+    """Set the pending spill gauge to the current unreplayed row count."""
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+        count_result = await session.execute(
+            select(func.count()).where(
+                ApiAuditLogSpill.replayed.is_(False)
+            ).select_from(ApiAuditLogSpill)
+        )
+        count = count_result.scalar() or 0
+    audit_log_spill_pending.set(count)

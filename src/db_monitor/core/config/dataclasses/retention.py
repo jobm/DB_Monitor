@@ -68,3 +68,9 @@ class RetentionSettings:
         )
     )
     """Days to retain API audit logs. Default: 90."""
+    spill_retention_days: int = field(
+        default_factory=lambda: int(
+            os.getenv("SPILL_RETENTION_DAYS", "30")
+        )
+    )
+    """Days to retain replayed audit log spill rows. Default: 30."""

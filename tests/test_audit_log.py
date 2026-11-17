@@ -85,7 +85,7 @@ async def test_audit_log_queue_overflow_is_visible(
     writer._queue = asyncio.Queue(maxsize=1)
     before = audit_log_records_dropped_total._value.get()
 
-    writer.enqueue(
+    await writer.enqueue(
         audit_log.AuditLogEntry(
             api_key_id=None,
             endpoint="/health",
@@ -94,7 +94,7 @@ async def test_audit_log_queue_overflow_is_visible(
             ip_address=None,
         )
     )
-    writer.enqueue(
+    await writer.enqueue(
         audit_log.AuditLogEntry(
             api_key_id=None,
             endpoint="/metrics",
@@ -106,6 +106,138 @@ async def test_audit_log_queue_overflow_is_visible(
 
     assert writer._queue.qsize() == 1
     assert audit_log_records_dropped_total._value.get() == before + 1
+
+
+@pytest.mark.anyio
+async def test_audit_log_queue_block_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Block mode should await space and eventually accept the entry."""
+    monkeypatch.setattr(
+        audit_log.settings.observability, "audit_log_queue_mode", "block"
+    )
+    writer = audit_log.AuditLogWriter()
+    writer._queue = asyncio.Queue(maxsize=1)
+
+    # Fill the queue
+    await writer.enqueue(
+        audit_log.AuditLogEntry(
+            api_key_id=None, endpoint="/a", method="GET",
+            status_code=200, ip_address=None,
+        )
+    )
+    assert writer._queue.qsize() == 1
+
+    # The second enqueue should block -- consume from the queue in a
+    # background task to unblock it.
+    async def consumer() -> None:
+        await asyncio.sleep(0.05)
+        await writer._queue.get()
+        writer._queue.task_done()
+
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(consumer())
+        await writer.enqueue(
+            audit_log.AuditLogEntry(
+                api_key_id=None, endpoint="/b", method="GET",
+                status_code=200, ip_address=None,
+            )
+        )
+
+    assert writer._queue.qsize() == 1
+
+
+@pytest.mark.anyio
+async def test_audit_log_queue_spill_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spill mode should persist to api_audit_log_spill when queue is full."""
+    monkeypatch.setattr(
+        audit_log.settings.observability, "audit_log_queue_mode", "spill"
+    )
+
+    executed: list[tuple[str, dict]] = []
+
+    class FakeConn:
+        async def __aenter__(self) -> "FakeConn":
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            pass
+
+        async def execute(self, sql, params) -> None:
+            executed.append((str(sql), params))
+
+    class FakeEngine:
+        def begin(self) -> FakeConn:
+            return FakeConn()
+
+    monkeypatch.setattr(audit_log, "engine", FakeEngine())
+
+    writer = audit_log.AuditLogWriter()
+    writer._queue = asyncio.Queue(maxsize=1)
+
+    # Fill the queue
+    await writer.enqueue(
+        audit_log.AuditLogEntry(
+            api_key_id=None, endpoint="/a", method="GET",
+            status_code=200, ip_address=None,
+        )
+    )
+
+    # Second enqueue should spill
+    await writer.enqueue(
+        audit_log.AuditLogEntry(
+            api_key_id=1, endpoint="/spill", method="POST",
+            status_code=201, ip_address="10.0.0.1",
+        )
+    )
+
+    assert writer._queue.qsize() == 1
+    assert len(executed) == 1
+    assert "api_audit_log_spill" in executed[0][0]
+    assert executed[0][1].get("error_message") == "queue_full_spill"
+    assert executed[0][1].get("entry") is not None
+
+
+@pytest.mark.anyio
+async def test_audit_log_queue_spill_mode_fails_gracefully(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spill mode should raise when the spill DB insert itself fails."""
+    monkeypatch.setattr(
+        audit_log.settings.observability, "audit_log_queue_mode", "spill"
+    )
+
+    class BrokenConn:
+        async def __aenter__(self) -> "BrokenConn":
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            pass
+
+        async def execute(self, sql, params) -> None:
+            raise RuntimeError("db unavailable")
+
+    class BrokenEngine:
+        def begin(self) -> BrokenConn:
+            return BrokenConn()
+
+    monkeypatch.setattr(audit_log, "engine", BrokenEngine())
+
+    writer = audit_log.AuditLogWriter()
+    writer._queue = asyncio.Queue(maxsize=1)
+
+    await writer.enqueue(
+        audit_log.AuditLogEntry(
+            api_key_id=None, endpoint="/a", method="GET",
+            status_code=200, ip_address=None,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="db unavailable"):
+        await writer.enqueue(
+            audit_log.AuditLogEntry(
+                api_key_id=None, endpoint="/fail", method="GET",
+                status_code=500, ip_address=None,
+            )
+        )
 
 
 @pytest.mark.anyio

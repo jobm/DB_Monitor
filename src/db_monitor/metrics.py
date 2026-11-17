@@ -64,6 +64,23 @@ audit_log_flush_failures_total = Counter(
     "Total number of audit log flush attempts that failed",
 )
 
+audit_log_spill_total = Counter(
+    "db_monitor_audit_log_spill_total",
+    "Total number of audit log entries spilled to the durable spill table",
+    ["reason"],
+)
+
+audit_log_spill_pending = Gauge(
+    "db_monitor_audit_log_spill_pending",
+    "Number of unreplayed audit log spill records waiting for replay",
+)
+
+audit_log_replay_attempts_total = Counter(
+    "db_monitor_audit_log_replay_attempts_total",
+    "Total number of audit log spill replay attempts",
+    ["result"],
+)
+
 failed_auth_attempts_total = Counter(
     "db_monitor_failed_auth_attempts_total",
     "Total number of failed authentication attempts",

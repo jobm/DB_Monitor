@@ -16,6 +16,7 @@ from db_monitor.metrics import (
     audit_log_flush_failures_total,
     audit_log_queue_size,
     audit_log_records_dropped_total,
+    audit_log_spill_total,
 )
 from db_monitor.core.models import ApiAuditLog
 
@@ -37,7 +38,16 @@ class AuditLogEntry:
 
 
 class AuditLogWriter:
-    """Buffer API audit log writes off the request path."""
+    """Buffer API audit log writes off the request path.
+
+    Backpressure policy is controlled by ``AUDIT_LOG_QUEUE_MODE``:
+
+    - ``drop`` (default): discard the entry when the queue is full and
+      increment the drop counter.
+    - ``block``: await space in the queue (throttles the caller).
+    - ``spill``: persist directly to ``api_audit_log_spill`` rather than
+      dropping.
+    """
 
     def __init__(self) -> None:
         self._queue: asyncio.Queue[AuditLogEntry] = asyncio.Queue(
@@ -46,8 +56,36 @@ class AuditLogWriter:
         self._flush_failure_detected = False
         self._last_flush_error: str | None = None
 
-    def enqueue(self, entry: AuditLogEntry) -> None:
-        """Queue an audit log entry without blocking the request path."""
+    async def enqueue(self, entry: AuditLogEntry) -> None:
+        """Queue an audit log entry, applying the configured backpressure mode.
+
+        Raises:
+            RuntimeError: In ``spill`` mode when the spill insert itself
+                fails.
+        """
+        mode = settings.observability.audit_log_queue_mode
+
+        if mode == "block":
+            await self._queue.put(entry)
+            audit_log_queue_size.set(self._queue.qsize())
+            return
+
+        if mode == "spill":
+            try:
+                self._queue.put_nowait(entry)
+                audit_log_queue_size.set(self._queue.qsize())
+                return
+            except asyncio.QueueFull:
+                await self._spill_entry(entry)
+                return
+
+        # Default (fallback): drop mode
+        if mode not in ("block", "spill", "drop"):
+            logger.warning(
+                "Unknown AUDIT_LOG_QUEUE_MODE %r, falling back to 'drop'",
+                mode,
+            )
+
         try:
             self._queue.put_nowait(entry)
             audit_log_queue_size.set(self._queue.qsize())
@@ -60,6 +98,41 @@ class AuditLogWriter:
                     "queue_maxsize": self._queue.maxsize,
                 },
             )
+
+    async def _spill_entry(self, entry: AuditLogEntry) -> None:
+        """Persist one entry directly to the spill table."""
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "INSERT INTO api_audit_log_spill (entry, error_message) "
+                        "VALUES (:entry::jsonb, :error_message)"
+                    ),
+                    {
+                        "entry": json.dumps({
+                            "api_key_id": entry.api_key_id,
+                            "endpoint": entry.endpoint,
+                            "method": entry.method,
+                            "status_code": entry.status_code,
+                            "ip_address": entry.ip_address,
+                        }),
+                        "error_message": "queue_full_spill",
+                    },
+                )
+            audit_log_spill_total.labels(reason="queue_full").inc()
+            logger.info(
+                "Spilled audit log entry to api_audit_log_spill "
+                "(queue full, mode=spill)",
+                extra={
+                    "endpoint": entry.endpoint,
+                    "method": entry.method,
+                },
+            )
+        except Exception:
+            logger.exception(
+                "Failed to spill audit log entry to api_audit_log_spill"
+            )
+            raise
 
     @property
     def has_flush_failure(self) -> bool:
@@ -183,6 +256,9 @@ class AuditLogWriter:
                                 "error_message": str(last_error),
                             },
                         )
+                audit_log_spill_total.labels(
+                    reason="flush_failure"
+                ).inc(len(entries))
                 logger.info(
                     (
                         "Persisted spilled audit log entries to "
@@ -201,7 +277,7 @@ class AuditLogWriter:
     async def _flush(self, entries: list[AuditLogEntry]) -> None:
         """Write a batch of audit log entries to the database."""
         with audit_log_flush_duration_seconds.time():
-            async with AsyncSessionLocal() as session:
+            async with AsyncSessionLocal() as session:  # type: ignore[type-var]
                 async with session.begin():
                     session.add_all(
                         [
