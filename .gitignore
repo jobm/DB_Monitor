@@ -17,3 +17,4 @@ secrets/*
 !secrets/*.example
 retention-archive/
 dist/
+site/

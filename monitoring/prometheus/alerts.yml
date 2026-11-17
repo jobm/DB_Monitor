@@ -81,3 +81,21 @@ groups:
         annotations:
           summary: "Authentication failures are spiking"
           description: "DB Monitor is seeing a sustained elevated rate of failed authentication attempts. Check auth logs, token rotation state, and client credentials."
+
+      - alert: AuditLogSpillBacklog
+        expr: db_monitor_audit_log_spill_pending > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Audit log spill backlog is building"
+          description: "DB Monitor has more than 50 unreplayed audit log spill records persisting for 5 minutes. High spill volume may indicate persistent flush failures. Run /admin/replay-audit-log-spills to replay."
+
+      - alert: AuditLogReplayFailuresSpiking
+        expr: sum(rate(db_monitor_audit_log_replay_attempts_total{result="failure"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Audit log replay failures are sustained"
+          description: "DB Monitor is seeing sustained replay failures. Check that api_audit_logs table exists and the spill entry data is well-formed."

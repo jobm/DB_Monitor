@@ -5,6 +5,10 @@ real Kafka broker via testcontainers_ (``confluentinc/cp-kafka``) and yields
 the ``host:port`` bootstrap string. The container is torn down after the last
 test in the session.
 
+If the ``KAFKA_BOOTSTRAP_SERVERS`` environment variable is set (e.g., in CI
+where Kafka is provided as a GitHub Actions service container), the fixture
+uses that value directly instead of starting a testcontainers container.
+
 Usage in a test:
 
 .. code:: python
@@ -26,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Iterator
 
 import pytest
@@ -71,8 +76,22 @@ def kafka_bootstrap_servers() -> Iterator[str]:
     The container stays alive for the entire test session and is stopped
     (removed) during session finalisation.
 
-    Skips the test if the Docker daemon is not reachable.
+    If the ``KAFKA_BOOTSTRAP_SERVERS`` environment variable is set, that
+    value is used directly (for CI where Kafka is a service container).
+    Otherwise, a testcontainers Kafka container is started.
+
+    Skips the test if the Docker daemon is not reachable when no env var
+    is set.
     """
+    env_servers = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
+    if env_servers:
+        logger.info(
+            "Using KAFKA_BOOTSTRAP_SERVERS from environment: %s",
+            env_servers,
+        )
+        yield env_servers
+        return
+
     if not _docker_available():
         pytest.skip("Docker daemon is not reachable — cannot start Kafka container")
 

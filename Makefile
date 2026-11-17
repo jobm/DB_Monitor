@@ -149,6 +149,9 @@ monitor-test-container-readyz: ## Start monitor container and validate readiness
 monitor-test-integration: ## Run sandbox-backed live integration checks
 	uv run --group dev python examples/sandbox/run_integration_tests.py
 
+monitor-test-integration-slow: ## Run slow-marked integration tests with real Kafka via testcontainers or KAFKA_BOOTSTRAP_SERVERS
+	uv run --group dev python -m pytest -m slow tests/ -v --tb=short
+
 monitor-test-sandbox-pytest: ## Run sandbox-only pytest checks against a live stack
 	uv run --group dev python -m pytest -m sandbox tests/
 
@@ -171,6 +174,15 @@ monitor-tui-build: ## Build/install TUI dependencies
 
 monitor-tui: ## Run the Textual UI dashboard
 	cd tui && uv run python app.py
+
+monitor-docs-build: ## Build the MkDocs documentation site
+	uv run --group dev mkdocs build --strict
+
+monitor-docs-serve: ## Serve the MkDocs documentation site locally
+	uv run --group dev mkdocs serve
+
+monitor-docs-deploy: ## Deploy the MkDocs documentation site to GitHub Pages
+	uv run --group dev mkdocs gh-deploy --force
 
 monitor-validate-goosemem: ## Validate .goosemem coverage against source files
 	bash scripts/validate_goosemem_coverage.sh

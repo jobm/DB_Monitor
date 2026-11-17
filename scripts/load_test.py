@@ -1,3 +1,7 @@
+# Legacy wrapper — delegates to examples/sandbox/load_test
+# Use examples/sandbox/load_test.py directly for new workflows.
+# This stub exists for backwards compatibility.
+
 from __future__ import annotations
 
 from examples.sandbox import load_test as _impl

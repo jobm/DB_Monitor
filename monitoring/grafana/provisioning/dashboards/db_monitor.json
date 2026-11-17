@@ -107,6 +107,126 @@
             ],
             "title": "Failed Events Pipeline",
             "type": "timeseries"
+        },
+        {
+            "datasource": "Prometheus",
+            "gridPos": {
+                "h": 9,
+                "w": 12,
+                "x": 0,
+                "y": 18
+            },
+            "id": 8,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "targets": [
+                {
+                    "expr": "sum(rate(db_monitor_audit_log_spill_total[1m])) by (reason)",
+                    "refId": "A"
+                }
+            ],
+            "title": "Audit Log Spill Rate (per second)",
+            "type": "timeseries"
+        },
+        {
+            "datasource": "Prometheus",
+            "gridPos": {
+                "h": 9,
+                "w": 12,
+                "x": 12,
+                "y": 18
+            },
+            "id": 9,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "targets": [
+                {
+                    "expr": "sum(rate(db_monitor_audit_log_replay_attempts_total[1m])) by (result)",
+                    "refId": "A"
+                }
+            ],
+            "title": "Audit Log Replay Rate (per second)",
+            "type": "timeseries"
+        },
+        {
+            "datasource": "Prometheus",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 0,
+                "y": 27
+            },
+            "id": 10,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "targets": [
+                {
+                    "expr": "db_monitor_audit_log_spill_pending",
+                    "refId": "A"
+                }
+            ],
+            "title": "Audit Log Spill Pending",
+            "type": "timeseries"
+        },
+        {
+            "datasource": "Prometheus",
+            "gridPos": {
+                "h": 8,
+                "w": 12,
+                "x": 12,
+                "y": 27
+            },
+            "id": 11,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "targets": [
+                {
+                    "expr": "rate(db_monitor_audit_log_flush_failures_total[5m])",
+                    "refId": "A"
+                }
+            ],
+            "title": "Audit Log Flush Failures (per second)",
+            "type": "timeseries"
         }
     ],
     "refresh": "10s",

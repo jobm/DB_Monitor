@@ -45,6 +45,7 @@ dependencies = [
   "prometheus-client>=0.24.1",
   "PyJWT>=2.10.1",
   "python-dotenv>=1.2.2",
+  "redis>=5.2.1",
   "sqlalchemy[asyncio]==2.0.25",
   "uvicorn[standard]>=0.41.0",
 ]
@@ -71,10 +72,14 @@ dev = [
 [dependency-groups]
 dev = [
   "build>=1.2.2.post1",
+  "httpx>=0.28.1",
   "hypothesis>=6.156.1",
   "kafka-python>=3.0.7",
+  "mkdocs>=1.6.1",
+  "mkdocs-material>=9.7.6",
   "mypy>=1.11.0",
   "pytest>=9.0.0",
+  "pytest-asyncio>=0.25.0",
   "ruff>=0.6.0",
   "testcontainers[kafka]>=4.14.2",
   "twine>=6.0.0",

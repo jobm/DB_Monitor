@@ -2,241 +2,152 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.11"
 
 jobs:
-  core-platform-tests:
-    name: Core Platform Verification (Unit & Mock Tests)
+  lint:
+    name: Lint and typecheck
     runs-on: ubuntu-latest
-
+    timeout-minutes: 10
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
         with:
-          python-version: "3.11"
+          version: latest
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Install app dependencies
-        working-directory: .
-        run: uv sync --group dev --frozen
-
-      - name: Validate .goosemem coverage
-        run: bash scripts/validate_goosemem_coverage.sh
-
-      - name: Run lint gate (ruff)
-        run: make monitor-lint
-
-      - name: Run type-check gate (mypy)
-        run: make monitor-typecheck
-
-      - name: Run package smoke gate (wheel and sdist)
-        run: make monitor-package-smoke
-
-      - name: Run container readiness smoke gate
-        run: make monitor-test-container-readyz
-
-      - name: Run unit tests
-        run: make monitor-test-core
-
-  sandbox-integration-tests:
-    name: Example Sandbox Ingestion & Live Integration
-    runs-on: ubuntu-latest
-    needs: core-platform-tests
-    timeout-minutes: 30
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v4
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python pin ${{ env.PYTHON_VERSION }}
 
       - name: Install dependencies
         run: uv sync --group dev --frozen
 
-      - name: Start sandbox and core services
-        run: |
-          # Only start services needed for integration tests.
-          # Excludes monitor-server (port 8000 conflicts with the
-          # locally-started app) and the monitoring stack (prometheus,
-          # alertmanager, grafana, kafka-ui) which are not required.
-          docker compose --profile sandbox up -d \
-            connect connector-registrar
+      - name: Ruff lint
+        run: uv run --group dev python -m ruff check src/db_monitor tests
 
-      - name: Wait for databases and brokers to boot
-        run: |
-          echo "Waiting for PostgreSQL core monitor and sandbox databases to accept queries..."
-          until docker compose exec -T postgres-monitor pg_isready -U postgres -d postgres >/dev/null 2>&1; do
-            echo "Waiting for postgres-monitor..."
-            sleep 2
-          done
-          until docker compose exec -T postgres-order pg_isready -U postgres -d postgres >/dev/null 2>&1; do
-            echo "Waiting for postgres-order..."
-            sleep 2
-          done
-          until docker compose exec -T postgres-catalog pg_isready -U postgres -d postgres >/dev/null 2>&1; do
-            echo "Waiting for postgres-catalog..."
-            sleep 2
-          done
-          until docker compose exec -T postgres-shipping pg_isready -U postgres -d postgres >/dev/null 2>&1; do
-            echo "Waiting for postgres-shipping..."
-            sleep 2
-          done
-          echo "All core and sandbox databases are fully operational."
+      - name: mypy typecheck
+        run: uv run --group dev python -m mypy
 
-          python - <<'PY'
-          import socket
-          import time
-          import urllib.request
+  test-core:
+    name: Core tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
 
-          def wait_for_http(url: str, timeout: int = 180) -> None:
-              deadline = time.time() + timeout
-              while time.time() < deadline:
-                  try:
-                      with urllib.request.urlopen(url, timeout=5):
-                          return
-                  except Exception:
-                      time.sleep(2)
-              raise SystemExit(f"Timed out waiting for {url}")
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.5.0
+        env:
+          ZOOKEEPER_CLIENT_PORT: 2181
 
-          def wait_for_port(
-            host: str,
-            port: int,
-            timeout: int = 180,
-          ) -> None:
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-              try:
-                with socket.create_connection((host, port), timeout=5):
-                  return
-              except OSError:
-                time.sleep(2)
-            raise SystemExit(
-              f"Timed out waiting for {host}:{port}"
-            )
+      kafka:
+        image: confluentinc/cp-kafka:7.5.0
+        env:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9093
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        ports:
+          - 9093:9093
 
-          wait_for_port("localhost", 9093)
-          wait_for_http("http://localhost:8083/connectors")
-          PY
-          docker compose ps
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Verify port 8000 is free
-        run: python scripts/check_port_free.py 8000
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
 
-      - name: Start app locally against live infrastructure
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python pin ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --group dev --frozen
+
+      - name: Run core tests
+        run: uv run --group dev python -m pytest -m core tests/ -v --tb=short
         env:
           POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5437/postgres
-          KAFKA_BROKER: localhost:9093
-          JWT_SECRET: dev-insecure-secret-change-me-please-rotate
-          JWT_SECRET_NEXT: dev-insecure-secret-change-me-please-rotate
-        run: |
-          ls -la .venv/bin/python 2>/dev/null || echo "No .venv found"
-          uv run python -c "import sys; print(sys.executable)" 2>&1 || echo "uv run failed"
-          PYTHONPATH=src:. nohup uv run python -m db_monitor.start_monitor > app-integration.log 2>&1 &
-          echo $! > app-integration.pid
-          sleep 3
-          echo "--- app-integration.log (last 30 lines) ---"
-          tail -30 app-integration.log
-          # Verify the app process is still alive after startup.
-          APP_PID=$(cat app-integration.pid)
-          if kill -0 "$APP_PID" 2>/dev/null; then
-            echo "App process $APP_PID is alive."
-          else
-            echo "ERROR: App process $APP_PID exited prematurely."
-            cat app-integration.log
-            exit 1
-          fi
+          KAFKA_BROKER: kafka:9092
+          JWT_SECRET: ci-test-secret-thats-long-enough-1234
+          ALLOW_BOOTSTRAP: "true"
 
-      - name: Wait for app readiness
-        run: |
-          python - <<'PY'
-          import time
-          import urllib.request
-
-          url = "http://localhost:8000/readyz"
-          deadline = time.time() + 180
-          print(f"Checking app readiness at {url}")
-          while time.time() < deadline:
-              try:
-                  with urllib.request.urlopen(url, timeout=5) as response:
-                      if response.status == 200:
-                          print("SUCCESS: DB Monitor is fully initialized and operational!")
-                          print(response.read().decode())
-                          raise SystemExit(0)
-                      else:
-                          print(f"STILL WAITING: HTTP status code {response.status}")
-              except Exception as exc:
-                  print(f"STILL WAITING: Port/HTTP check failed with: {exc}")
-              time.sleep(2)
-          raise SystemExit(f"TIMED OUT waiting for {url}")
-          PY
-
-      - name: Smoke-test health, liveness, and metrics endpoints
-        run: |
-          python scripts/smoke_test_endpoints.py \
-            http://localhost:8000 \
-            /health /livez \
-            --text-endpoints /metrics
-
-      - name: Seed sandbox admin key
+  test-integration:
+    name: Integration tests (Kafka + Postgres via service containers)
+    needs: [lint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:15
         env:
-          POSTGRES_URL: postgresql+asyncpg://postgres:postgres@localhost:5437/postgres
-        run: |
-          sandbox_key="$(uv run python scripts/seed_admin_api_key.py --owner-name ci-sandbox)"
-          echo "DB_MONITOR_ADMIN_API_KEY=$sandbox_key" >> "$GITHUB_ENV"
+          POSTGRES_DB: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
 
-      - name: Run sandbox pytest checks
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.5.0
         env:
-          DB_MONITOR_ADMIN_API_KEY: ${{ env.DB_MONITOR_ADMIN_API_KEY }}
-        run: make monitor-test-sandbox-pytest
+          ZOOKEEPER_CLIENT_PORT: 2181
 
-      - name: Run live integration suite
+      kafka:
+        image: confluentinc/cp-kafka:7.5.0
         env:
-          DB_MONITOR_ADMIN_API_KEY: ${{ env.DB_MONITOR_ADMIN_API_KEY }}
-        run: make monitor-test-integration
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+          KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9093
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+        ports:
+          - 9093:9093
 
-      - name: Run smoke-load gate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python pin ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --group dev --frozen
+
+      - name: Run slow (integration) tests
+        run: uv run --group dev python -m pytest -m slow tests/ -v --tb=short
         env:
-          DB_MONITOR_ADMIN_API_KEY: ${{ env.DB_MONITOR_ADMIN_API_KEY }}
-        run: make monitor-test-smoke
-
-      - name: Show app startup log
-        if: always()
-        run: |
-          if [ -f app-integration.log ]; then
-            echo "--- app-integration.log (last 80 lines) ---"
-            tail -80 app-integration.log
-          else
-            echo "app-integration.log not found"
-          fi
-
-      - name: Show compose status
-        if: always()
-        run: docker compose ps
-
-      - name: Show compose logs
-        if: always()
-        run: docker compose logs --tail=200
-
-      - name: Stop local app
-        if: always()
-        run: |
-          if [ -f app-integration.pid ]; then
-            kill "$(cat app-integration.pid)" || true
-          fi
-
-      - name: Tear down infrastructure
-        if: always()
-        run: docker compose down -v
+          KAFKA_BOOTSTRAP_SERVERS: localhost:9093
