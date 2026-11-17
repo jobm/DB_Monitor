@@ -47,11 +47,29 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "db-monitor.fullname" . }}-config
+            {{- if or (not .Values.database.existingSecret) (not .Values.auth.existingSecret) (and .Values.kafka.tls.enabled .Values.kafka.tls.password) }}
             - secretRef:
                 name: {{ include "db-monitor.fullname" . }}-secrets
-          {{- with .Values.extraEnv }}
+            {{- end }}
+          {{- if or .Values.database.existingSecret .Values.auth.existingSecret .Values.extraEnv }}
           env:
+            {{- if .Values.database.existingSecret }}
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: postgres-url
+            {{- end }}
+            {{- if .Values.auth.existingSecret }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: jwt-secret
+            {{- end }}
+            {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           {{- if or (and .Values.retention.archiveBeforeDelete .Values.persistence.enabled) .Values.extraVolumeMounts }}
           volumeMounts:
