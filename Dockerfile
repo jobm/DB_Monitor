@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /bin/
 
 # Copy project metadata first for layer caching
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 
 # Install runtime dependencies
 RUN uv sync --frozen --no-install-project --no-dev && \
