@@ -1,4 +1,8 @@
-"""PostgreSQL LISTEN/NOTIFY based schema-cache invalidation across replicas."""
+"""Cross-replica schema-cache invalidation via pluggable backplane.
+
+Uses the same backplane infrastructure as WebSocket fanout (Postgres
+LISTEN/NOTIFY or Redis Pub/Sub) on a dedicated channel (``<ws_channel>_schema``).
+"""
 
 from __future__ import annotations
 
@@ -7,19 +11,11 @@ import json
 import logging
 from uuid import uuid4
 
-import asyncpg
-
+from db_monitor.backplane import create_backplane
+from db_monitor.backplane.base import BackplaneProtocol
 from db_monitor.core.config import settings
-from db_monitor.extensions import engine
-from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
-
-SCHEMA_CACHE_BACKPLANE_DSN = settings.db.postgres_url.replace(
-    "postgresql+asyncpg://",
-    "postgresql://",
-    1,
-)
 
 
 class SchemaCacheBackplane:
@@ -27,8 +23,9 @@ class SchemaCacheBackplane:
 
     def __init__(self) -> None:
         self._instance_id = uuid4().hex
+        self._backplane: BackplaneProtocol | None = None
         self._listener_task: asyncio.Task | None = None
-        self._stop_event = asyncio.Event()
+        self._backplane_enabled = settings.auth.ws_backplane_enabled
 
     async def publish_invalidation(
         self,
@@ -36,7 +33,7 @@ class SchemaCacheBackplane:
         table_name: str,
     ) -> None:
         """Publish a schema-cache invalidation to other replicas."""
-        if not settings.auth.ws_backplane_enabled:
+        if not self._backplane_enabled or self._backplane is None:
             return
 
         payload = json.dumps(
@@ -46,74 +43,35 @@ class SchemaCacheBackplane:
                 "table_name": table_name,
             }
         )
-        async with engine.begin() as connection:
-            await connection.execute(
-                text("SELECT pg_notify(:channel, :payload)"),
-                {
-                    "channel": settings.auth.ws_backplane_channel + "_schema",
-                    "payload": payload,
-                },
-            )
+        channel = settings.auth.ws_backplane_channel + "_schema"
+        await self._backplane.publish(payload, channel=channel)
 
     async def start_listener(self) -> asyncio.Task | None:
         """Start the schema-cache backplane listener if clustering is on."""
-        if not settings.auth.ws_backplane_enabled:
+        if not self._backplane_enabled:
             return None
         if self._listener_task and not self._listener_task.done():
             return self._listener_task
 
-        self._stop_event = asyncio.Event()
+        channel = settings.auth.ws_backplane_channel + "_schema"
+        self._backplane = create_backplane(channel=channel)
+        await self._backplane.start(
+            notification_callback=self._handle_notification,
+        )
+
         self._listener_task = asyncio.create_task(
-            self._run_listener(),
-            name="schema_cache_backplane_listener",
+            self._wait_for_backplane(),
+            name="schema_cache_backplane_watcher",
         )
         return self._listener_task
 
-    async def _run_listener(self) -> None:
-        while not self._stop_event.is_set():
-            connection: asyncpg.Connection | None = None
-            try:
-                connection = await asyncpg.connect(
-                    SCHEMA_CACHE_BACKPLANE_DSN
-                )
-                await connection.add_listener(
-                    settings.auth.ws_backplane_channel + "_schema",
-                    self._handle_notification,
-                )
-                logger.info(
-                    "Schema cache backplane listener subscribed to %s",
-                    settings.auth.ws_backplane_channel + "_schema",
-                )
-                await self._stop_event.wait()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning(
-                    "Schema cache backplane listener error: %s",
-                    exc,
-                )
-                await asyncio.sleep(5.0)
-            finally:
-                if connection is not None:
-                    try:
-                        await connection.remove_listener(
-                            settings.auth.ws_backplane_channel + "_schema",
-                            self._handle_notification,
-                        )
-                    except Exception:
-                        pass
-                    await connection.close()
+    async def _wait_for_backplane(self) -> None:
+        """Keep the lifespan manager aware while the backplane is connected."""
+        while self._backplane is not None and self._backplane.is_connected:
+            await asyncio.sleep(1)
 
-    def _handle_notification(
-        self,
-        _connection: asyncpg.Connection,
-        _pid: int,
-        _channel: str,
-        payload: str,
-    ) -> None:
-        asyncio.create_task(self._deliver_notification(payload))
-
-    async def _deliver_notification(self, payload: str) -> None:
+    async def _handle_notification(self, payload: str) -> None:
+        """Handle an incoming backplane notification."""
         try:
             envelope = json.loads(payload)
         except json.JSONDecodeError:
