@@ -11,6 +11,8 @@ def _new_consumer_runtime_state() -> dict[str, object]:
     return {
         "running": False,
         "connected": False,
+        "reconnecting": False,
+        "reconnect_attempts": 0,
         "topics": [],
         "broker_kind": "kafka",
         "last_error": None,

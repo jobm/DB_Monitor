@@ -870,6 +870,114 @@ async def test_consumer_task_assigns_explicit_topic_partitions(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_consumer_task_reconnects_after_message_loop_failure(monkeypatch):
+    runtime = consumer_mod._get_consumer_runtime("reconnect-midstream")
+    consumers = []
+    loop_snapshots = []
+    loop_calls = 0
+
+    class FakeReconnectConsumer:
+        def __init__(self):
+            self.stopped = False
+
+        async def stop(self):
+            self.stopped = True
+
+    async def fake_connect(*_args, **_kwargs):
+        consumer = FakeReconnectConsumer()
+        consumers.append(consumer)
+        return consumer
+
+    async def fake_message_loop(*_args, **_kwargs):
+        nonlocal loop_calls
+        loop_calls += 1
+        if loop_calls == 1:
+            raise RuntimeError("broker disconnected")
+        loop_snapshots.append(dict(runtime))
+
+    async def fake_refresh_dead_letter_backlog_metric(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr(consumer_mod, "_connect_consumer", fake_connect)
+    monkeypatch.setattr(consumer_mod, "_message_loop", fake_message_loop)
+    monkeypatch.setattr(consumer_mod, "_reconnect_delay", lambda _attempt: 0.0)
+    monkeypatch.setattr(
+        consumer_mod,
+        "refresh_dead_letter_backlog_metric",
+        fake_refresh_dead_letter_backlog_metric,
+    )
+
+    await consumer_mod.consumer_task(
+        cluster_name="reconnect-midstream",
+        broker_kind="kafka",
+        consumer_group="group-a",
+        topics=["orders.events"],
+        enable_dlq=False,
+        enable_batch=False,
+    )
+
+    assert len(consumers) == 2
+    assert all(consumer.stopped for consumer in consumers)
+    assert loop_snapshots[0]["reconnecting"] is True
+    assert loop_snapshots[0]["reconnect_attempts"] == 1
+    assert runtime["reconnecting"] is False
+    assert runtime["running"] is False
+
+
+@pytest.mark.anyio
+async def test_consumer_task_retries_after_connection_failure(monkeypatch):
+    consumers = []
+    connect_calls = 0
+    loop_calls = 0
+
+    class FakeReconnectConsumer:
+        def __init__(self):
+            self.stopped = False
+
+        async def stop(self):
+            self.stopped = True
+
+    async def fake_connect(*_args, **_kwargs):
+        nonlocal connect_calls
+        connect_calls += 1
+        if connect_calls == 1:
+            raise RuntimeError("broker unavailable")
+        consumer = FakeReconnectConsumer()
+        consumers.append(consumer)
+        return consumer
+
+    async def fake_message_loop(*_args, **_kwargs):
+        nonlocal loop_calls
+        loop_calls += 1
+
+    async def fake_refresh_dead_letter_backlog_metric(*_args, **_kwargs):
+        return 0
+
+    monkeypatch.setattr(consumer_mod, "_connect_consumer", fake_connect)
+    monkeypatch.setattr(consumer_mod, "_message_loop", fake_message_loop)
+    monkeypatch.setattr(consumer_mod, "_reconnect_delay", lambda _attempt: 0.0)
+    monkeypatch.setattr(
+        consumer_mod,
+        "refresh_dead_letter_backlog_metric",
+        fake_refresh_dead_letter_backlog_metric,
+    )
+
+    await consumer_mod.consumer_task(
+        cluster_name="reconnect-startup",
+        broker_kind="kafka",
+        consumer_group="group-a",
+        topics=["orders.events"],
+        enable_dlq=False,
+        enable_batch=False,
+    )
+
+    assert connect_calls == 2
+    assert loop_calls == 1
+    assert len(consumers) == 1
+    assert consumers[0].stopped is True
+
+
+@pytest.mark.anyio
 async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
     runtime = consumer_mod._get_consumer_runtime("rabbit-cluster")
     broker_message = FakeBrokerMessage(

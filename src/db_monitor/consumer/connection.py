@@ -37,6 +37,8 @@ def _init_runtime_state(
         {
             "running": True,
             "connected": False,
+            "reconnecting": False,
+            "reconnect_attempts": 0,
             "topics": destinations,
             "broker_kind": broker_kind,
             "last_error": None,
@@ -100,10 +102,14 @@ async def _connect_consumer(
             await consumer.start()
             connected = True
             runtime["connected"] = True
+            runtime["reconnecting"] = False
             runtime["last_error"] = None
             _log_consumer_started(cluster_name, broker_kind, topics, queue_names, topic_partitions)
         except Exception as e:
             retry_count += 1
+            runtime["connected"] = False
+            runtime["reconnecting"] = True
+            runtime["reconnect_attempts"] = retry_count
             runtime["last_error"] = str(e)
             if retry_count >= MAX_CONNECTION_RETRIES:
                 logger.error(

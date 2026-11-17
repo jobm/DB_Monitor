@@ -108,6 +108,9 @@ def get_consumer_health() -> dict[str, object]:
     running = cluster_count > 0 and all(
         bool(runtime["running"]) for runtime in runtimes.values()
     )
+    reconnecting = any(
+        bool(runtime.get("reconnecting")) for runtime in runtimes.values()
+    )
     lag_by_partition: dict[str, int] = {}
     topics: list[str] = []
     errors: list[str] = []
@@ -132,6 +135,10 @@ def get_consumer_health() -> dict[str, object]:
         clusters_payload[cluster_name] = {
             "running": runtime["running"],
             "connected": runtime["connected"],
+            "reconnecting": bool(runtime.get("reconnecting")),
+            "reconnect_attempts": int(
+                runtime.get("reconnect_attempts") or 0
+            ),
             "broker_kind": runtime.get("broker_kind", "kafka"),
             "topics": cluster_topics,
             "last_error": runtime["last_error"],
@@ -158,6 +165,7 @@ def get_consumer_health() -> dict[str, object]:
         "status": status,
         "running": running,
         "connected": connected,
+        "reconnecting": reconnecting,
         "topics": sorted(dict.fromkeys(topics)),
         "last_error": "; ".join(errors) if errors else None,
         "last_message_at": (

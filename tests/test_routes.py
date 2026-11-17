@@ -367,6 +367,48 @@ async def test_readiness_check_returns_503_when_consumer_signals_degrade(
 
 
 @pytest.mark.anyio
+async def test_readiness_reports_reconnecting_consumer(monkeypatch):
+    monkeypatch.setattr(
+        "db_monitor.routes.ops.health.AsyncSessionLocal",
+        lambda: FakeSession(),
+    )
+    monkeypatch.setattr(
+        "db_monitor.routes.ops.health.get_consumer_health",
+        lambda: {
+            "status": "unhealthy",
+            "running": True,
+            "connected": False,
+            "reconnecting": True,
+            "topics": ["orderdb.public.orders"],
+            "last_error": "broker disconnected",
+            "last_message_at": "2024-01-01T00:00:00+00:00",
+            "last_commit_at": "2024-01-01T00:00:01+00:00",
+            "lag_total": 0,
+            "lag_by_partition": {},
+            "dlq_messages_total": 0,
+            "circuit_breaker_state": "closed",
+        },
+    )
+    monkeypatch.setattr(
+        routes_ops.lifecycle_manager,
+        "_startup_complete",
+        True,
+    )
+    monkeypatch.setattr(
+        routes_ops.lifecycle_manager.shutdown_manager,
+        "_shutdown_in_progress",
+        False,
+    )
+
+    response = await routes_ops.readiness_check()
+    payload = json.loads(response.body)
+
+    assert response.status_code == 503
+    assert payload["status"] == "not_ready"
+    assert payload["checks"]["consumer"]["status"] == "reconnecting"
+
+
+@pytest.mark.anyio
 async def test_bootstrap_admin_key_rejects_when_disabled(monkeypatch):
     monkeypatch.setattr(routes_auth.settings.auth, "allow_bootstrap", False)
 

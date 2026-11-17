@@ -33,10 +33,22 @@ from db_monitor.consumer.loop import _message_loop
 
 logger = logging.getLogger(__name__)
 
+RECONNECT_INITIAL_DELAY_SECONDS = 1.0
+RECONNECT_MAX_DELAY_SECONDS = 60.0
+
 
 def get_consumer_health() -> dict[str, object]:
     """Expose aggregate consumer health for API and readiness checks."""
     return runtime_get_consumer_health()
+
+
+def _reconnect_delay(attempt: int) -> float:
+    """Return bounded exponential backoff for consumer reconnects."""
+    exponent = min(max(attempt - 1, 0), 5)
+    return min(
+        RECONNECT_INITIAL_DELAY_SECONDS * (2**exponent),
+        RECONNECT_MAX_DELAY_SECONDS,
+    )
 
 
 async def consumer_task(
@@ -85,60 +97,93 @@ async def consumer_task(
             exc,
         )
 
-    try:
-        consumer = await _connect_consumer(
-            cluster_name,
-            broker_kind,
-            bootstrap_servers=bootstrap_servers,
-            consumer_group=consumer_group,
-            topics=topics,
-            topic_partitions=topic_partitions,
-            connection_url=connection_url,
-            queue_names=queue_names,
-            prefetch_count=prefetch_count,
-            runtime=runtime,
-        )
-    except Exception:
-        runtime["running"] = False
-        return
-
-    dlq_publisher: DeadLetterPublisher | None = None
-    if enable_dlq:
-        dlq_publisher = build_dead_letter_publisher(
-            broker_kind=broker_kind,
-            bootstrap_servers=bootstrap_servers,
-            connection_url=connection_url,
-            dlq_destination=dlq_destination,
-        )
+    reconnect_attempt = 0
+    while True:
+        consumer: object | None = None
+        dlq_publisher: DeadLetterPublisher | None = None
         try:
-            await _start_dlq_publisher(dlq_publisher)
-        except Exception:
-            logger.exception("Failed to start DLQ publisher for cluster '%s'", cluster_name)
-            await consumer.stop()
-            runtime["running"] = False
-            return
+            consumer = await _connect_consumer(
+                cluster_name,
+                broker_kind,
+                bootstrap_servers=bootstrap_servers,
+                consumer_group=consumer_group,
+                topics=topics,
+                topic_partitions=topic_partitions,
+                connection_url=connection_url,
+                queue_names=queue_names,
+                prefetch_count=prefetch_count,
+                runtime=runtime,
+            )
+            if enable_dlq:
+                dlq_publisher = build_dead_letter_publisher(
+                    broker_kind=broker_kind,
+                    bootstrap_servers=bootstrap_servers,
+                    connection_url=connection_url,
+                    dlq_destination=dlq_destination,
+                )
+                await _start_dlq_publisher(dlq_publisher)
 
-    try:
-        await _message_loop(
-            consumer,
-            cluster_name=cluster_name,
-            broker_kind=broker_kind,
-            consumer_group=consumer_group,
-            dlq_publisher=dlq_publisher,
-            dlq_destination=dlq_destination,
-            enable_dlq=enable_dlq,
-            enable_batch=enable_batch,
-            batch_size=batch_size,
-            runtime=runtime,
-            breaker=breaker,
-        )
-    except asyncio.CancelledError:
-        logger.info("Consumer task received cancellation signal (outer)")
-        raise
-    finally:
-        logger.info("Stopping %s consumer '%s'", broker_kind, cluster_name)
-        runtime["running"] = False
-        runtime["connected"] = False
-        await consumer.stop()
-        if dlq_publisher:
-            await dlq_publisher.stop()
+            await _message_loop(
+                consumer,  # type: ignore[arg-type]
+                cluster_name=cluster_name,
+                broker_kind=broker_kind,
+                consumer_group=consumer_group,
+                dlq_publisher=dlq_publisher,
+                dlq_destination=dlq_destination,
+                enable_dlq=enable_dlq,
+                enable_batch=enable_batch,
+                batch_size=batch_size,
+                runtime=runtime,
+                breaker=breaker,
+            )
+            runtime["running"] = False
+            runtime["connected"] = False
+            runtime["reconnecting"] = False
+            runtime["reconnect_attempts"] = 0
+            return
+        except asyncio.CancelledError:
+            logger.info("Consumer task received cancellation signal (outer)")
+            runtime["running"] = False
+            runtime["reconnecting"] = False
+            raise
+        except Exception as exc:
+            reconnect_attempt += 1
+            runtime["running"] = True
+            runtime["connected"] = False
+            runtime["reconnecting"] = True
+            runtime["reconnect_attempts"] = reconnect_attempt
+            runtime["last_error"] = str(exc)
+            delay = _reconnect_delay(reconnect_attempt)
+            logger.exception(
+                "Consumer cluster '%s' failed; reconnecting in %.1fs "
+                "(attempt %d)",
+                cluster_name,
+                delay,
+                reconnect_attempt,
+            )
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                runtime["running"] = False
+                runtime["connected"] = False
+                runtime["reconnecting"] = False
+                raise
+        finally:
+            if consumer is not None:
+                try:
+                    await consumer.stop()  # type: ignore[union-attr]
+                except Exception:
+                    logger.warning(
+                        "Failed to stop consumer '%s' cleanly",
+                        cluster_name,
+                        exc_info=True,
+                    )
+            if dlq_publisher is not None:
+                try:
+                    await dlq_publisher.stop()
+                except Exception:
+                    logger.warning(
+                        "Failed to stop DLQ publisher for cluster '%s'",
+                        cluster_name,
+                        exc_info=True,
+                    )

@@ -55,6 +55,9 @@ def readiness_payload() -> dict[str, object]:
     audit_log_status = (
         "healthy" if not audit_log_writer.has_flush_failure else "unhealthy"
     )
+    consumer_status = "healthy" if consumer_ready else "unhealthy"
+    if consumer_health.get("reconnecting"):
+        consumer_status = "reconnecting"
     return {
         "status": (
             "ready" if consumer_ready and lifecycle_ready else "not_ready"
@@ -62,7 +65,7 @@ def readiness_payload() -> dict[str, object]:
         "checks": {
             "consumer": {
                 **consumer_health,
-                "status": "healthy" if consumer_ready else "unhealthy",
+                "status": consumer_status,
                 "last_commit_age_seconds": last_commit_age_seconds,
                 "max_commit_age_seconds": settings.readiness_max_commit_age_seconds,
                 "max_consumer_lag": settings.readiness_max_consumer_lag,
