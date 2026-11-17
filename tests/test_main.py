@@ -147,6 +147,36 @@ async def test_websocket_invalid_session_token_increments_failed_auth_metric(
 
 
 @pytest.mark.anyio
+async def test_websocket_rejects_unscoped_viewer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Viewer WebSocket clients must have a tenant scope."""
+    from db_monitor.core.models import ApiKey
+
+    async def fake_authenticate_credentials(**_kwargs):
+        return ApiKey(
+            id=9,
+            key_hash="hash",
+            owner_name="viewer",
+            role="viewer",
+            is_active=True,
+            tenant_id=None,
+        )
+
+    monkeypatch.setattr(
+        main,
+        "authenticate_credentials",
+        fake_authenticate_credentials,
+    )
+
+    websocket = FakeWebSocket()
+    await main.ws_events(websocket, session_token="valid-but-unscoped")
+
+    assert websocket.close_code == 4003
+    assert websocket.close_reason == "Tenant scope required"
+
+
+@pytest.mark.anyio
 async def test_lifespan_manager_starts_one_consumer_per_cluster(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

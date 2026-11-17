@@ -49,7 +49,11 @@ async def _broadcast_event(event: KafkaEvent) -> None:
                 "db_monitor.operation": event.operation,
             },
         ):
-            await ws_manager.broadcast(payload, event_id=event.id)
+            await ws_manager.broadcast(
+                payload,
+                event_id=event.id,
+                tenant_id=event.service_name,
+            )
     except Exception as e:
         logger.warning("Failed to broadcast event via WebSocket: %s", e)
 

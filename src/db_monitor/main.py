@@ -167,11 +167,24 @@ async def ws_events(
         await websocket.close(code=4001, reason="Invalid API key")
         return
 
-    await ws_manager.connect(websocket, client_id)
+    if api_key_record.role != "admin" and not api_key_record.tenant_id:
+        await websocket.close(
+            code=4003,
+            reason="Tenant scope required",
+        )
+        return
+
+    await ws_manager.connect(
+        websocket,
+        client_id,
+        tenant_id=api_key_record.tenant_id,
+    )
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    finally:
         await ws_manager.disconnect(client_id)
 
 
@@ -201,7 +214,7 @@ async def log_requests(request: Request, call_next):
         endpoint=request.url.path, method=request.method
     ).observe(duration)
 
-    audit_log_writer.enqueue(
+    await audit_log_writer.enqueue(
         AuditLogEntry(
             api_key_id=api_key_record.id if api_key_record else None,
             endpoint=request.url.path,

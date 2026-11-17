@@ -709,7 +709,7 @@ async def test_broadcast_event_delivers_webhooks(monkeypatch):
     websocket_messages = []
     webhook_messages = []
 
-    async def fake_broadcast(message, event_id=None):
+    async def fake_broadcast(message, event_id=None, tenant_id=None):
         websocket_messages.append((message, event_id))
 
     async def fake_send_message(message):
@@ -771,7 +771,7 @@ async def test_broadcast_event_persists_webhook_failures_to_dlq(
     )
     persisted: list[tuple[KafkaEvent, str, str, str]] = []
 
-    async def fake_broadcast(message, event_id=None):
+    async def fake_broadcast(message, event_id=None, tenant_id=None):
         del message
         del event_id
 
