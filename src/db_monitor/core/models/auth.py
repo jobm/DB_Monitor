@@ -10,7 +10,12 @@ from db_monitor.core.models.base import Base
 
 
 class ApiKey(Base):
-    """API Keys for authentication and RBAC."""
+    """API Keys for authentication, RBAC, and multi-tenant isolation.
+
+    When ``tenant_id`` is set, the key is scoped to that tenant and
+    can only access data belonging to that tenant. Admin keys (with
+    ``tenant_id`` set to ``NULL``) can access all tenants.
+    """
 
     __tablename__ = "api_keys"
 
@@ -22,6 +27,7 @@ class ApiKey(Base):
     expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    tenant_id = Column(String(128), nullable=True, index=True)
 
 
 class CustomerJWTSecretState(Base):

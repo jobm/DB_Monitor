@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Param
 
-from db_monitor.auth import require_viewer_role
+from db_monitor.auth import get_tenant_filter, require_viewer_role
 from db_monitor.core.responses import EventsResponse
 from db_monitor.repositories.events import EventQueryFilters
 from db_monitor.routes.data.factories import get_events_repository
@@ -49,6 +49,7 @@ async def get_events(
             "cursor is active. Set true/false to force."
         ),
     ),
+    tenant_filter: str | None = Depends(get_tenant_filter),
 ):
     """Get events with pagination and optional filtering.
 
@@ -79,7 +80,7 @@ async def get_events(
                 ),
             )
         try:
-            cursor_value = int(cursor_value_raw)  # type: ignore[arg-type]
+            cursor_value = int(str(cursor_value_raw))
         except (TypeError, ValueError) as exc:
             raise HTTPException(
                 status_code=400,
@@ -98,7 +99,7 @@ async def get_events(
                 ),
             )
         parsed_cursor_time = parse_timestamp(
-            cursor_time_value,  # type: ignore[arg-type]
+            str(cursor_time_value),
             "cursor.capture_time",
         )
     elif cursor_time is not None and not isinstance(cursor_time, Param):
@@ -118,9 +119,21 @@ async def get_events(
     else:
         resolved_include_total = bool(include_total)
 
+    # Enforce tenant isolation: scoped keys can only see their tenant's data
+    if tenant_filter and service_name and service_name != tenant_filter:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Access denied. This API key is scoped to tenant "
+                f"'{tenant_filter}', but service_name '{service_name}' "
+                f"was requested."
+            ),
+        )
+    effective_service_name = tenant_filter or service_name
+
     events, total = await get_events_repository().list_events(
         filters=EventQueryFilters(
-            service_name=service_name,
+            service_name=effective_service_name,
             source_table_id=resolved_source_table_id,
             row_identity=parsed_row_identity,
             event_type=event_type,
@@ -185,6 +198,13 @@ async def get_events(
 
 
 @router.get("/events/stats", dependencies=[Depends(require_viewer_role)])
-async def get_event_stats():
-    """Get aggregated event statistics."""
-    return await get_events_repository().event_stats()
+async def get_event_stats(
+    tenant_filter: str | None = Depends(get_tenant_filter),
+):
+    """Get aggregated event statistics.
+
+    Tenant-scoped API keys only see statistics for their own tenant.
+    """
+    return await get_events_repository().event_stats(
+        tenant_filter=tenant_filter
+    )

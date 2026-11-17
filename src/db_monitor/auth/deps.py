@@ -83,6 +83,47 @@ async def get_current_tenant_id(
     return getattr(api_key_record, "tenant_id", None)
 
 
+def ensure_customer_tenant_scope(
+    api_key_record: ApiKey,
+    customer_scope: str,
+) -> None:
+    """Reject tenant-scoped admins operating outside their customer scope."""
+    tenant_id = getattr(api_key_record, "tenant_id", None)
+    normalized_scope = customer_scope.strip()
+    if tenant_id is not None and tenant_id != normalized_scope:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "A tenant-scoped admin cannot manage another customer's "
+                "resources."
+            ),
+        )
+
+
+async def require_global_admin(
+    api_key_record: ApiKey = Depends(require_admin_role),
+) -> ApiKey:
+    """Require an unscoped admin for global operational endpoints."""
+    if getattr(api_key_record, "tenant_id", None) is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Global admin access is required for this operational "
+                "endpoint."
+            ),
+        )
+    return api_key_record
+
+
+async def require_customer_admin_scope(
+    customer_id: str,
+    api_key_record: ApiKey = Depends(require_admin_role),
+) -> ApiKey:
+    """Require an admin whose tenant scope permits the target customer."""
+    ensure_customer_tenant_scope(api_key_record, customer_id)
+    return api_key_record
+
+
 async def get_tenant_filter(
     tenant_id: str | None = Depends(get_current_tenant_id),
     api_key_record: ApiKey = Depends(require_valid_api_key),

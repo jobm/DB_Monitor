@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.params import Param
 
-from db_monitor.auth import require_admin_role
+from db_monitor.auth import require_customer_admin_scope
 from db_monitor.core.models import ApiKey
 from db_monitor.provisioning import (
     ProvisioningStepExecutionError,
@@ -46,7 +46,7 @@ async def execute_customer_provision_job(
         default=None,
         alias="X-DBM-Customer-ID",
     ),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_customer_admin_scope),
 ):
     """Execute up to N provisioning steps in sequence for one job."""
     del admin_api_key

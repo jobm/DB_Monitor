@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 
-from db_monitor.auth import require_admin_role
+from db_monitor.auth import require_customer_admin_scope
 from db_monitor.core.models import ApiKey, CustomerLifecycleState
 from db_monitor.extensions import AsyncSessionLocal
 
@@ -88,7 +88,7 @@ async def _load_customer_lifecycle_state(
     if cached is not None:
         return dict(cached)
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
         result = await session.execute(
             select(CustomerLifecycleState).where(
                 CustomerLifecycleState.customer_id == customer_id,
@@ -99,7 +99,7 @@ async def _load_customer_lifecycle_state(
     if record is None:
         return None
 
-    state = dict(record.state or {})
+    state = dict(record.state or {})  # type: ignore[union-attr]
     CUSTOMER_LIFECYCLE_STATE[customer_id] = dict(state)
     return state
 
@@ -110,7 +110,7 @@ async def _persist_customer_lifecycle_state(
     """Persist one lifecycle record and refresh the compatibility cache."""
     customer_id = str(state["customer_id"])
     payload = dict(state)
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
         async with session.begin():
             result = await session.execute(
                 select(CustomerLifecycleState).where(
@@ -119,7 +119,7 @@ async def _persist_customer_lifecycle_state(
             )
             record = result.scalar_one_or_none()
             if record is None:
-                session.add(
+                session.add(  # type: ignore[union-attr]
                     CustomerLifecycleState(
                         customer_id=customer_id,
                         state=payload,
@@ -149,7 +149,7 @@ def _mark_customer_bootstrap_active(customer_id: str) -> None:
 @router.get("/admin/customers/{customer_id}/lifecycle")
 async def get_customer_lifecycle_state(
     customer_id: str,
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_customer_admin_scope),
 ):
     """Return lifecycle state for one customer cell."""
     del admin_api_key
@@ -174,7 +174,7 @@ async def suspend_customer_cell(
         default=None,
         alias="X-DBM-Customer-ID",
     ),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_customer_admin_scope),
 ):
     """Suspend one customer cell in the control plane."""
     del admin_api_key
@@ -200,7 +200,7 @@ async def resume_customer_cell(
         default=None,
         alias="X-DBM-Customer-ID",
     ),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_customer_admin_scope),
 ):
     """Resume one suspended customer cell in the control plane."""
     del admin_api_key
@@ -227,7 +227,7 @@ async def upgrade_customer_cell(
         default=None,
         alias="X-DBM-Customer-ID",
     ),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_customer_admin_scope),
 ):
     """Register an upgrade target for one customer cell."""
     del admin_api_key

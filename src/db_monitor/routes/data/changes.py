@@ -5,7 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Param
 
-from db_monitor.auth import require_viewer_role
+from fastapi import HTTPException
+
+from db_monitor.auth import get_tenant_filter, require_viewer_role
 from db_monitor.core.responses import ChangesResponse, PointInTimeValueResponse
 from db_monitor.routes.data.factories import (
     get_change_processor,
@@ -48,6 +50,7 @@ async def get_changes(
         None,
         description="Request total count. Omit for default behavior.",
     ),
+    tenant_filter: str | None = Depends(get_tenant_filter),
 ):
     """Get column changes for a table with optional filters.
 
@@ -57,9 +60,21 @@ async def get_changes(
     cursor is provided, ``offset`` is ignored and ``total`` is omitted
     unless ``include_total=true`` is explicitly set.
     """
+    # Enforce tenant isolation: scoped keys can only see their tenant's data
+    if tenant_filter and service_name and service_name != tenant_filter:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Access denied. This API key is scoped to tenant "
+                f"'{tenant_filter}', but service_name '{service_name}' "
+                f"was requested."
+            ),
+        )
+    effective_service_name = tenant_filter or service_name
+
     resolved_service_name, resolved_table_name = resolve_table_reference(
         table_name,
-        service_name,
+        effective_service_name,
     )
     parsed_from_time = parse_timestamp(from_time, "from_time")
     parsed_to_time = parse_timestamp(to_time, "to_time")
@@ -131,7 +146,7 @@ async def get_changes(
                 ),
             )
         parsed_cursor_time = parse_timestamp(
-            cursor_time_value,
+            str(cursor_time_value),
             "cursor.changed_at",
         )
     elif cursor_time is not None and not isinstance(cursor_time, Param):
@@ -226,8 +241,18 @@ async def get_value_at_time(
     table_name: str,
     column_name: str,
     timestamp: str = Query(...),
+    tenant_filter: str | None = Depends(get_tenant_filter),
 ):
     """Get the value of a column at a specific point in time."""
+    if tenant_filter and service_name != tenant_filter:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Access denied. This API key is scoped to tenant "
+                f"'{tenant_filter}', but service_name '{service_name}' "
+                f"was requested."
+            ),
+        )
     return await _get_value_at_time_response(
         service_name=service_name,
         table_name=table_name,
@@ -246,11 +271,21 @@ async def get_value_at_time_legacy(
     column_name: str,
     timestamp: str = Query(...),
     service_name: str | None = None,
+    tenant_filter: str | None = Depends(get_tenant_filter),
 ):
     """Backward-compatible point-in-time lookup."""
+    if tenant_filter and service_name and service_name != tenant_filter:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Access denied. This API key is scoped to tenant "
+                f"'{tenant_filter}', but service_name '{service_name}' "
+                f"was requested."
+            ),
+        )
     resolved_service_name, resolved_table_name = resolve_table_reference(
         table_name,
-        service_name,
+        service_name or tenant_filter,
     )
     return await _get_value_at_time_response(
         service_name=resolved_service_name,

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
-from db_monitor.auth import require_admin_role
+from db_monitor.auth import require_customer_admin_scope
 from db_monitor.core.models import ApiKey
 from db_monitor.routes.ops.lifecycle import (
     _new_audit_entry,
@@ -34,7 +34,7 @@ async def start_customer_provision_job(
         default=None,
         alias="X-DBM-Customer-ID",
     ),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_customer_admin_scope),
 ):
     """Create a provisioning orchestration job for one customer cell."""
     del admin_api_key
@@ -67,7 +67,7 @@ async def start_customer_provision_job(
 @router.get("/admin/customers/{customer_id}/provision-jobs")
 async def list_customer_provision_jobs(
     customer_id: str,
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_customer_admin_scope),
 ):
     """List provisioning orchestration jobs for one customer."""
     del admin_api_key
@@ -95,7 +95,7 @@ async def list_customer_provision_jobs(
 async def get_customer_provision_job(
     customer_id: str,
     job_id: str,
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_customer_admin_scope),
 ):
     """Return one provisioning orchestration job by ID."""
     del admin_api_key
@@ -129,7 +129,7 @@ async def update_customer_provision_step(
         default=None,
         alias="X-DBM-Customer-ID",
     ),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_customer_admin_scope),
 ):
     """Update one provisioning step and append an audit event."""
     del admin_api_key

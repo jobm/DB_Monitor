@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from db_monitor.auth import (
     build_api_key_expiration,
+    ensure_customer_tenant_scope,
     generate_new_api_key,
     get_api_key_hash,
     require_admin_role,
@@ -39,15 +40,7 @@ def _require_creator_customer_scope(
     customer_scope: str,
 ) -> None:
     """Prevent a tenant-scoped admin from managing another customer."""
-    creator_tenant_id = getattr(creator_api_key, "tenant_id", None)
-    if creator_tenant_id is not None and creator_tenant_id != customer_scope:
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "A tenant-scoped admin cannot manage another customer's "
-                "authentication scope."
-            ),
-        )
+    ensure_customer_tenant_scope(creator_api_key, customer_scope)
 
 
 @router.post("/admin/customers/{customer_id}/auth/bootstrap")

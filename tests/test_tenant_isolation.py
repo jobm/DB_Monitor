@@ -2,24 +2,28 @@
 
 Covers:
 - Tenant ID field on ApiKey model
-- get_tenant_filter dependency returns correct tenant for scoped/admin keys
+- get_tenant_filter dependency behavior via live HTTP requests
 - Event route enforces tenant filter (403 on mismatch)
 - Change route enforces tenant filter
 - Table routes filter by tenant
 - Admin keys bypass tenant filtering
+
+The route-level tests exercise the real FastAPI application through
+``TestClient`` and inject credentials with ``app.dependency_overrides``
+so dependency wiring (viewer role + tenant filter) is exercised rather
+than bypassed with hand-built handler arguments.
 """
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
+from db_monitor.auth.deps import require_valid_api_key
 from db_monitor.core.models.auth import ApiKey
+from db_monitor.main import app
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -61,6 +65,32 @@ def _make_unscoped_viewer_key() -> ApiKey:
     )
 
 
+ALL_TABLES = [
+    {"id": 1, "service_name": "orderdb", "table_name": "orders", "columns": []},
+    {"id": 2, "service_name": "catalogdb", "table_name": "products", "columns": []},
+    {"id": 3, "service_name": "shippingdb", "table_name": "shipments", "columns": []},
+]
+
+
+@pytest.fixture
+def client() -> TestClient:
+    """Provide a client whose dependency overrides are isolated per test."""
+    app.dependency_overrides.clear()
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+def _authenticate_as(api_key: ApiKey) -> None:
+    """Override the credential dependency so the app resolves ``api_key``."""
+
+    async def _override() -> ApiKey:
+        return api_key
+
+    app.dependency_overrides[require_valid_api_key] = _override
+
+
 # ── Model tests ───────────────────────────────────────────────────────
 
 
@@ -78,71 +108,54 @@ class TestApiKeyTenantId:
         assert key.tenant_id == "catalogdb"
 
 
-# ── Auth dependency tests ──────────────────────────────────────────────
-
-
-class TestGetCurrentTenantId:
-    """get_current_tenant_id dependency returns correct tenant."""
-
-    @pytest.mark.asyncio
-    async def test_admin_key_returns_none(self):
-        """Admin keys return None for tenant_id."""
-        from db_monitor.auth.deps import get_current_tenant_id
-
-        admin_key = _make_admin_key()
-        result = await get_current_tenant_id(api_key_record=admin_key)
-        assert result is None
-
-    @pytest.mark.asyncio
-    async def test_tenant_key_returns_tenant(self):
-        """Tenant-scoped keys return their tenant_id."""
-        from db_monitor.auth.deps import get_current_tenant_id
-
-        tenant_key = _make_tenant_key("shippingdb")
-        result = await get_current_tenant_id(api_key_record=tenant_key)
-        assert result == "shippingdb"
+# ── Tenant filter dependency behavior ─────────────────────────────────
 
 
 class TestGetTenantFilter:
-    """get_tenant_filter dependency returns tenant filter for scoped keys."""
+    """get_tenant_filter resolves tenant scope through the app."""
 
-    @pytest.mark.asyncio
-    async def test_admin_key_no_filter(self):
-        """Admin keys get no filter applied."""
-        from db_monitor.auth.deps import get_tenant_filter
+    def test_admin_key_no_filter(self, client: TestClient):
+        """Admin keys get no filter applied and see every tenant."""
+        _authenticate_as(_make_admin_key())
 
-        result = await get_tenant_filter(
-            tenant_id=None,
-            api_key_record=_make_admin_key(),
-        )
-        assert result is None
+        with patch(
+            "db_monitor.routes.data.tables.get_schema_discovery"
+        ) as mock_sd:
+            mock_instance = AsyncMock()
+            mock_instance.get_all_tables.return_value = list(ALL_TABLES)
+            mock_sd.return_value = mock_instance
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_returns_filter(self):
+            response = client.get("/tables")
+
+        assert response.status_code == 200
+        assert response.json()["count"] == 3
+
+    def test_tenant_key_returns_filter(self, client: TestClient):
         """Tenant-scoped keys get their tenant as the filter value."""
-        from db_monitor.auth.deps import get_tenant_filter
+        _authenticate_as(_make_tenant_key("orderdb"))
 
-        result = await get_tenant_filter(
-            tenant_id="orderdb",
-            api_key_record=_make_tenant_key("orderdb"),
-        )
-        assert result == "orderdb"
+        with patch(
+            "db_monitor.routes.data.tables.get_schema_discovery"
+        ) as mock_sd:
+            mock_instance = AsyncMock()
+            mock_instance.get_all_tables.return_value = list(ALL_TABLES)
+            mock_sd.return_value = mock_instance
 
-    @pytest.mark.asyncio
-    async def test_unscoped_viewer_key_is_rejected(self):
+            response = client.get("/tables")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["count"] == 1
+        assert payload["tables"][0]["service_name"] == "orderdb"
+
+    def test_unscoped_viewer_key_is_rejected(self, client: TestClient):
         """Viewer keys without a tenant must not bypass tenant filtering."""
-        from fastapi import HTTPException
+        _authenticate_as(_make_unscoped_viewer_key())
 
-        from db_monitor.auth.deps import get_tenant_filter
+        response = client.get("/tables")
 
-        with pytest.raises(HTTPException) as exc_info:
-            await get_tenant_filter(
-                tenant_id=None,
-                api_key_record=_make_unscoped_viewer_key(),
-            )
-
-        assert exc_info.value.status_code == 403
-        assert "tenant_id" in exc_info.value.detail
+        assert response.status_code == 403
+        assert "tenant_id" in response.json()["detail"]
 
 
 # ── Route enforcement tests ────────────────────────────────────────────
@@ -151,87 +164,85 @@ class TestGetTenantFilter:
 class TestEventRouteTenantEnforcement:
     """Event route enforces tenant scoping."""
 
-    @pytest.mark.asyncio
-    async def test_admin_can_access_any_service(self):
+    def _patch_repository(self):
+        return patch("db_monitor.routes.data.events.get_events_repository")
+
+    def test_admin_can_access_any_service(self, client: TestClient):
         """Admin keys can access events for any service_name."""
-        from db_monitor.routes.data.events import get_events
+        _authenticate_as(_make_admin_key())
 
-        # Patch dependencies to inject admin key
-        with (
-            patch(
-                "db_monitor.routes.data.events.get_events_repository"
-            ) as mock_repo,
-            patch(
-                "db_monitor.routes.data.events.require_viewer_role"
-            ) as mock_auth,
-        ):
-            mock_auth.return_value = _make_admin_key()
+        with self._patch_repository() as mock_repo:
             mock_instance = AsyncMock()
             mock_instance.list_events.return_value = ([], 0)
             mock_repo.return_value = mock_instance
 
-            await get_events(
-                limit=10,
-                offset=0,
-                service_name="orderdb",
-                tenant_filter=None,
+            response = client.get(
+                "/events",
+                params={"limit": 10, "service_name": "shippingdb"},
             )
-            # Should not raise — admin has access
-            assert True
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_cannot_access_wrong_service(self):
+        assert response.status_code == 200
+        filters = mock_instance.list_events.call_args.kwargs["filters"]
+        assert filters.service_name == "shippingdb"
+
+    def test_tenant_key_cannot_access_wrong_service(self, client: TestClient):
         """Tenant-scoped key gets 403 when requesting a different service."""
-        from fastapi import HTTPException
-        from db_monitor.routes.data.events import get_events
+        _authenticate_as(_make_tenant_key("orderdb"))
 
-        with patch(
-            "db_monitor.routes.data.events.get_events_repository"
-        ) as mock_repo:
-            mock_repo.return_value.list_events = AsyncMock(return_value=([], 0))
+        with self._patch_repository():
+            response = client.get(
+                "/events",
+                params={"limit": 10, "service_name": "shippingdb"},
+            )
 
-            with pytest.raises(HTTPException) as exc_info:
-                await get_events(
-                    limit=10,
-                    offset=0,
-                    service_name="shippingdb",
-                    tenant_filter="orderdb",
-                )
-            assert exc_info.value.status_code == 403
-            assert "orderdb" in str(exc_info.value.detail)
-            assert "shippingdb" in str(exc_info.value.detail)
+        assert response.status_code == 403
+        detail = response.json()["detail"]
+        assert "orderdb" in detail
+        assert "shippingdb" in detail
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_accesses_own_service(self):
+    def test_tenant_key_accesses_own_service(self, client: TestClient):
         """Tenant-scoped key can access events for their own service."""
-        from db_monitor.routes.data.events import get_events
+        _authenticate_as(_make_tenant_key("orderdb"))
 
-        with (
-            patch(
-                "db_monitor.routes.data.events.get_events_repository"
-            ) as mock_repo,
-        ):
+        with self._patch_repository() as mock_repo:
             mock_instance = AsyncMock()
             mock_instance.list_events.return_value = ([], 0)
             mock_repo.return_value = mock_instance
 
-            await get_events(
-                limit=10,
-                offset=0,
-                service_name="orderdb",
-                tenant_filter="orderdb",
+            response = client.get(
+                "/events",
+                params={"limit": 10, "service_name": "orderdb"},
             )
-            # Should not raise
-            assert True
+
+        assert response.status_code == 200
+        filters = mock_instance.list_events.call_args.kwargs["filters"]
+        assert filters.service_name == "orderdb"
+
+    def test_tenant_key_forces_own_service_without_explicit_param(
+        self,
+        client: TestClient,
+    ):
+        """A tenant key is filtered even when no service_name is supplied."""
+        _authenticate_as(_make_tenant_key("orderdb"))
+
+        with self._patch_repository() as mock_repo:
+            mock_instance = AsyncMock()
+            mock_instance.list_events.return_value = ([], 0)
+            mock_repo.return_value = mock_instance
+
+            response = client.get("/events", params={"limit": 10})
+
+        assert response.status_code == 200
+        filters = mock_instance.list_events.call_args.kwargs["filters"]
+        assert filters.service_name == "orderdb"
 
 
 class TestChangeRouteTenantEnforcement:
     """Change route enforces tenant scoping."""
 
-    @pytest.mark.asyncio
-    async def test_admin_can_access_any_service(self):
+    def test_admin_can_access_any_service(self, client: TestClient):
         """Admin keys can access changes for any service."""
-        from db_monitor.routes.data.changes import get_changes
+        _authenticate_as(_make_admin_key())
 
         with (
             patch(
@@ -253,37 +264,39 @@ class TestChangeRouteTenantEnforcement:
             mock_cp_instance.get_changes.return_value = ([], 0)
             mock_cp.return_value = mock_cp_instance
 
-            await get_changes(
-                table_name="orders",
-                service_name="orderdb",
-                limit=10,
-                offset=0,
-                tenant_filter=None,
+            response = client.get(
+                "/changes",
+                params={
+                    "table_name": "orders",
+                    "service_name": "orderdb",
+                    "limit": 10,
+                },
             )
-            assert True
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_gets_403_on_mismatch(self):
+        assert response.status_code == 200
+        assert response.json()["service_name"] == "orderdb"
+
+    def test_tenant_key_gets_403_on_mismatch(self, client: TestClient):
         """Tenant-scoped key gets 403 when requesting changes for wrong service."""
-        from fastapi import HTTPException
-        from db_monitor.routes.data.changes import get_changes
+        _authenticate_as(_make_tenant_key("orderdb"))
 
-        with pytest.raises(HTTPException) as exc_info:
-            await get_changes(
-                table_name="orders",
-                service_name="shippingdb",
-                limit=10,
-                offset=0,
-                tenant_filter="orderdb",
-            )
-        assert exc_info.value.status_code == 403
-        assert "orderdb" in str(exc_info.value.detail)
-        assert "shippingdb" in str(exc_info.value.detail)
+        response = client.get(
+            "/changes",
+            params={
+                "table_name": "orders",
+                "service_name": "shippingdb",
+                "limit": 10,
+            },
+        )
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_accesses_own_service(self):
+        assert response.status_code == 403
+        detail = response.json()["detail"]
+        assert "orderdb" in detail
+        assert "shippingdb" in detail
+
+    def test_tenant_key_accesses_own_service(self, client: TestClient):
         """Tenant-scoped key can access changes for their own service."""
-        from db_monitor.routes.data.changes import get_changes
+        _authenticate_as(_make_tenant_key("orderdb"))
 
         with (
             patch(
@@ -292,11 +305,7 @@ class TestChangeRouteTenantEnforcement:
             patch(
                 "db_monitor.routes.data.changes.get_schema_discovery"
             ) as mock_sd,
-            patch(
-                "db_monitor.routes.data.changes.resolve_table_reference"
-            ) as mock_ref,
         ):
-            mock_ref.return_value = ("orderdb", "orders")
             mock_sd_instance = AsyncMock()
             mock_sd_instance.get_table_by_name.return_value = {
                 "id": 1,
@@ -309,91 +318,82 @@ class TestChangeRouteTenantEnforcement:
             mock_cp_instance.get_changes.return_value = ([], 0)
             mock_cp.return_value = mock_cp_instance
 
-            await get_changes(
-                table_name="orders",
-                service_name="orderdb",
-                limit=10,
-                offset=0,
-                tenant_filter="orderdb",
+            response = client.get(
+                "/changes",
+                params={
+                    "table_name": "orders",
+                    "service_name": "orderdb",
+                    "limit": 10,
+                },
             )
-            assert True
+
+        assert response.status_code == 200
+        assert response.json()["service_name"] == "orderdb"
 
 
 class TestTableRouteTenantEnforcement:
     """Table routes enforce tenant scoping."""
 
-    @pytest.mark.asyncio
-    async def test_admin_sees_all_tables(self):
+    def test_admin_sees_all_tables(self, client: TestClient):
         """Admin keys see all tables."""
-        from db_monitor.routes.data.tables import get_tables
+        _authenticate_as(_make_admin_key())
 
         with patch(
             "db_monitor.routes.data.tables.get_schema_discovery"
         ) as mock_sd:
             mock_sd_instance = AsyncMock()
-            mock_sd_instance.get_all_tables.return_value = [
-                {"service_name": "orderdb", "table_name": "orders"},
-                {"service_name": "catalogdb", "table_name": "products"},
-                {"service_name": "shippingdb", "table_name": "shipments"},
-            ]
+            mock_sd_instance.get_all_tables.return_value = list(ALL_TABLES)
             mock_sd.return_value = mock_sd_instance
 
-            result = await get_tables(tenant_filter=None)
-            assert result["count"] == 3
+            response = client.get("/tables")
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_sees_only_own_tables(self):
+        assert response.status_code == 200
+        assert response.json()["count"] == 3
+
+    def test_tenant_key_sees_only_own_tables(self, client: TestClient):
         """Tenant-scoped keys only see their own tables."""
-        from db_monitor.routes.data.tables import get_tables
+        _authenticate_as(_make_tenant_key("orderdb"))
 
         with patch(
             "db_monitor.routes.data.tables.get_schema_discovery"
         ) as mock_sd:
             mock_sd_instance = AsyncMock()
-            mock_sd_instance.get_all_tables.return_value = [
-                {"service_name": "orderdb", "table_name": "orders"},
-                {"service_name": "catalogdb", "table_name": "products"},
-                {"service_name": "shippingdb", "table_name": "shipments"},
-            ]
+            mock_sd_instance.get_all_tables.return_value = list(ALL_TABLES)
             mock_sd.return_value = mock_sd_instance
 
-            result = await get_tables(tenant_filter="orderdb")
-            assert result["count"] == 1
-            assert result["tables"][0]["service_name"] == "orderdb"
+            response = client.get("/tables")
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_gets_403_on_table_detail_mismatch(self):
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["count"] == 1
+        assert payload["tables"][0]["service_name"] == "orderdb"
+
+    def test_tenant_key_gets_403_on_table_detail_mismatch(
+        self,
+        client: TestClient,
+    ):
         """Tenant-scoped key gets 403 requesting table detail for wrong service."""
-        from fastapi import HTTPException
-        from db_monitor.routes.data.tables import get_table
+        _authenticate_as(_make_tenant_key("orderdb"))
 
-        with pytest.raises(HTTPException) as exc_info:
-            await get_table(
-                service_name="shippingdb",
-                table_name="shipments",
-                tenant_filter="orderdb",
-            )
-        assert exc_info.value.status_code == 403
-        assert "orderdb" in str(exc_info.value.detail)
+        response = client.get("/tables/shippingdb/shipments")
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_gets_403_on_columns_mismatch(self):
+        assert response.status_code == 403
+        assert "orderdb" in response.json()["detail"]
+
+    def test_tenant_key_gets_403_on_columns_mismatch(
+        self,
+        client: TestClient,
+    ):
         """Tenant-scoped key gets 403 requesting columns for wrong service."""
-        from fastapi import HTTPException
-        from db_monitor.routes.data.tables import get_table_columns
+        _authenticate_as(_make_tenant_key("orderdb"))
 
-        with pytest.raises(HTTPException) as exc_info:
-            await get_table_columns(
-                service_name="shippingdb",
-                table_name="shipments",
-                tenant_filter="orderdb",
-            )
-        assert exc_info.value.status_code == 403
+        response = client.get("/tables/shippingdb/shipments/columns")
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_can_get_own_table_detail(self):
+        assert response.status_code == 403
+
+    def test_tenant_key_can_get_own_table_detail(self, client: TestClient):
         """Tenant-scoped key can get table detail for their own service."""
-        from db_monitor.routes.data.tables import get_table
+        _authenticate_as(_make_tenant_key("orderdb"))
 
         with patch(
             "db_monitor.routes.data.tables.get_schema_discovery"
@@ -406,17 +406,14 @@ class TestTableRouteTenantEnforcement:
             }
             mock_sd.return_value = mock_sd_instance
 
-            result = await get_table(
-                service_name="orderdb",
-                table_name="orders",
-                tenant_filter="orderdb",
-            )
-            assert result["service_name"] == "orderdb"
+            response = client.get("/tables/orderdb/orders")
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_can_get_own_columns(self):
+        assert response.status_code == 200
+        assert response.json()["service_name"] == "orderdb"
+
+    def test_tenant_key_can_get_own_columns(self, client: TestClient):
         """Tenant-scoped key can get columns for their own service."""
-        from db_monitor.routes.data.tables import get_table_columns
+        _authenticate_as(_make_tenant_key("orderdb"))
 
         with patch(
             "db_monitor.routes.data.tables.get_schema_discovery"
@@ -431,21 +428,18 @@ class TestTableRouteTenantEnforcement:
             }
             mock_sd.return_value = mock_sd_instance
 
-            result = await get_table_columns(
-                service_name="orderdb",
-                table_name="orders",
-                tenant_filter="orderdb",
-            )
-            assert len(result["columns"]) == 1
+            response = client.get("/tables/orderdb/orders/columns")
+
+        assert response.status_code == 200
+        assert len(response.json()["columns"]) == 1
 
 
 class TestEventStatsTenantEnforcement:
     """Event stats route enforces tenant scoping."""
 
-    @pytest.mark.asyncio
-    async def test_admin_can_access_stats(self):
-        """Admin keys can access event stats."""
-        from db_monitor.routes.data.events import get_event_stats
+    def test_admin_can_access_stats(self, client: TestClient):
+        """Admin keys can access event stats across tenants."""
+        _authenticate_as(_make_admin_key())
 
         with patch(
             "db_monitor.routes.data.events.get_events_repository"
@@ -453,22 +447,23 @@ class TestEventStatsTenantEnforcement:
             mock_instance = AsyncMock()
             mock_instance.event_stats.return_value = {
                 "total_events": 100,
-                "by_service": {
-                    "orderdb": 50,
-                    "catalogdb": 50,
-                },
+                "by_service": {"orderdb": 50, "catalogdb": 50},
                 "by_type": {},
                 "by_operation": {},
             }
             mock_repo.return_value = mock_instance
 
-            result = await get_event_stats(tenant_filter=None)
-            assert result["total_events"] == 100
+            response = client.get("/events/stats")
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_sees_only_own_stats(self):
+        assert response.status_code == 200
+        assert response.json()["total_events"] == 100
+        mock_instance.event_stats.assert_awaited_once_with(
+            tenant_filter=None
+        )
+
+    def test_tenant_key_sees_only_own_stats(self, client: TestClient):
         """Tenant-scoped keys pass their tenant to the repository."""
-        from db_monitor.routes.data.events import get_event_stats
+        _authenticate_as(_make_tenant_key("orderdb"))
 
         with patch(
             "db_monitor.routes.data.events.get_events_repository"
@@ -476,127 +471,105 @@ class TestEventStatsTenantEnforcement:
             mock_instance = AsyncMock()
             mock_instance.event_stats.return_value = {
                 "total_events": 50,
-                "by_service": {
-                    "orderdb": 50,
-                },
+                "by_service": {"orderdb": 50},
                 "by_type": {},
                 "by_operation": {},
             }
             mock_repo.return_value = mock_instance
 
-            result = await get_event_stats(tenant_filter="orderdb")
-            # Verify the repository was called with the tenant filter
-            mock_instance.event_stats.assert_called_once_with(
-                tenant_filter="orderdb"
-            )
-            assert result["total_events"] == 50
-            assert "orderdb" in result["by_service"]
+            response = client.get("/events/stats")
+
+        assert response.status_code == 200
+        mock_instance.event_stats.assert_awaited_once_with(
+            tenant_filter="orderdb"
+        )
+        assert "orderdb" in response.json()["by_service"]
 
 
 class TestValueAtTimeRouteTenantEnforcement:
     """Value-at-time routes enforce tenant scoping."""
 
-    @pytest.mark.asyncio
-    async def test_admin_can_access_any_service(self):
+    def test_admin_can_access_any_service(self, client: TestClient):
         """Admin keys can access value-at-time for any service."""
-        from db_monitor.routes.data.changes import get_value_at_time
+        _authenticate_as(_make_admin_key())
 
-        with (
-            patch(
-                "db_monitor.routes.data.changes.get_change_processor"
-            ) as mock_cp,
-        ):
+        with patch(
+            "db_monitor.routes.data.changes.get_change_processor"
+        ) as mock_cp:
             mock_cp_instance = AsyncMock()
             mock_cp_instance.get_value_at_time.return_value = "value"
             mock_cp.return_value = mock_cp_instance
 
-            result = await get_value_at_time(
-                service_name="orderdb",
-                table_name="orders",
-                column_name="status",
-                timestamp="2026-01-01T00:00:00Z",
-                tenant_filter=None,
+            response = client.get(
+                "/changes/orderdb/orders/status/at",
+                params={"timestamp": "2026-01-01T00:00:00Z"},
             )
-            assert result["value"] == "value"
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_gets_403_on_mismatch(self):
+        assert response.status_code == 200
+        assert response.json()["value"] == "value"
+
+    def test_tenant_key_gets_403_on_mismatch(self, client: TestClient):
         """Tenant-scoped key gets 403 when requesting value for wrong service."""
-        from fastapi import HTTPException
-        from db_monitor.routes.data.changes import get_value_at_time
+        _authenticate_as(_make_tenant_key("orderdb"))
 
-        with pytest.raises(HTTPException) as exc_info:
-            await get_value_at_time(
-                service_name="shippingdb",
-                table_name="shipments",
-                column_name="status",
-                timestamp="2026-01-01T00:00:00Z",
-                tenant_filter="orderdb",
-            )
-        assert exc_info.value.status_code == 403
+        response = client.get(
+            "/changes/shippingdb/shipments/status/at",
+            params={"timestamp": "2026-01-01T00:00:00Z"},
+        )
 
-    @pytest.mark.asyncio
-    async def test_tenant_key_can_access_own_service(self):
+        assert response.status_code == 403
+
+    def test_tenant_key_can_access_own_service(self, client: TestClient):
         """Tenant-scoped key can access value for their own service."""
-        from db_monitor.routes.data.changes import get_value_at_time
+        _authenticate_as(_make_tenant_key("orderdb"))
 
-        with (
-            patch(
-                "db_monitor.routes.data.changes.get_change_processor"
-            ) as mock_cp,
-        ):
+        with patch(
+            "db_monitor.routes.data.changes.get_change_processor"
+        ) as mock_cp:
             mock_cp_instance = AsyncMock()
             mock_cp_instance.get_value_at_time.return_value = "shipped"
             mock_cp.return_value = mock_cp_instance
 
-            result = await get_value_at_time(
-                service_name="orderdb",
-                table_name="orders",
-                column_name="status",
-                timestamp="2026-01-01T00:00:00Z",
-                tenant_filter="orderdb",
+            response = client.get(
+                "/changes/orderdb/orders/status/at",
+                params={"timestamp": "2026-01-01T00:00:00Z"},
             )
-            assert result["value"] == "shipped"
 
-    @pytest.mark.asyncio
-    async def test_legacy_route_admin_access(self):
+        assert response.status_code == 200
+        assert response.json()["value"] == "shipped"
+
+    def test_legacy_route_admin_access(self, client: TestClient):
         """Admin keys can use legacy value-at-time route."""
-        from db_monitor.routes.data.changes import get_value_at_time_legacy
+        _authenticate_as(_make_admin_key())
 
-        with (
-            patch(
-                "db_monitor.routes.data.changes.get_change_processor"
-            ) as mock_cp,
-            patch(
-                "db_monitor.routes.data.changes.resolve_table_reference"
-            ) as mock_ref,
-        ):
-            mock_ref.return_value = ("orderdb", "orders")
+        with patch(
+            "db_monitor.routes.data.changes.get_change_processor"
+        ) as mock_cp:
             mock_cp_instance = AsyncMock()
             mock_cp_instance.get_value_at_time.return_value = "value"
             mock_cp.return_value = mock_cp_instance
 
-            result = await get_value_at_time_legacy(
-                table_name="orders",
-                column_name="status",
-                timestamp="2026-01-01T00:00:00Z",
-                service_name="orderdb",
-                tenant_filter=None,
+            response = client.get(
+                "/changes/orders/status/at",
+                params={
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "service_name": "orderdb",
+                },
             )
-            assert result["value"] == "value"
 
-    @pytest.mark.asyncio
-    async def test_legacy_route_tenant_gets_403(self):
+        assert response.status_code == 200
+        assert response.json()["value"] == "value"
+
+    def test_legacy_route_tenant_gets_403(self, client: TestClient):
         """Tenant-scoped key gets 403 on legacy route with wrong service."""
-        from fastapi import HTTPException
-        from db_monitor.routes.data.changes import get_value_at_time_legacy
+        _authenticate_as(_make_tenant_key("orderdb"))
 
-        with pytest.raises(HTTPException) as exc_info:
-            await get_value_at_time_legacy(
-                table_name="shipments",
-                column_name="status",
-                timestamp="2026-01-01T00:00:00Z",
-                service_name="shippingdb",
-                tenant_filter="orderdb",
-            )
-        assert exc_info.value.status_code == 403
+        response = client.get(
+            "/changes/shipments/status/at",
+            params={
+                "timestamp": "2026-01-01T00:00:00Z",
+                "service_name": "shippingdb",
+            },
+        )
+
+        assert response.status_code == 403

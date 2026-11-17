@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.params import Param
 
-from db_monitor.auth import require_admin_role
+from db_monitor.auth import require_global_admin
 from db_monitor.core.models import ApiKey
 from db_monitor.ingestion.consumer import (
     list_consumer_checkpoints_snapshot,
@@ -21,7 +21,7 @@ router = APIRouter()
 
 @router.get("/admin/checkpoints")
 async def get_consumer_checkpoints(
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_global_admin),
 ):
     """Return persisted consumer checkpoint state for operators."""
     del admin_api_key
@@ -35,7 +35,7 @@ async def get_consumer_checkpoints(
 @router.get("/admin/audit-log/spill")
 async def get_audit_log_spill(
     limit: int = Query(100, ge=1, le=1000),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_global_admin),
 ):
     """Return recent spilled audit log entries for inspection."""
     del admin_api_key
@@ -48,7 +48,7 @@ async def replay_audit_log_spill(
     limit: int = Query(100, ge=1, le=1000),
     ids: list[int] | None = Query(default=None),
     actor: str | None = Query(default=None),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_global_admin),
 ):
     """Replay spilled audit log entries into the primary audit table."""
     del admin_api_key
@@ -60,7 +60,7 @@ async def replay_audit_log_spill(
 async def get_dead_letter_events(
     limit: int = Query(100, ge=1, le=1000),
     include_replayed: bool = False,
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_global_admin),
 ):
     """List persisted DLQ records that are available for replay."""
     del admin_api_key
@@ -82,7 +82,7 @@ async def replay_dead_letter_events(
         default=None,
         alias="X-DBM-Customer-ID",
     ),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_global_admin),
 ):
     """Replay multiple persisted DLQ records through ingestion."""
     del admin_api_key
@@ -112,7 +112,7 @@ async def replay_dead_letter_event(
         default=None,
         alias="X-DBM-Customer-ID",
     ),
-    admin_api_key: ApiKey = Depends(require_admin_role),
+    admin_api_key: ApiKey = Depends(require_global_admin),
 ):
     """Replay a persisted DLQ record back through ingestion."""
     del admin_api_key

@@ -35,7 +35,7 @@ def is_api_key_usable(
 
 async def _get_api_key_by_id(key_id: int) -> Optional[ApiKey]:
     """Fetch an API key by primary key and enforce lifecycle checks."""
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
         result = await session.execute(
             select(ApiKey).where(ApiKey.id == key_id)
         )
@@ -62,7 +62,7 @@ async def _authenticate_bearer_token(
         return None
 
     try:
-        key_id = int(subject)
+        key_id = int(subject)  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return None
 
@@ -77,7 +77,7 @@ async def get_current_api_key(
     if not api_key_header_value:
         return None
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
         try:
             key_id_str, raw_key = api_key_header_value.split(".", 1)
             key_id = int(key_id_str)

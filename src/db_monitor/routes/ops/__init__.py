@@ -20,7 +20,10 @@ from db_monitor.routes.ops.provisioning import (
     start_customer_provision_job,
     update_customer_provision_step,
 )
-from db_monitor.routes.ops.execution import execute_customer_provision_job
+from db_monitor.routes.ops.execution import (
+    execute_customer_provision_job,
+    router as execution_router,
+)
 from db_monitor.routes.ops.lifecycle import (
     CUSTOMER_LIFECYCLE_STATE,
     get_customer_lifecycle_state,
@@ -58,6 +61,7 @@ router.include_router(health_router)
 router.include_router(dlq_router)
 router.include_router(lifecycle_router)
 router.include_router(provisioning_router)
+router.include_router(execution_router)
 router.include_router(metadata_router)
 
 __all__ = [

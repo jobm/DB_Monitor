@@ -86,28 +86,46 @@ class EventsRepository:
             events = result.scalars().all()
             return events, total
 
-    async def event_stats(self) -> dict[str, object]:
-        """Return aggregate statistics for monitored events."""
+    async def event_stats(
+        self,
+        tenant_filter: str | None = None,
+    ) -> dict[str, object]:
+        """Return aggregate statistics for monitored events.
+
+        When ``tenant_filter`` is set, all statistics are scoped to
+        that tenant's ``service_name``, preventing cross-tenant data
+        leakage through the stats endpoint.
+        """
         async with self._session_factory() as session:
-            by_service = await session.execute(
-                select(
-                    KafkaEvent.service_name,
-                    func.count(KafkaEvent.id),
-                ).group_by(KafkaEvent.service_name)
-            )
-            by_type = await session.execute(
-                select(
-                    KafkaEvent.event_type,
-                    func.count(KafkaEvent.id),
-                ).group_by(KafkaEvent.event_type)
-            )
-            by_operation = await session.execute(
-                select(
-                    KafkaEvent.operation,
-                    func.count(KafkaEvent.id),
-                ).group_by(KafkaEvent.operation)
-            )
-            total = await session.execute(select(func.count(KafkaEvent.id)))
+            # Build base filtered query when a tenant filter is active
+            base_filter = None
+            if tenant_filter:
+                base_filter = KafkaEvent.service_name == tenant_filter
+
+            by_service_query = select(
+                KafkaEvent.service_name,
+                func.count(KafkaEvent.id),
+            ).group_by(KafkaEvent.service_name)
+            by_type_query = select(
+                KafkaEvent.event_type,
+                func.count(KafkaEvent.id),
+            ).group_by(KafkaEvent.event_type)
+            by_operation_query = select(
+                KafkaEvent.operation,
+                func.count(KafkaEvent.id),
+            ).group_by(KafkaEvent.operation)
+            total_query = select(func.count(KafkaEvent.id))
+
+            if base_filter is not None:
+                by_service_query = by_service_query.where(base_filter)
+                by_type_query = by_type_query.where(base_filter)
+                by_operation_query = by_operation_query.where(base_filter)
+                total_query = total_query.where(base_filter)
+
+            by_service = await session.execute(by_service_query)
+            by_type = await session.execute(by_type_query)
+            by_operation = await session.execute(by_operation_query)
+            total = await session.execute(total_query)
 
         return {
             "total_events": total.scalar(),
