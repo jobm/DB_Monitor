@@ -165,6 +165,27 @@ kafka:
     certFile: ""
     keyFile: ""
     password: ""
+  # -- Number of partitions per Kafka topic.
+  #   Benchmark results show that with 1 partition, throughput plateaus at
+  #   ~400-500 ev/s regardless of injection rate. Production deployments
+  #   should set this to at least 6 to enable consumer parallelism.
+  #   The pre-install Helm Job will create/alter topics to match this count.
+  #   Only topics listed in kafka.topicNames are affected.
+  topicPartitionCount: 1
+  # -- Replication factor for topics created by the pre-install Job.
+  #   Use 1 for single-node/kraft, 3 for production Kafka clusters.
+  replicationFactor: 1
+  # -- Explicit list of topic names to create/validate during install.
+  #   Required when partitionCount > 1 and you are not using an external
+  #   topic-provisioning tool. Example:
+  #     topicNames:
+  #       - orderdb.public.orders
+  #       - orderdb.public.customers
+  #   Note: The pre-install Job connects via PLAINTEXT protocol and does
+  #   not handle SSL/SASL auth. In clusters requiring auth, manage topics
+  #   externally (e.g., via Strimzi KafkaTopic CRDs or the Kafka CLI with
+  #   appropriate auth flags).
+  topicNames: []
 
 # -- Multi-cluster configuration (JSON arrays)
 clusters:
@@ -199,7 +220,9 @@ consumer:
 # ── Auth configuration ───────────────────────────────────────────────
 
 auth:
-  # -- JWT secret (use existingSecret for production)
+  # -- JWT secret. When empty (and no existingSecret is set), the chart
+  #   generates one on first install and reuses it on upgrade. Set
+  #   explicitly (or use existingSecret) to manage rotation yourself.
   jwtSecret: ""
   # -- JWT rotation secret
   jwtSecretNext: ""
@@ -243,8 +266,19 @@ retention:
 # ── WebSocket configuration ──────────────────────────────────────────
 
 websocket:
+  # -- Enable cross-replica backplane for WebSocket fanout
   backplaneEnabled: true
+  # -- Backend type: postgres (LISTEN/NOTIFY) or redis (Pub/Sub)
+  #   For high-scale deployments (2000+ ev/s), use ``redis`` with
+  #   websocket.redisUrl configured.
+  backplaneBackend: postgres
+  # -- Postgres NOTIFY or Redis Pub/Sub channel name
   backplaneChannel: db_monitor_ws
+  # -- Redis connection URL (required when backplaneBackend is redis)
+  #   Example: redis://redis:6379/0
+  redisUrl: ""
+  # -- Prefix for Redis Pub/Sub channel names
+  redisChannelPrefix: db_monitor
 
 # ── Webhook configuration ────────────────────────────────────────────
 

@@ -51,12 +51,6 @@ data:
   READINESS_MAX_CONSUMER_LAG: {{ .Values.consumer.readinessMaxConsumerLag | quote }}
   READINESS_MAX_DLQ_MESSAGES: {{ .Values.consumer.readinessMaxDlqMessages | quote }}
 
-  {{- if not .Values.auth.existingSecret }}
-  JWT_SECRET: {{ required "auth.jwtSecret is required" .Values.auth.jwtSecret | quote }}
-  {{- end }}
-  {{- if .Values.auth.jwtSecretNext }}
-  JWT_SECRET_NEXT: {{ .Values.auth.jwtSecretNext | quote }}
-  {{- end }}
   JWT_ALGORITHM: {{ .Values.auth.jwtAlgorithm | quote }}
   ACCESS_TOKEN_TTL_MINUTES: {{ .Values.auth.accessTokenTtlMinutes | quote }}
   WS_SESSION_TOKEN_TTL_SECONDS: {{ .Values.auth.wsSessionTokenTtlSeconds | quote }}
@@ -83,7 +77,12 @@ data:
   API_AUDIT_LOG_RETENTION_DAYS: {{ .Values.retention.apiAuditLogRetentionDays | quote }}
 
   WS_BACKPLANE_ENABLED: {{ .Values.websocket.backplaneEnabled | quote }}
+  WS_BACKPLANE_BACKEND: {{ .Values.websocket.backplaneBackend | quote }}
   WS_BACKPLANE_CHANNEL: {{ .Values.websocket.backplaneChannel | quote }}
+  {{- if .Values.websocket.redisUrl }}
+  REDIS_URL: {{ .Values.websocket.redisUrl | quote }}
+  {{- end }}
+  REDIS_BACKPLANE_CHANNEL_PREFIX: {{ .Values.websocket.redisChannelPrefix | quote }}
 
   {{- if .Values.webhooks.urls }}
   WEBHOOK_URLS: {{ .Values.webhooks.urls | quote }}

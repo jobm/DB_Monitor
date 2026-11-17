@@ -1,0 +1,67 @@
+{{- if and (eq .Values.broker.kind "kafka") (gt (int .Values.kafka.topicPartitionCount) 1) (gt (len .Values.kafka.topicNames) 0) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "db-monitor.fullname" . }}-topic-init
+  labels:
+    {{- include "db-monitor.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "db-monitor.selectorLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: kafka-init
+          image: confluentinc/cp-kafka:7.5.0
+          command:
+            - /bin/bash
+            - -euc
+            - |
+              KAFKA_BROKER="${KAFKA_BROKER:-{{ .Values.kafka.broker }}}"
+              PARTITIONS={{ .Values.kafka.topicPartitionCount }}
+              REPLICAS={{ .Values.kafka.replicationFactor }}
+              echo "Ensuring topics exist with ${PARTITIONS} partitions, ${REPLICAS} replicas on ${KAFKA_BROKER}..."
+              {{- range .Values.kafka.topicNames }}
+              TOPIC="{{ . }}"
+              if kafka-topics --bootstrap-server "${KAFKA_BROKER}" --describe --topic "${TOPIC}" > /dev/null 2>&1; then
+                CURRENT=$(kafka-topics --bootstrap-server "${KAFKA_BROKER}" --describe --topic "${TOPIC}" 2>/dev/null \
+                  | head -1 | awk '{print $4}' || echo "0")
+                if [ -z "${CURRENT}" ] || [ "${CURRENT}" -lt "${PARTITIONS}" ] 2>/dev/null; then
+                  echo "Increasing ${TOPIC} from ${CURRENT:-unknown} to ${PARTITIONS} partitions..."
+                  kafka-topics --bootstrap-server "${KAFKA_BROKER}" --alter --topic "${TOPIC}" --partitions "${PARTITIONS}"
+                elif [ "${CURRENT}" -gt "${PARTITIONS}" ] 2>/dev/null; then
+                  echo "WARNING: ${TOPIC} has ${CURRENT} partitions — cannot shrink below ${PARTITIONS}. Skipping."
+                else
+                  echo "${TOPIC} already has ${PARTITIONS} partitions — OK."
+                fi
+              else
+                echo "Creating ${TOPIC} with ${PARTITIONS} partitions, ${REPLICAS} replicas..."
+                kafka-topics --bootstrap-server "${KAFKA_BROKER}" --create --topic "${TOPIC}" \
+                  --partitions "${PARTITIONS}" --replication-factor "${REPLICAS}"
+              fi
+              {{- end }}
+              echo "Topic initialization complete."
+          env:
+            - name: KAFKA_BROKER
+              value: {{ .Values.kafka.broker | quote }}
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx256m"
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+{{- end }}
