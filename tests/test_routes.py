@@ -189,6 +189,7 @@ async def test_get_changes_parses_service_and_timestamps(monkeypatch):
         to_time="2024-01-02T11:00:00Z",
         limit=25,
         offset=5,
+        tenant_filter=None,
     )
 
     assert response["service_name"] == "orderdb"
@@ -225,6 +226,7 @@ async def test_get_changes_rejects_invalid_timestamp():
         await routes_data.get_changes(
             table_name="orderdb.orders",
             from_time="not-a-timestamp",
+            tenant_filter=None,
         )
 
     assert exc_info.value.status_code == 400
@@ -261,6 +263,7 @@ async def test_get_value_at_time_legacy_resolves_service_from_table_name(
         table_name="orderdb.orders",
         column_name="status",
         timestamp="2024-01-03T12:30:00Z",
+        tenant_filter=None,
     )
 
     assert response["service_name"] == "orderdb"
@@ -542,7 +545,10 @@ async def test_recover_customer_jwt_secrets_requires_matching_scope() -> None:
 @pytest.mark.anyio
 async def test_get_events_rejects_invalid_start_time():
     with pytest.raises(HTTPException) as exc_info:
-        await routes_data.get_events(start_time="not-a-timestamp")
+        await routes_data.get_events(
+            start_time="not-a-timestamp",
+            tenant_filter=None,
+        )
 
     assert exc_info.value.status_code == 400
     assert "start_time" in exc_info.value.detail
@@ -576,6 +582,7 @@ async def test_get_events_parses_time_filters(monkeypatch):
         end_time="2024-01-03T11:00:00Z",
         limit=5,
         offset=0,
+        tenant_filter=None,
     )
 
     rendered_event = response["events"][0]
@@ -619,6 +626,7 @@ async def test_get_events_supports_record_filters(monkeypatch):
         row_identity='{"id": 42}',
         limit=5,
         offset=0,
+        tenant_filter=None,
     )
 
     assert response["events"][0]["row_identity"] == {"id": 42}
@@ -681,7 +689,12 @@ async def test_get_events_supports_cursor_pagination(monkeypatch):
         lambda: SimpleNamespace(list_events=fake_list_events),
     )
 
-    response = await routes_data.get_events(limit=2, offset=100, cursor_id=99)
+    response = await routes_data.get_events(
+        limit=2,
+        offset=100,
+        cursor_id=99,
+        tenant_filter=None,
+    )
 
     assert captured["limit"] == 2
     assert captured["offset"] == 100
@@ -699,7 +712,10 @@ async def test_get_events_supports_cursor_pagination(monkeypatch):
 @pytest.mark.anyio
 async def test_get_events_rejects_invalid_row_identity():
     with pytest.raises(HTTPException) as exc_info:
-        await routes_data.get_events(row_identity="not-json")
+        await routes_data.get_events(
+            row_identity="not-json",
+            tenant_filter=None,
+        )
 
     assert exc_info.value.status_code == 400
     assert "row_identity" in exc_info.value.detail
@@ -712,6 +728,7 @@ async def test_get_changes_rejects_invalid_row_identity():
         await routes_data.get_changes(
             table_name="orderdb.orders",
             row_identity="not-json",
+            tenant_filter=None,
         )
 
     assert exc_info.value.status_code == 400
@@ -722,7 +739,10 @@ async def test_get_changes_rejects_invalid_row_identity():
 @pytest.mark.anyio
 async def test_get_changes_requires_unambiguous_table_reference():
     with pytest.raises(HTTPException) as exc_info:
-        await routes_data.get_changes(table_name="orders")
+        await routes_data.get_changes(
+            table_name="orders",
+            tenant_filter=None,
+        )
 
     assert exc_info.value.status_code == 400
     assert "service_name=orderdb&table_name=orders" in exc_info.value.detail
@@ -736,12 +756,15 @@ async def test_get_changes_reports_table_discovery_hint(monkeypatch):
         return None
 
     monkeypatch.setattr(
-        "db_monitor.routes.data.factories.get_schema_discovery",
+        "db_monitor.routes.data.changes.get_schema_discovery",
         lambda: SimpleNamespace(get_table_by_name=fake_get_table_by_name),
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await routes_data.get_changes(table_name="orderdb.orders")
+        await routes_data.get_changes(
+            table_name="orderdb.orders",
+            tenant_filter=None,
+        )
 
     assert exc_info.value.status_code == 404
     assert "GET /tables" in exc_info.value.detail

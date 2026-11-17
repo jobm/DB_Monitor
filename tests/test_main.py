@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import Response
@@ -69,7 +70,11 @@ async def test_http_invalid_api_key_increments_failed_auth_metric(
         "authenticate_credentials",
         fake_authenticate_credentials,
     )
-    monkeypatch.setattr(main.audit_log_writer, "enqueue", lambda entry: None)
+    monkeypatch.setattr(
+        main.audit_log_writer,
+        "enqueue",
+        AsyncMock(return_value=None),
+    )
 
     request = _build_request([(b"x-api-key", b"invalid")])
     await main.log_requests(request, fake_call_next)
@@ -99,7 +104,11 @@ async def test_http_invalid_bearer_increments_failed_auth_metric(
         "authenticate_credentials",
         fake_authenticate_credentials,
     )
-    monkeypatch.setattr(main.audit_log_writer, "enqueue", lambda entry: None)
+    monkeypatch.setattr(
+        main.audit_log_writer,
+        "enqueue",
+        AsyncMock(return_value=None),
+    )
 
     request = _build_request(
         [(b"authorization", b"Bearer invalid-token")]

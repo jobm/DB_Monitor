@@ -151,7 +151,7 @@ async def test_schema_cache_backplane_notification_invalidates_cache(
         }
     )
 
-    await schema_discovery_module.schema_cache_backplane._deliver_notification(
+    await schema_discovery_module.schema_cache_backplane._handle_notification(
         payload
     )
 
@@ -177,7 +177,7 @@ async def test_schema_cache_backplane_ignores_local_origin() -> None:
         }
     )
 
-    await schema_discovery_module.schema_cache_backplane._deliver_notification(
+    await schema_discovery_module.schema_cache_backplane._handle_notification(
         payload
     )
 
