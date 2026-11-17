@@ -308,10 +308,15 @@ async def _apply_base_schema(
         CREATE INDEX IF NOT EXISTS ix_dead_letter_events_is_replayed
             ON dead_letter_events (is_replayed)
         """,
-        # api_audit_log_spill index
+        # api_audit_log_spill indexes
         """
         CREATE INDEX IF NOT EXISTS ix_api_audit_log_spill_spilled_at
             ON api_audit_log_spill (spilled_at)
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS ix_api_audit_log_spill_unreplayed
+            ON api_audit_log_spill (spilled_at)
+            WHERE replayed = FALSE
         """,
         # api_audit_logs indexes
         """

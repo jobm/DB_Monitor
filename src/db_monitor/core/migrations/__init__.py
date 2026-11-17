@@ -39,12 +39,15 @@ from db_monitor.core.migrations.schema import (
 )
 from db_monitor.core.migrations.auth import (
     _apply_api_key_lifecycle_columns,
+    _apply_api_key_tenant_id,
     _apply_customer_control_plane_state,
     _apply_customer_jwt_secret_state,
 )
 from db_monitor.core.migrations.infra import (
     _apply_api_audit_log_spill,
+    _apply_api_audit_log_spill_unreplayed_index,
     _apply_cursor_pagination_indexes,
+    _apply_high_cardinality_indexes,
     _apply_ingestion_quota_windows,
     _apply_recovery_tables,
 )
@@ -132,6 +135,31 @@ MIGRATIONS: tuple[Migration, ...] = (
             "so ON CONFLICT works on the partitioned table"
         ),
         apply=_apply_events_unique_constraint,
+    ),
+    Migration(
+        version="0016_api_audit_log_spill_unreplayed_index",
+        description=(
+            "Add partial index for unreplayed audit log spill lookups "
+            "to keep queries fast as the table grows"
+        ),
+        apply=_apply_api_audit_log_spill_unreplayed_index,
+    ),
+    Migration(
+        version="0017_api_key_tenant_id",
+        description=(
+            "Add tenant_id column to api_keys for multi-tenant isolation"
+        ),
+        apply=_apply_api_key_tenant_id,
+    ),
+    Migration(
+        version="0018_high_cardinality_indexes",
+        description=(
+            "Add targeted indexes for high-cardinality filters on events "
+            "and column_changes (tenant-scoped time ranges, source table "
+            "lookups, column changes keyset pagination, row-identity "
+            "equality queries)"
+        ),
+        apply=_apply_high_cardinality_indexes,
     ),
 )
 

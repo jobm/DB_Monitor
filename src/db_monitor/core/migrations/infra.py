@@ -71,6 +71,21 @@ async def _apply_recovery_tables(
         await connection.execute(text(statement))
 
 
+async def _apply_api_audit_log_spill_unreplayed_index(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Add a partial index for fast unreplayed spill lookups."""
+    del session_factory
+    await connection.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_api_audit_log_spill_unreplayed "
+            "ON api_audit_log_spill (spilled_at) "
+            "WHERE replayed = FALSE"
+        )
+    )
+
+
 async def _apply_cursor_pagination_indexes(
     connection: AsyncConnection,
     session_factory: Callable,
@@ -97,6 +112,61 @@ async def _apply_cursor_pagination_indexes(
             "CREATE INDEX IF NOT EXISTS "
             "ix_changes_cursor_column_time "
             "ON column_changes (column_id, changed_at, id)"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
+async def _apply_high_cardinality_indexes(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Add targeted indexes for high-cardinality filter patterns on
+    events and column_changes tables (RR-1).
+
+    Motivations:
+    - ``ix_events_service_time_capture``: OS-7 tenant-scoped queries
+      filter by ``service_name`` + ``event_time`` range, but the
+      existing cursor index has ``event_type`` in column 2, preventing
+      efficient time-range index scans when ``event_type`` is not given.
+    - ``ix_events_service_source_capture``: Tenant-scoped
+      ``source_table_id`` lookups need the index to start with
+      ``service_name`` so the tenant filter is applied first.
+    - ``ix_changes_table_column_time_id``: The existing
+      ``ix_changes_table_col_time`` lacks ``id``, so keyset pagination
+      on column-scoped queries falls back to a sequential scan. This
+      index includes ``id`` for proper keyset coverage.
+    - ``ix_changes_table_identity_time``: Row-identity-based lookups
+      (``WHERE table_id = ? AND row_identity = ?``) are not covered by
+      the existing GIN index, which is designed for JSONB containment
+      rather than equality + ordering.
+    """
+    del session_factory
+    statements = [
+        # events: tenant-scoped time range queries without event_type
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_events_service_time_capture "
+            "ON events (service_name, event_time DESC, capture_time DESC, id DESC)"
+        ),
+        # events: tenant-scoped source table lookups
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_events_service_source_capture "
+            "ON events (service_name, source_table_id, capture_time DESC, id DESC)"
+        ),
+        # column_changes: column-scoped keyset queries with id
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_changes_table_column_time_id "
+            "ON column_changes (table_id, column_id, changed_at DESC, id DESC)"
+        ),
+        # column_changes: row-identity equality queries
+        (
+            "CREATE INDEX IF NOT EXISTS "
+            "ix_changes_table_identity_time "
+            "ON column_changes (table_id, row_identity, changed_at DESC, id DESC)"
         ),
     ]
     for statement in statements:
@@ -162,5 +232,12 @@ async def _apply_api_audit_log_spill(
         text(
             "CREATE INDEX IF NOT EXISTS ix_api_audit_log_spill_spilled_at "
             "ON api_audit_log_spill (spilled_at)"
+        )
+    )
+    await connection.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_api_audit_log_spill_unreplayed "
+            "ON api_audit_log_spill (spilled_at) "
+            "WHERE replayed = FALSE"
         )
     )
