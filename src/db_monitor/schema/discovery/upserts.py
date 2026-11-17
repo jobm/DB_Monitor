@@ -35,7 +35,7 @@ async def upsert_table(
         .returning(MonitoredTable.id)
     )
     result = await session.execute(stmt)
-    return result.scalar_one()
+    return result.scalar_one()  # type: ignore[no-any-return]
 
 
 async def upsert_columns(
@@ -56,9 +56,9 @@ async def upsert_columns(
     stmt = insert_stmt.on_conflict_do_update(
         index_elements=["table_id", "column_name"],
         set_={
-            "data_type": insert_stmt.excluded.data_type,
-            "is_primary_key": insert_stmt.excluded.is_primary_key,
-            "is_nullable": insert_stmt.excluded.is_nullable,
+            "data_type": insert_stmt.excluded.data_type,  # type: ignore[attr-defined]
+            "is_primary_key": insert_stmt.excluded.is_primary_key,  # type: ignore[attr-defined]
+            "is_nullable": insert_stmt.excluded.is_nullable,  # type: ignore[attr-defined]
         },
     )
     await session.execute(stmt)

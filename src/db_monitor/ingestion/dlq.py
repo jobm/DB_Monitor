@@ -132,7 +132,7 @@ async def replay_dead_letter_event_record(
         "dlq.replay.record",
         attributes={"db_monitor.dlq_event_id": dlq_event_id},
     ):
-        async with session_factory() as session:
+        async with session_factory() as session:  # type: ignore[type-var]
             result = await session.execute(
                 select(DeadLetterEvent).where(
                     DeadLetterEvent.id == dlq_event_id
@@ -159,7 +159,7 @@ async def replay_dead_letter_event_record(
                 if inserted:
                     await _broadcast_event(replay_event)
 
-            async with session_factory() as session:
+            async with session_factory() as session:  # type: ignore[type-var]
                 async with session.begin():
                     result = await session.execute(
                         select(DeadLetterEvent).where(
@@ -191,7 +191,7 @@ async def replay_dead_letter_event_record(
                 "kafka_offset": replay_event.kafka_offset,
             }
         except Exception as exc:
-            async with session_factory() as session:
+            async with session_factory() as session:  # type: ignore[type-var]
                 async with session.begin():
                     result = await session.execute(
                         select(DeadLetterEvent).where(
@@ -210,7 +210,7 @@ async def replay_dead_letter_event_records(
     session_factory: Callable = AsyncSessionLocal,
 ) -> dict[str, object]:
     """Replay multiple persisted DLQ records through ingestion."""
-    async with session_factory() as session:
+    async with session_factory() as session:  # type: ignore[type-var]
         statement = select(DeadLetterEvent.id)
         if not include_replayed:
             statement = statement.where(

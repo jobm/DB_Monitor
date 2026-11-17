@@ -6,7 +6,12 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from typing import TYPE_CHECKING
+
 from db_monitor.ingestion.brokers import BrokerMessage
+
+if TYPE_CHECKING:
+    import aio_pika
 
 
 class RabbitMQConsumerAdapter:
@@ -24,8 +29,8 @@ class RabbitMQConsumerAdapter:
         self._connection_url = connection_url
         self._queue_names = list(queue_names)
         self._prefetch_count = prefetch_count
-        self._connection = None
-        self._channel = None
+        self._connection: aio_pika.RobustConnection | None = None
+        self._channel: aio_pika.RobustChannel | None = None
         self._consumer_tags: list[tuple[Any, str]] = []
         self._message_queue: asyncio.Queue[BrokerMessage | object] = (
             asyncio.Queue()

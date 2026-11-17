@@ -57,7 +57,7 @@ class EventPipelineConfig:
         )
 
     def _parse_list(
-        self, val: Optional[str], default: list[str] = None
+        self, val: Optional[str], default: Optional[list[str]] = None
     ) -> list[str]:
         if not val:
             return default or []
@@ -182,7 +182,8 @@ class EventPipeline:
             return event
 
         # Recursive apply mask to dicts
-        self._mask_dict(event.event_data)
+        if isinstance(event.event_data, dict):  # type: ignore[misc]
+            self._mask_dict(event.event_data)
 
         return event
 

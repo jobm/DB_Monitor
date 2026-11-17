@@ -124,7 +124,7 @@ async def process_events_batch(
     for key, column_defs in table_columns.items():
         table_id = table_id_map[key]
         if column_defs:
-            insert_col_stmt = pg_insert(MonitoredColumn).values(
+            insert_col_stmt = pg_insert(MonitoredColumn).values(  # type: ignore[attr-defined]
                 [
                     {**col, "table_id": table_id}
                     for col in column_defs
@@ -134,13 +134,13 @@ async def process_events_batch(
                 index_elements=["table_id", "column_name"],
                 set_={
                     "data_type": (
-                        insert_col_stmt.excluded.data_type
+                        insert_col_stmt.excluded.data_type  # type: ignore[attr-defined]
                     ),
                     "is_primary_key": (
-                        insert_col_stmt.excluded.is_primary_key
+                        insert_col_stmt.excluded.is_primary_key  # type: ignore[attr-defined]
                     ),
                     "is_nullable": (
-                        insert_col_stmt.excluded.is_nullable
+                        insert_col_stmt.excluded.is_nullable  # type: ignore[attr-defined]
                     ),
                 },
             )

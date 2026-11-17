@@ -13,6 +13,17 @@ from db_monitor.start_monitor.validation import _validate_manifest_payload
 logger = logging.getLogger(__name__)
 
 
+def _log_no_sources_guidance() -> None:
+    """Log a warning with guidance when no source databases are configured."""
+    logger.warning(
+        "No source databases configured. CDC ingestion will not start until "
+        "at least one source is defined in the source manifest. "
+        "See https://github.com/jobm/DB_Monitor#readme or "
+        "docs/configuration.md for how to configure your sources at "
+        "connectors/sources.json or via the CONNECTOR_SOURCES_FILE env var."
+    )
+
+
 def _read_manifest_payload(manifest_path: Path) -> dict[str, object] | None:
     """Read and validate one source manifest file."""
     try:
@@ -80,6 +91,7 @@ def _configure_topics() -> None:
             "subscription backplane.",
             CONNECTOR_MANIFEST,
         )
+        _log_no_sources_guidance()
         return
 
     topics = _derived_topics_from_manifest(CONNECTOR_MANIFEST)
@@ -91,3 +103,4 @@ def _configure_topics() -> None:
             "connectors. Starting with empty topic subscription backplane.",
             CONNECTOR_MANIFEST,
         )
+        _log_no_sources_guidance()

@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from db_monitor.core.models import MonitoredColumn
+from db_monitor.core.models import KafkaEvent, MonitoredColumn
 from db_monitor.ingestion.row_identity import extract_row_identity
 
 
 async def _populate_row_identity(
-    session: object, event_obj: object
+    session: AsyncSession, event_obj: KafkaEvent
 ) -> None:
     """Populate row identity on an event before it is inserted."""
     primary_key_columns: list[str] = []
-    if event_obj.source_table_id is not None:  # type: ignore[union-attr]
-        result = await session.execute(  # type: ignore[union-attr]
+    if event_obj.source_table_id is not None:
+        result = await session.execute(
             select(MonitoredColumn.column_name).where(
-                MonitoredColumn.table_id == event_obj.source_table_id,  # type: ignore[union-attr]
+                MonitoredColumn.table_id == event_obj.source_table_id,
                 MonitoredColumn.is_primary_key.is_(True),
             )
         )
@@ -26,15 +27,15 @@ async def _populate_row_identity(
             if column_name
         ]
 
-    event_obj.row_identity = extract_row_identity(  # type: ignore[union-attr]
-        event_obj.event_data,  # type: ignore[union-attr]
+    event_obj.row_identity = extract_row_identity(
+        event_obj.event_data,
         primary_key_columns=primary_key_columns,
     )
 
 
 async def _populate_row_identity_batch(
-    session: object,
-    events: list[object],
+    session: AsyncSession,
+    events: list[KafkaEvent],
 ) -> None:
     """Populate row identity for a batch of events in one round-trip.
 
@@ -43,14 +44,14 @@ async def _populate_row_identity_batch(
     event in memory.
     """
     table_ids: set[int] = {
-        e.source_table_id  # type: ignore[union-attr]
+        e.source_table_id
         for e in events
-        if e.source_table_id is not None  # type: ignore[union-attr]
+        if e.source_table_id is not None
     }
     if not table_ids:
         return
 
-    pk_result = await session.execute(  # type: ignore[union-attr]
+    pk_result = await session.execute(
         select(
             MonitoredColumn.table_id,
             MonitoredColumn.column_name,
@@ -65,9 +66,9 @@ async def _populate_row_identity_batch(
 
     for event_obj in events:
         pk_cols = pk_by_table.get(
-            event_obj.source_table_id, []  # type: ignore[union-attr]
+            event_obj.source_table_id, []
         )
-        event_obj.row_identity = extract_row_identity(  # type: ignore[union-attr]
-            event_obj.event_data,  # type: ignore[union-attr]
+        event_obj.row_identity = extract_row_identity(
+            event_obj.event_data,
             primary_key_columns=pk_cols,
         )

@@ -79,7 +79,7 @@ class SchemaDiscovery:
         return result
 
     async def _process_event(
-        self, event: KafkaEvent, session
+        self, event: KafkaEvent, session: object  # noqa: ANN401
     ) -> Optional[int]:
         """Process an event within an existing database session."""
         if not event.event_data:

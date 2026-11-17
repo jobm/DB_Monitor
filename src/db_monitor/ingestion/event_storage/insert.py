@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from db_monitor.core.models import KafkaEvent
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from db_monitor.core.models import KafkaEvent
 
 
 async def _insert_event_record(
-    session: object, event_obj: KafkaEvent
+    session: AsyncSession, event_obj: KafkaEvent
 ) -> bool:
     """Insert an event once, keyed by Kafka topic/partition/offset."""
     now = datetime.now(timezone.utc)
@@ -44,7 +46,7 @@ async def _insert_event_record(
         )
         .returning(KafkaEvent.id)
     )
-    result = await session.execute(insert_stmt)  # type: ignore[union-attr]
+    result = await session.execute(insert_stmt)
     inserted_id = result.scalar_one_or_none()
     if inserted_id is None:
         return False

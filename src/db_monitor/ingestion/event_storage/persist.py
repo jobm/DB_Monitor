@@ -8,6 +8,11 @@ import random
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from db_monitor.core.models import KafkaEvent
 from db_monitor.extensions import AsyncSessionLocal
 from db_monitor.ingestion.changes import ChangeProcessor
 from db_monitor.ingestion.event_storage.identity import (
@@ -15,11 +20,8 @@ from db_monitor.ingestion.event_storage.identity import (
     _populate_row_identity_batch,
 )
 from db_monitor.ingestion.event_storage.insert import _insert_event_record
-from db_monitor.core.models import KafkaEvent
 from db_monitor.metrics import db_write_duration_seconds
 from db_monitor.schema import SchemaDiscovery
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +30,8 @@ change_processor = ChangeProcessor(AsyncSessionLocal)
 
 
 async def _store_event_graph_with_retries(
-    session_factory: object,
-    event_obj: object,
+    session_factory: async_sessionmaker[AsyncSession],
+    event_obj: KafkaEvent,
     max_retries: int = 5,
 ) -> bool:
     """Persist an event and its derived records with transaction retries."""
@@ -38,16 +40,16 @@ async def _store_event_graph_with_retries(
     for attempt in range(1, max_retries + 1):
         try:
             with db_write_duration_seconds.labels(
-                operation=getattr(event_obj, "operation") or "unknown"
+                operation=event_obj.operation or "unknown"
             ).time():
-                async with session_factory() as session:  # type: ignore[call-overload]
+                async with session_factory() as session:
                     async with session.begin():
                         table_id = await schema_discovery.process_event(
                             event_obj,
                             session=session,
                         )
                         if table_id:
-                            event_obj.source_table_id = table_id  # type: ignore[union-attr]
+                            event_obj.source_table_id = table_id
 
                         await _populate_row_identity(session, event_obj)
 
@@ -88,8 +90,8 @@ async def _store_event_graph_with_retries(
 
 
 async def _store_batch_graph_with_retries(
-    session_factory: object,
-    events: list[object],
+    session_factory: async_sessionmaker[AsyncSession],
+    events: list[KafkaEvent],
     max_retries: int = 5,
 ) -> set[tuple[str | None, int | None, int | None]]:
     """Persist one batch via bulk event insert and per-event change extraction.
@@ -106,7 +108,7 @@ async def _store_batch_graph_with_retries(
             with db_write_duration_seconds.labels(
                 operation="BATCH"
             ).time():
-                async with session_factory() as session:  # type: ignore[call-overload]
+                async with session_factory() as session:
                     async with session.begin():
                         table_id_map = (
                             await schema_discovery.process_events_batch(
@@ -115,14 +117,14 @@ async def _store_batch_graph_with_retries(
                             )
                         )
                         for event_obj in events:
-                            event_obj.source_table_id = table_id_map.get(  # type: ignore[union-attr]
+                            event_obj.source_table_id = table_id_map.get(
                                 id(event_obj)
                             )
 
                         await _populate_row_identity_batch(session, events)
 
                         now = datetime.now(timezone.utc)
-                        values = [
+                        values: list[dict[str, object]] = [
                             {
                                 "event_type": event_obj.event_type,
                                 "event_time": event_obj.event_time,
@@ -154,7 +156,7 @@ async def _store_batch_graph_with_retries(
                             for event_obj in events
                         ]
                         insert_stmt = (
-                            pg_insert(KafkaEvent)  # type: ignore[unused-ignore]
+                            pg_insert(KafkaEvent)
                             .values(values)
                             .on_conflict_do_nothing(
                                 index_elements=[
@@ -165,44 +167,37 @@ async def _store_batch_graph_with_retries(
                                 ]
                             )
                             .returning(
-                                KafkaEvent.id,  # type: ignore[unused-ignore]
-                                KafkaEvent.kafka_topic,  # type: ignore[unused-ignore]
-                                KafkaEvent.kafka_partition,  # type: ignore[unused-ignore]
-                                KafkaEvent.kafka_offset,  # type: ignore[unused-ignore]
+                                KafkaEvent.id,
+                                KafkaEvent.kafka_topic,
+                                KafkaEvent.kafka_partition,
+                                KafkaEvent.kafka_offset,
                             )
                         )
 
                         result = await session.execute(insert_stmt)
                         inserted_rows = result.all()
-                        inserted_lookup = {
-                            (
-                                row.kafka_topic,
-                                row.kafka_partition,
-                                row.kafka_offset,
-                            ): row.id
-                            for row in inserted_rows
-                        }
+                        inserted_lookup: dict[
+                            tuple[str | None, int | None, int | None], int | None
+                        ] = {}
+                        for row in inserted_rows:
+                            row_id: int | None = row.id
+                            inserted_lookup[
+                                (row.kafka_topic, row.kafka_partition, row.kafka_offset)
+                            ] = row_id
 
-                        inserted_keys = set(inserted_lookup.keys())
+                        inserted_keys: set[tuple[str | None, int | None, int | None]] = set()
+                        for event_obj in events:
+                            key = (event_obj.kafka_topic, event_obj.kafka_partition, event_obj.kafka_offset)
+                            if key in inserted_lookup:
+                                inserted_keys.add(key)
 
                         inserted_events = [
-                            e
-                            for e in events
-                            if (
-                                e.kafka_topic,
-                                e.kafka_partition,
-                                e.kafka_offset,
-                            )
-                            in inserted_keys
+                            e for e in events
+                            if (e.kafka_topic, e.kafka_partition, e.kafka_offset) in inserted_keys
                         ]
                         for event_obj in inserted_events:
-                            inserted_id = inserted_lookup.get(
-                                (
-                                    event_obj.kafka_topic,
-                                    event_obj.kafka_partition,
-                                    event_obj.kafka_offset,
-                                )
-                            )
+                            key = (event_obj.kafka_topic, event_obj.kafka_partition, event_obj.kafka_offset)
+                            inserted_id = inserted_lookup.get(key)
                             if inserted_id is not None:
                                 event_obj.id = inserted_id
 
