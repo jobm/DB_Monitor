@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from db_monitor.core.config.dataclasses.auth_settings import AuthSettings
+from db_monitor.core.config.dataclasses.backplane import BackplaneSettings
 from db_monitor.core.config.dataclasses.db import DatabaseSettings
 from db_monitor.core.config.dataclasses.ingestion import IngestionSettings
 from db_monitor.core.config.dataclasses.observability import ObservabilitySettings
@@ -57,6 +58,8 @@ class AppSettings:
     """Tracing, metrics, and audit-log buffer settings."""
     retention: RetentionSettings = field(default_factory=RetentionSettings)
     """Data-retention policy settings."""
+    backplane: BackplaneSettings = field(default_factory=BackplaneSettings)
+    """Cross-replica pub/sub backplane (Postgres LISTEN/NOTIFY or Redis)."""
     ingestion: IngestionSettings = field(default_factory=IngestionSettings)
     """Ingestion quota and bulk-write settings."""
 

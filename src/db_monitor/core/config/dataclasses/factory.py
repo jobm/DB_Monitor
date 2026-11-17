@@ -18,6 +18,7 @@ from db_monitor.core.config.normalizers import (
 )
 from db_monitor.core.config.dataclasses.broker import BrokerSettings
 from db_monitor.core.config.dataclasses.auth_settings import AuthSettings
+from db_monitor.core.config.dataclasses.backplane import BackplaneSettings
 from db_monitor.core.config.dataclasses.db import DatabaseSettings
 from db_monitor.core.config.dataclasses.ingestion import IngestionSettings
 from db_monitor.core.config.dataclasses.observability import ObservabilitySettings
@@ -34,6 +35,7 @@ def _build_settings_from_env():
     db = DatabaseSettings()
     broker = BrokerSettings()
     auth = AuthSettings()
+    backplane = BackplaneSettings()
     webhook = WebhookSettings()
     observability = ObservabilitySettings()
     retention = RetentionSettings()
@@ -108,6 +110,7 @@ def _build_settings_from_env():
         db=db,
         broker=broker,
         auth=auth,
+        backplane=backplane,
         webhook=webhook,
         observability=observability,
         retention=retention,
