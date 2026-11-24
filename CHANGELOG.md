@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tenant-cohort SLOs:**
+  - `docs/runbooks/slo-and-error-budgets.md`: published availability and
+    freshness targets, error budgets, metric mapping, and cohort assignment
+  - `db_monitor_slo` Prometheus rule group: SLI recording rules plus per-cohort
+    burn-rate, lag, and dead-letter alerts
+  - `cohort` scrape label in the monitoring stack, documented as the cell's
+    SLO cohort
 - **Documentation overhaul (Workstream F):**
   - Architecture Decision Records in `docs/adr/`: consolidation, RabbitMQ
     support, quota throttle design, WebSocket token TTL

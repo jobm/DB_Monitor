@@ -57,18 +57,6 @@ python scripts/scale_test.py --rate 5000 --duration 300
 
 ---
 
-## P1 — This Cycle
-
-### OPS-1. Publish SLO targets and error budgets per tenant cohort
-
-Settings exist (`SLO_ROLLING_WINDOW_DAYS`, `TENANT_COHORT_SLO_POLICIES`) and are
-validated, but no targets, error budgets, or alert wiring are published.
-
-**Done when:** each cohort has documented target values, a mapping to the
-metrics that evaluate them, and alert rules that fire on budget burn.
-
----
-
 ## P2 — Architecture Cleanup
 
 Ordered by risk, lowest first. Each item preserves the public import surface

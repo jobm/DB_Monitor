@@ -14,3 +14,7 @@ scrape_configs:
   - job_name: 'db_monitor'
     static_configs:
       - targets: ['monitor-server:8000']
+        # SLO cohort for this cell; see docs/runbooks/slo-and-error-budgets.md.
+        # Change to medium or large when provisioning a larger cell.
+        labels:
+          cohort: small

@@ -99,3 +99,284 @@ groups:
         annotations:
           summary: "Audit log replay failures are sustained"
           description: "DB Monitor is seeing sustained replay failures. Check that api_audit_logs table exists and the spill entry data is well-formed."
+
+  - name: db_monitor_slo
+    interval: 30s
+    rules:
+      - record: db_monitor:sli_ingestion_success:ratio_5m
+        expr: |
+          sum by (cohort) (rate(db_monitor_events_processed_total[5m]))
+          /
+          clamp_min(
+            sum by (cohort) (rate(db_monitor_events_processed_total[5m]))
+            + (
+                sum by (cohort) (rate(db_monitor_events_failed_total[5m]))
+                or sum by (cohort) (rate(db_monitor_events_processed_total[5m])) * 0
+              ),
+            1e-9
+          )
+      - record: db_monitor:sli_ingestion_success:ratio_30m
+        expr: |
+          sum by (cohort) (rate(db_monitor_events_processed_total[30m]))
+          /
+          clamp_min(
+            sum by (cohort) (rate(db_monitor_events_processed_total[30m]))
+            + (
+                sum by (cohort) (rate(db_monitor_events_failed_total[30m]))
+                or sum by (cohort) (rate(db_monitor_events_processed_total[30m])) * 0
+              ),
+            1e-9
+          )
+      - record: db_monitor:sli_ingestion_success:ratio_1h
+        expr: |
+          sum by (cohort) (rate(db_monitor_events_processed_total[1h]))
+          /
+          clamp_min(
+            sum by (cohort) (rate(db_monitor_events_processed_total[1h]))
+            + (
+                sum by (cohort) (rate(db_monitor_events_failed_total[1h]))
+                or sum by (cohort) (rate(db_monitor_events_processed_total[1h])) * 0
+              ),
+            1e-9
+          )
+      - record: db_monitor:sli_ingestion_success:ratio_6h
+        expr: |
+          sum by (cohort) (rate(db_monitor_events_processed_total[6h]))
+          /
+          clamp_min(
+            sum by (cohort) (rate(db_monitor_events_processed_total[6h]))
+            + (
+                sum by (cohort) (rate(db_monitor_events_failed_total[6h]))
+                or sum by (cohort) (rate(db_monitor_events_processed_total[6h])) * 0
+              ),
+            1e-9
+          )
+      - record: db_monitor:consumer_staleness_seconds
+        expr: |
+          (
+            time() - db_monitor_consumer_last_successful_commit_timestamp_seconds
+          )
+          and on()
+          db_monitor_consumer_last_successful_commit_timestamp_seconds > 0
+      - alert: IngestionAvailabilityBudgetBurnFast
+        expr: |
+          (1 - db_monitor:sli_ingestion_success:ratio_1h{cohort="small"}) / 0.001 > 14.4
+          and
+          (1 - db_monitor:sli_ingestion_success:ratio_5m{cohort="small"}) / 0.001 > 14.4
+        for: 2m
+        labels:
+          severity: critical
+          cohort: small
+          slo: ingestion_availability
+        annotations:
+          summary: "small cohort is burning its availability budget fast"
+          description: "Ingestion availability for the small cohort (target 99.9%, error budget 0.1%) is consuming more than 14.4x its budget over the last hour. At this rate the 30-day budget is spent in about 50 hours. Break down db_monitor_events_failed_total by service and check broker health and the consumer circuit breaker."
+      - alert: IngestionAvailabilityBudgetBurnSlow
+        expr: |
+          (1 - db_monitor:sli_ingestion_success:ratio_6h{cohort="small"}) / 0.001 > 6
+          and
+          (1 - db_monitor:sli_ingestion_success:ratio_30m{cohort="small"}) / 0.001 > 6
+        for: 5m
+        labels:
+          severity: warning
+          cohort: small
+          slo: ingestion_availability
+        annotations:
+          summary: "small cohort availability budget is burning steadily"
+          description: "Ingestion availability for the small cohort (target 99.9%) has been consuming more than 6x its budget for six hours. At this rate the 30-day budget is spent in about five days. Identify whether failures are tenant-specific or ingestion-wide before the fast-burn alert triggers."
+      - alert: FreshnessBudgetBurnFast
+        expr: |
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="small"} <= bool 180)[1h:1m])) / 0.001 > 14.4
+          and
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="small"} <= bool 180)[5m:1m])) / 0.001 > 14.4
+        for: 2m
+        labels:
+          severity: critical
+          cohort: small
+          slo: freshness
+        annotations:
+          summary: "small cohort is burning its freshness budget fast"
+          description: "The small cohort is outside its 180s commit-freshness limit more than 14.4x the allowed rate over the last hour. At this rate the 30-day budget is spent in about 50 hours. Check consumer lag, last commit age, and whether the consumer is blocked on database writes."
+      - alert: FreshnessBudgetBurnSlow
+        expr: |
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="small"} <= bool 180)[6h:1m])) / 0.001 > 6
+          and
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="small"} <= bool 180)[30m:1m])) / 0.001 > 6
+        for: 5m
+        labels:
+          severity: warning
+          cohort: small
+          slo: freshness
+        annotations:
+          summary: "small cohort freshness budget is burning steadily"
+          description: "The small cohort has been outside its 180s commit-freshness limit more than 6x the allowed rate for six hours. Check for periodic stalls such as schema discovery bursts, checkpoint contention, or broker rebalances."
+      - alert: ConsumerLagAboveCohortLimit
+        expr: |
+          max by (cohort) (db_monitor_consumer_lag{cohort="small"}) > 500
+        for: 5m
+        labels:
+          severity: warning
+          cohort: small
+          slo: backlog
+        annotations:
+          summary: "small cohort lag exceeds its published limit"
+          description: "At least one partition in the small cohort has lag above the published 500 limit for five minutes. Compare against db_monitor_consumer_commit_lag to separate unconsumed backlog from uncommitted progress."
+      - alert: DeadLetterAboveCohortLimit
+        expr: |
+          db_monitor_dlq_records_pending{cohort="small"} > 0
+        for: 5m
+        labels:
+          severity: warning
+          cohort: small
+          slo: dead_letter
+        annotations:
+          summary: "small cohort dead-letter backlog exceeds its published limit"
+          description: "The small cohort has more than 0 persisted dead-letter records for five minutes. Follow the replay procedure in the recovery runbook only after the underlying failure cause is understood."
+      - alert: IngestionAvailabilityBudgetBurnFast
+        expr: |
+          (1 - db_monitor:sli_ingestion_success:ratio_1h{cohort="medium"}) / 0.005 > 14.4
+          and
+          (1 - db_monitor:sli_ingestion_success:ratio_5m{cohort="medium"}) / 0.005 > 14.4
+        for: 2m
+        labels:
+          severity: critical
+          cohort: medium
+          slo: ingestion_availability
+        annotations:
+          summary: "medium cohort is burning its availability budget fast"
+          description: "Ingestion availability for the medium cohort (target 99.5%, error budget 0.5%) is consuming more than 14.4x its budget over the last hour. At this rate the 30-day budget is spent in about 50 hours. Break down db_monitor_events_failed_total by service and check broker health and the consumer circuit breaker."
+      - alert: IngestionAvailabilityBudgetBurnSlow
+        expr: |
+          (1 - db_monitor:sli_ingestion_success:ratio_6h{cohort="medium"}) / 0.005 > 6
+          and
+          (1 - db_monitor:sli_ingestion_success:ratio_30m{cohort="medium"}) / 0.005 > 6
+        for: 5m
+        labels:
+          severity: warning
+          cohort: medium
+          slo: ingestion_availability
+        annotations:
+          summary: "medium cohort availability budget is burning steadily"
+          description: "Ingestion availability for the medium cohort (target 99.5%) has been consuming more than 6x its budget for six hours. At this rate the 30-day budget is spent in about five days. Identify whether failures are tenant-specific or ingestion-wide before the fast-burn alert triggers."
+      - alert: FreshnessBudgetBurnFast
+        expr: |
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="medium"} <= bool 300)[1h:1m])) / 0.005 > 14.4
+          and
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="medium"} <= bool 300)[5m:1m])) / 0.005 > 14.4
+        for: 2m
+        labels:
+          severity: critical
+          cohort: medium
+          slo: freshness
+        annotations:
+          summary: "medium cohort is burning its freshness budget fast"
+          description: "The medium cohort is outside its 300s commit-freshness limit more than 14.4x the allowed rate over the last hour. At this rate the 30-day budget is spent in about 50 hours. Check consumer lag, last commit age, and whether the consumer is blocked on database writes."
+      - alert: FreshnessBudgetBurnSlow
+        expr: |
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="medium"} <= bool 300)[6h:1m])) / 0.005 > 6
+          and
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="medium"} <= bool 300)[30m:1m])) / 0.005 > 6
+        for: 5m
+        labels:
+          severity: warning
+          cohort: medium
+          slo: freshness
+        annotations:
+          summary: "medium cohort freshness budget is burning steadily"
+          description: "The medium cohort has been outside its 300s commit-freshness limit more than 6x the allowed rate for six hours. Check for periodic stalls such as schema discovery bursts, checkpoint contention, or broker rebalances."
+      - alert: ConsumerLagAboveCohortLimit
+        expr: |
+          max by (cohort) (db_monitor_consumer_lag{cohort="medium"}) > 1000
+        for: 5m
+        labels:
+          severity: warning
+          cohort: medium
+          slo: backlog
+        annotations:
+          summary: "medium cohort lag exceeds its published limit"
+          description: "At least one partition in the medium cohort has lag above the published 1000 limit for five minutes. Compare against db_monitor_consumer_commit_lag to separate unconsumed backlog from uncommitted progress."
+      - alert: DeadLetterAboveCohortLimit
+        expr: |
+          db_monitor_dlq_records_pending{cohort="medium"} > 5
+        for: 5m
+        labels:
+          severity: warning
+          cohort: medium
+          slo: dead_letter
+        annotations:
+          summary: "medium cohort dead-letter backlog exceeds its published limit"
+          description: "The medium cohort has more than 5 persisted dead-letter records for five minutes. Follow the replay procedure in the recovery runbook only after the underlying failure cause is understood."
+      - alert: IngestionAvailabilityBudgetBurnFast
+        expr: |
+          (1 - db_monitor:sli_ingestion_success:ratio_1h{cohort="large"}) / 0.01 > 14.4
+          and
+          (1 - db_monitor:sli_ingestion_success:ratio_5m{cohort="large"}) / 0.01 > 14.4
+        for: 2m
+        labels:
+          severity: critical
+          cohort: large
+          slo: ingestion_availability
+        annotations:
+          summary: "large cohort is burning its availability budget fast"
+          description: "Ingestion availability for the large cohort (target 99.0%, error budget 1.0%) is consuming more than 14.4x its budget over the last hour. At this rate the 30-day budget is spent in about 50 hours. Break down db_monitor_events_failed_total by service and check broker health and the consumer circuit breaker."
+      - alert: IngestionAvailabilityBudgetBurnSlow
+        expr: |
+          (1 - db_monitor:sli_ingestion_success:ratio_6h{cohort="large"}) / 0.01 > 6
+          and
+          (1 - db_monitor:sli_ingestion_success:ratio_30m{cohort="large"}) / 0.01 > 6
+        for: 5m
+        labels:
+          severity: warning
+          cohort: large
+          slo: ingestion_availability
+        annotations:
+          summary: "large cohort availability budget is burning steadily"
+          description: "Ingestion availability for the large cohort (target 99.0%) has been consuming more than 6x its budget for six hours. At this rate the 30-day budget is spent in about five days. Identify whether failures are tenant-specific or ingestion-wide before the fast-burn alert triggers."
+      - alert: FreshnessBudgetBurnFast
+        expr: |
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="large"} <= bool 600)[1h:1m])) / 0.01 > 14.4
+          and
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="large"} <= bool 600)[5m:1m])) / 0.01 > 14.4
+        for: 2m
+        labels:
+          severity: critical
+          cohort: large
+          slo: freshness
+        annotations:
+          summary: "large cohort is burning its freshness budget fast"
+          description: "The large cohort is outside its 600s commit-freshness limit more than 14.4x the allowed rate over the last hour. At this rate the 30-day budget is spent in about 50 hours. Check consumer lag, last commit age, and whether the consumer is blocked on database writes."
+      - alert: FreshnessBudgetBurnSlow
+        expr: |
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="large"} <= bool 600)[6h:1m])) / 0.01 > 6
+          and
+          (1 - avg_over_time((db_monitor:consumer_staleness_seconds{cohort="large"} <= bool 600)[30m:1m])) / 0.01 > 6
+        for: 5m
+        labels:
+          severity: warning
+          cohort: large
+          slo: freshness
+        annotations:
+          summary: "large cohort freshness budget is burning steadily"
+          description: "The large cohort has been outside its 600s commit-freshness limit more than 6x the allowed rate for six hours. Check for periodic stalls such as schema discovery bursts, checkpoint contention, or broker rebalances."
+      - alert: ConsumerLagAboveCohortLimit
+        expr: |
+          max by (cohort) (db_monitor_consumer_lag{cohort="large"}) > 5000
+        for: 5m
+        labels:
+          severity: warning
+          cohort: large
+          slo: backlog
+        annotations:
+          summary: "large cohort lag exceeds its published limit"
+          description: "At least one partition in the large cohort has lag above the published 5000 limit for five minutes. Compare against db_monitor_consumer_commit_lag to separate unconsumed backlog from uncommitted progress."
+      - alert: DeadLetterAboveCohortLimit
+        expr: |
+          db_monitor_dlq_records_pending{cohort="large"} > 20
+        for: 5m
+        labels:
+          severity: warning
+          cohort: large
+          slo: dead_letter
+        annotations:
+          summary: "large cohort dead-letter backlog exceeds its published limit"
+          description: "The large cohort has more than 20 persisted dead-letter records for five minutes. Follow the replay procedure in the recovery runbook only after the underlying failure cause is understood."

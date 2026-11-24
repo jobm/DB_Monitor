@@ -17,6 +17,22 @@ and the first operator actions for each alert.
 - `FailedAuthAttemptsSpike`: failed authentication attempts above `5/min`
   sustained for `5m`.
 
+## Tenant Cohort SLO Alerts
+
+The thresholds above guard `/readyz` and shared capacity. The cohort SLO alerts
+in the `db_monitor_slo` rule group guard the published objectives instead, and
+fire on error-budget burn rather than a fixed reading:
+
+- `IngestionAvailabilityBudgetBurnFast` / `Slow`
+- `FreshnessBudgetBurnFast` / `Slow`
+- `ConsumerLagAboveCohortLimit`
+- `DeadLetterAboveCohortLimit`
+
+Targets, budget maths, and response steps are in
+[SLO Targets And Error Budgets](slo-and-error-budgets.md). Cohort thresholds
+override the matching global threshold for the same cell, so an alert page
+naming a cohort is the one to act on.
+
 ## Threshold Rationale
 
 The current API latency threshold is intentionally set above the observed mixed

@@ -283,6 +283,10 @@ fanout.
 | `SLO_ROLLING_WINDOW_DAYS` | ⚙️ Rolling window used for SLO/error budget tracking | `30` |
 | `TENANT_COHORT_SLO_POLICIES` | ⚙️ JSON array of cohort SLO/error-budget policy objects | built-in small/medium/large defaults |
 
+The published targets, error budgets, metric mapping, and burn-rate alerts are
+documented in
+[SLO Targets and Error Budgets](runbooks/slo-and-error-budgets.md).
+
 Policy object fields:
 
 - `name`: cohort label such as `small`, `medium`, `large`

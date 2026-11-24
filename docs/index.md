@@ -34,6 +34,7 @@ state lookups, and realtime notifications.
 | Runbook | Description |
 |---------|-------------|
 | [Alerts and Thresholds](runbooks/alerts-and-thresholds.md) | Alert meanings and first actions |
+| [SLO Targets and Error Budgets](runbooks/slo-and-error-budgets.md) | Cohort objectives, budgets, and burn-rate alerts |
 | [Recovery and Validation](runbooks/recovery-and-validation.md) | Checkpoint, DLQ replay, and post-deploy validation |
 | [Ingestion Throughput](benchmarks/ingestion-throughput.md) | Benchmark methodology |
 | [Benchmark Results](benchmarks/README.md) | Recorded throughput results |

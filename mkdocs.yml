@@ -64,6 +64,7 @@ nav:
       - Troubleshooting: troubleshooting.md
       - Runbooks:
           - Alerts & Thresholds: runbooks/alerts-and-thresholds.md
+          - SLO Targets & Error Budgets: runbooks/slo-and-error-budgets.md
           - Recovery & Validation: runbooks/recovery-and-validation.md
       - Pre-v1 Tenant Isolation: pre-v1-tenant-isolation-strategy.md
       - Benchmarks: benchmarks/ingestion-throughput.md
