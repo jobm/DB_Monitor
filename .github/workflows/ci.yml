@@ -38,6 +38,27 @@ jobs:
       - name: mypy typecheck
         run: uv run --group dev python -m mypy
 
+  docs:
+    name: Docs build (strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: latest
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        run: uv python pin ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: uv sync --group dev --frozen
+
+      - name: Build docs (strict)
+        run: uv run --group dev mkdocs build --strict
+
   test-core:
     name: Core tests
     runs-on: ubuntu-latest
