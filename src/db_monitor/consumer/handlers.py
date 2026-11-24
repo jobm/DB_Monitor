@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from db_monitor.core.models import KafkaEvent
+from db_monitor.ingestion.brokers import BrokerMessage
 from db_monitor.ingestion.quota import QuotaDecision
 from db_monitor.ingestion.runtime_state import (
     CircuitBreaker as RuntimeCircuitBreaker,
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 async def _handle_filtered_event(
     *,
     event: KafkaEvent,
-    msg: object,
+    msg: BrokerMessage,
     runtime: dict[str, object],
     cluster_name: str,
     consumer_group: str,
@@ -46,7 +47,7 @@ async def _handle_filtered_event(
 async def _handle_quota_dropped_event(
     *,
     event: KafkaEvent,
-    msg: object,
+    msg: BrokerMessage,
     quota_decision: QuotaDecision,
     runtime: dict[str, object],
     cluster_name: str,

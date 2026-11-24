@@ -17,7 +17,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from db_monitor.core.migrations import MIGRATIONS, Migration
+from db_monitor.core.migrations import MIGRATIONS
 from db_monitor.core.models import Base
 
 

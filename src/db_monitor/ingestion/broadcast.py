@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 import logging
 
 from db_monitor.core.models import KafkaEvent
@@ -58,7 +59,9 @@ async def _broadcast_event(event: KafkaEvent) -> None:
         logger.warning("Failed to broadcast event via WebSocket: %s", e)
 
     try:
-        failed_deliveries = await webhook_notifier.send_message(payload)
+        failed_deliveries = await webhook_notifier.send_message(
+            cast(dict[str, object], payload)
+        )
     except Exception as exc:
         logger.warning("Failed to deliver event via webhook: %s", exc)
         return

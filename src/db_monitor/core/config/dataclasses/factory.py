@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from db_monitor.core.config.dataclasses.core import AppSettings
 import ssl
 
 from db_monitor.core.config_loader import (
@@ -27,7 +31,7 @@ from db_monitor.core.config.dataclasses.webhook import WebhookSettings
 from db_monitor.core.config.dataclasses.validation import _validate_app_settings
 
 
-def _build_settings_from_env():
+def _build_settings_from_env() -> "AppSettings":
     """Load and validate all settings from environment variables once."""
     from db_monitor.core.config.dataclasses.core import AppSettings
     env = os.getenv("APP_ENV", "development").lower()
@@ -44,8 +48,9 @@ def _build_settings_from_env():
     # --- Populate computed fields on sub-settings ---
 
     # DB schema mode (supports DB_SCHEMA_MODE_FILE for Docker/K8s secrets)
-    db_schema_mode = get_env_or_file(
-        "DB_SCHEMA_MODE", default_schema_mode(env)
+    db_schema_mode = cast(
+        str,
+        get_env_or_file("DB_SCHEMA_MODE", default_schema_mode(env)),
     ).lower()
 
     # Broker computed fields

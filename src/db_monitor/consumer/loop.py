@@ -7,10 +7,10 @@ import logging
 
 from db_monitor.core.config import settings
 from db_monitor.core.models import KafkaEvent
-from db_monitor.ingestion.brokers import DeadLetterPublisher
+from db_monitor.ingestion.brokers import BrokerMessage, DeadLetterPublisher
 from db_monitor.ingestion.event_parser import parse_event_payload
 from db_monitor.ingestion.event_pipeline import event_pipeline
-from db_monitor.ingestion.quota import QuotaDecision, quota_limiter
+from db_monitor.ingestion.quota import quota_limiter
 from db_monitor.ingestion.recovery import _get_canonical_service_name
 from db_monitor.ingestion.runtime_state import (
     CircuitBreaker as RuntimeCircuitBreaker,
@@ -20,7 +20,6 @@ from db_monitor.ingestion.runtime_state import (
 )
 from db_monitor.metrics import (
     events_consumed_total,
-    ingestion_quota_dropped_total,
     ingestion_quota_sleep_seconds,
     ingestion_quota_throttled_total,
 )
@@ -51,11 +50,11 @@ async def _message_loop(
     breaker: RuntimeCircuitBreaker,
 ) -> None:
     """Process messages from the consumer in a loop with batching support."""
-    batch: list[tuple[KafkaEvent, str, object]] = []
+    batch: list[tuple[KafkaEvent, str, BrokerMessage]] = []
     batch_timeout = 5.0
     last_batch_time: float = 0.0
 
-    async for msg in consumer:  # type: ignore[union-attr,type-var]
+    async for msg in consumer:  # type: ignore[union-attr,type-var,attr-defined]
         if not breaker.can_execute():
             logger.warning(
                 "Circuit breaker open for cluster '%s', skipping message processing",
@@ -164,7 +163,7 @@ async def _message_loop(
                     if len(batch) >= batch_size or batch_elapsed >= batch_timeout:
                         batch_processed = await _process_batch(
                             batch,
-                            consumer.ack_batch,  # type: ignore[union-attr]
+                            consumer.ack_batch,  # type: ignore[union-attr,attr-defined]
                             dlq_publisher,
                             dlq_destination,
                             enable_dlq,
@@ -240,7 +239,7 @@ async def _message_loop(
     if batch:
         batch_processed = await _process_batch(
             batch,
-            consumer.ack_batch,  # type: ignore[union-attr]
+            consumer.ack_batch,  # type: ignore[union-attr,attr-defined]
             dlq_publisher,
             dlq_destination,
             enable_dlq,

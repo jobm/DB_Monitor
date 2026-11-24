@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import secrets
+from typing import cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlalchemy import select
 
 from db_monitor.auth import (
     build_api_key_expiration,
@@ -24,7 +24,6 @@ from db_monitor.routes.auth.helpers import (
     _persist_customer_jwt_state,
     _require_customer_scope,
     _row_to_customer_jwt_state,
-    _secret_fingerprint,
     _serialize_customer_jwt_state,
     _sync_customer_jwt_state_cache,
     _utc_now_iso,
@@ -40,7 +39,8 @@ def _require_creator_customer_scope(
     customer_scope: str,
 ) -> None:
     """Prevent a tenant-scoped admin from managing another customer."""
-    ensure_customer_tenant_scope(creator_api_key, customer_scope)
+    if creator_api_key is not None:
+        ensure_customer_tenant_scope(creator_api_key, customer_scope)
 
 
 @router.post("/admin/customers/{customer_id}/auth/bootstrap")
@@ -69,7 +69,7 @@ async def bootstrap_customer_auth_scope(
     key_hash = get_api_key_hash(raw_key)
     expires_at = build_api_key_expiration(ttl_days)
 
-    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         async with session.begin():
             new_key = ApiKey(
                 key_hash=key_hash,
@@ -136,7 +136,7 @@ async def get_customer_jwt_state(
         normalized_customer_id,
     )
 
-    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         record = await _load_customer_jwt_state_row(
             session,
             normalized_customer_id,
@@ -179,7 +179,7 @@ async def rotate_customer_jwt_secrets(
     """Rotate JWT active/next secret material for one customer scope."""
     scope = _require_customer_scope(customer_id, customer_header)
     _require_creator_customer_scope(creator_api_key, scope)
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         async with session.begin():
             record = await _load_customer_jwt_state_row(session, scope)
             if record is None:
@@ -211,7 +211,9 @@ async def rotate_customer_jwt_secrets(
             state["previous_active_secret"] = previous_active_secret
             state["active_secret"] = promoted_secret
             state["next_secret"] = secrets.token_urlsafe(48)
-            state["generation"] = int(state.get("generation") or 0) + 1
+            state["generation"] = (
+                int(cast(int, state.get("generation") or 0)) + 1
+            )
             state["last_rotated_at"] = _utc_now_iso()
             _append_jwt_audit(
                 state,
@@ -240,7 +242,7 @@ async def recover_customer_jwt_secrets(
     """Recover prior active JWT secret material for one customer scope."""
     scope = _require_customer_scope(customer_id, customer_header)
     _require_creator_customer_scope(creator_api_key, scope)
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         async with session.begin():
             record = await _load_customer_jwt_state_row(session, scope)
             if record is None:

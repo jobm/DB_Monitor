@@ -4,7 +4,7 @@ import importlib
 import logging
 import os
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from db_monitor.core.models import KafkaEvent
 from db_monitor.ingestion.source_metadata import extract_source_coordinates
@@ -94,7 +94,7 @@ class EventPipelineConfig:
                 f"'{reference}'. Expected a callable processor reference."
             )
 
-        return processor
+        return cast(EventProcessor, processor)
 
     def _split_processor_reference(self, reference: str) -> tuple[str, str]:
         """Split `module:function` or `module.function` references."""

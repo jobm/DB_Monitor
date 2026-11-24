@@ -7,7 +7,6 @@ operations to compatibility adapters while namespace migration is in progress.
 from __future__ import annotations
 
 import argparse
-import sys
 from collections.abc import Sequence
 
 from db_monitor.start_monitor import main as run_legacy_server

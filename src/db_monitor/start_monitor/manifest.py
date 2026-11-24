@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import cast
 
 from db_monitor.start_monitor.paths import CONNECTOR_MANIFEST
 from db_monitor.start_monitor.validation import _validate_manifest_payload
@@ -27,7 +28,7 @@ def _log_no_sources_guidance() -> None:
 def _read_manifest_payload(manifest_path: Path) -> dict[str, object] | None:
     """Read and validate one source manifest file."""
     try:
-        raw_payload = json.loads(manifest_path.read_text())
+        raw_payload: object = json.loads(manifest_path.read_text())
     except json.JSONDecodeError as exc:
         logger.warning(
             "Source manifest is not valid JSON at %s: %s. "
@@ -47,7 +48,7 @@ def _read_manifest_payload(manifest_path: Path) -> dict[str, object] | None:
         )
         return None
 
-    return raw_payload
+    return cast(dict[str, object], raw_payload)
 
 
 def _derived_topics_from_manifest(manifest_path: Path) -> list[str]:
@@ -60,7 +61,10 @@ def _derived_topics_from_manifest(manifest_path: Path) -> list[str]:
         return []
 
     topics: list[str] = []
-    for connector in payload.get("connectors", []):
+    connectors = cast(list[object], payload.get("connectors", []))
+    for connector in connectors:
+        if not isinstance(connector, dict):
+            continue
         if not connector.get("enabled", True):
             continue
 

@@ -49,24 +49,25 @@ def test_events_model_has_unique_constraint_for_on_conflict() -> None:
             )
 
 
-# ── Sandbox tests (require a live PostgreSQL + app stack) ───────────
+# ── Live PostgreSQL tests ─────────────────────────────────────────────
 #
-# These are skipped automatically by conftest.py when the live stack
-# is unavailable.
+# These only require a reachable PostgreSQL server. The fixture creates a
+# temporary database and applies every migration so the checks run without
+# the full sandbox stack.
 
 
-@pytest.mark.sandbox
+@pytest.mark.slow
 @pytest.mark.anyio
-async def test_pg_constraint_is_unique_type() -> None:
+async def test_pg_constraint_is_unique_type(
+    migrated_postgres_url: str,
+) -> None:
     """After migration 0015 the events table must have a unique
     CONSTRAINT (contype='u') rather than just a unique INDEX.
     """
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from db_monitor.core.config import settings
-
-    engine = create_async_engine(settings.db.postgres_url)
+    engine = create_async_engine(migrated_postgres_url)
     try:
         async with engine.connect() as conn:
             result = await conn.execute(
@@ -96,9 +97,11 @@ async def test_pg_constraint_is_unique_type() -> None:
     )
 
 
-@pytest.mark.sandbox
+@pytest.mark.slow
 @pytest.mark.anyio
-async def test_on_conflict_insert_succeeds_on_partitioned_events() -> None:
+async def test_on_conflict_insert_succeeds_on_partitioned_events(
+    migrated_postgres_url: str,
+) -> None:
     """INSERT … ON CONFLICT DO NOTHING must succeed on the partitioned
     events table.
 
@@ -111,12 +114,10 @@ async def test_on_conflict_insert_succeeds_on_partitioned_events() -> None:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from db_monitor.core.config import settings
-
     now = datetime.now(timezone.utc)
     kafka_offset = 999_999_999
 
-    engine = create_async_engine(settings.db.postgres_url)
+    engine = create_async_engine(migrated_postgres_url)
     try:
         async with engine.begin() as conn:
             # First insert — should succeed.

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import weakref
+from typing import Any
 
-_registered_schema_discoveries = weakref.WeakSet()
+_registered_schema_discoveries: weakref.WeakSet[Any] = weakref.WeakSet()
 
 
 def _invalidate_registered_schema_caches(

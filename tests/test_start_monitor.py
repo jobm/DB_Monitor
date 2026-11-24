@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import signal
 from typing import Any, Callable
@@ -59,7 +60,7 @@ def test_configure_topics_preserves_explicit_env(
 
     start_monitor._configure_topics()
 
-    assert start_monitor.os.environ["KAFKA_TOPICS"] == "manual.topic"
+    assert os.environ["KAFKA_TOPICS"] == "manual.topic"
 
 
 def test_derived_topics_from_manifest_handles_malformed_json(

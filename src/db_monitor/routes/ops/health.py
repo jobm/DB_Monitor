@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
@@ -27,10 +29,10 @@ def readiness_payload() -> dict[str, object]:
     consumer_health = get_consumer_health()
 
     last_commit_age_seconds = timestamp_age_seconds(
-        consumer_health.get("last_commit_at")
+        cast(str | None, consumer_health.get("last_commit_at"))
     )
-    lag_total = int(consumer_health.get("lag_total") or 0)
-    dlq_total = int(consumer_health.get("dlq_messages_total") or 0)
+    lag_total = int(cast(int, consumer_health.get("lag_total") or 0))
+    dlq_total = int(cast(int, consumer_health.get("dlq_messages_total") or 0))
 
     consumer_ready = bool(
         consumer_health.get("running") and consumer_health.get("connected")

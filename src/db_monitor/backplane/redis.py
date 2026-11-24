@@ -20,13 +20,11 @@ Configuration::
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import Awaitable, Callable
 
 from redis.asyncio import Redis as AsyncRedis
 
-from db_monitor.core.config import settings
 
 logger = logging.getLogger(__name__)
 

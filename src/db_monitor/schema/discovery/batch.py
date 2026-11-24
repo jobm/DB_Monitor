@@ -103,17 +103,17 @@ async def process_events_batch(
     table_columns: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     event_by_id: dict[int, KafkaEvent] = {id(e): e for e in events}
 
-    for ev_id, key in event_table_keys:
-        if key is None or key not in table_id_map:
-            result[ev_id] = None
+    for event_id, table_key in event_table_keys:
+        if table_key is None or table_key not in table_id_map:
+            result[event_id] = None
             continue
-        result[ev_id] = table_id_map[key]
-        event = event_by_id.get(ev_id)
-        if event is None or not event.event_data:
+        result[event_id] = table_id_map[table_key]
+        discovered_event = event_by_id.get(event_id)
+        if discovered_event is None or not discovered_event.event_data:
             continue
-        column_defs = extract_column_definitions(event.event_data)
+        column_defs = extract_column_definitions(discovered_event.event_data)
         if column_defs:
-            existing = table_columns.setdefault(key, [])
+            existing = table_columns.setdefault(table_key, [])
             seen = {c["column_name"] for c in existing}
             for col_def in column_defs:
                 if col_def["column_name"] not in seen:

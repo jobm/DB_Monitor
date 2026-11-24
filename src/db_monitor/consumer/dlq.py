@@ -6,7 +6,7 @@ import logging
 
 from db_monitor.consumer.batch import _fallback_event_from_message
 from db_monitor.ingestion.brokers import BrokerMessage, DeadLetterPublisher
-from db_monitor.ingestion.dlq import DLQ_TOPIC, send_to_dlq
+from db_monitor.ingestion.dlq import send_to_dlq
 from db_monitor.metrics import events_failed_total
 
 logger = logging.getLogger(__name__)

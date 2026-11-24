@@ -34,6 +34,17 @@ from db_monitor.consumer.loop import _message_loop
 
 logger = logging.getLogger(__name__)
 
+# Runtime objects are re-exported for backwards-compatible test/admin access.
+__all__ = [
+    "CircuitBreaker",
+    "cluster_circuit_breakers",
+    "consumer_runtime",
+    "consumer_runtimes",
+    "consumer_task",
+    "dlq_records_pending",
+    "get_consumer_health",
+]
+
 RECONNECT_INITIAL_DELAY_SECONDS = 1.0
 RECONNECT_MAX_DELAY_SECONDS = 60.0
 RECONNECT_RESET_AFTER_SECONDS = 60.0
@@ -47,9 +58,11 @@ def get_consumer_health() -> dict[str, object]:
 def _reconnect_delay(attempt: int) -> float:
     """Return bounded exponential backoff for consumer reconnects."""
     exponent = min(max(attempt - 1, 0), 6)
-    return min(
-        RECONNECT_INITIAL_DELAY_SECONDS * (2**exponent),
-        RECONNECT_MAX_DELAY_SECONDS,
+    return float(
+        min(
+            RECONNECT_INITIAL_DELAY_SECONDS * (2**exponent),
+            RECONNECT_MAX_DELAY_SECONDS,
+        )
     )
 
 
@@ -182,7 +195,7 @@ async def consumer_task(
         finally:
             if consumer is not None:
                 try:
-                    await consumer.stop()  # type: ignore[union-attr]
+                    await consumer.stop()  # type: ignore[union-attr,attr-defined]
                 except Exception:
                     logger.warning(
                         "Failed to stop consumer '%s' cleanly",

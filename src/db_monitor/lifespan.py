@@ -57,8 +57,8 @@ async def managed_lifespan(
 
         for cluster in broker_clusters:
             cluster_name = str(cluster["name"])
-            task: asyncio.Task[None] = asyncio.create_task(  # type: ignore[var-annotated]
-                consumer_task(
+            task: asyncio.Task[None] = asyncio.create_task(  # type: ignore[var-annotated,arg-type]
+                consumer_task(  # type: ignore[arg-type]
                     cluster_name=cluster_name,
                     broker_kind=str(cluster["broker_kind"]),
                     bootstrap_servers=cast(
@@ -78,7 +78,7 @@ async def managed_lifespan(
                         "list[str] | None", cluster.get("queue_names")
                     ),
                     prefetch_count=int(
-                        cluster.get("prefetch_count") or 100
+                        cast(int, cluster.get("prefetch_count") or 100)
                     ),
                     dlq_destination=str(
                         cluster.get("dlq_destination")
@@ -93,15 +93,15 @@ async def managed_lifespan(
             lifecycle_manager.register_task(task)
 
         if retention_cleanup_enabled:
-            retention_task: asyncio.Task[None] = asyncio.create_task(  # type: ignore[var-annotated]
-                retention_cleanup_task(),
+            retention_task: asyncio.Task[None] = asyncio.create_task(  # type: ignore[var-annotated,arg-type]
+                retention_cleanup_task(),  # type: ignore[arg-type]
                 name="retention_cleanup",
             )
             lifecycle_manager.register_task(retention_task, critical=False)
 
         if partition_maintenance_task is not None:
-            partition_task: asyncio.Task[None] = asyncio.create_task(  # type: ignore[var-annotated]
-                partition_maintenance_task(),
+            partition_task: asyncio.Task[None] = asyncio.create_task(  # type: ignore[var-annotated,arg-type]
+                partition_maintenance_task(),  # type: ignore[arg-type]
                 name="partition_maintenance",
             )
             lifecycle_manager.register_task(partition_task, critical=False)

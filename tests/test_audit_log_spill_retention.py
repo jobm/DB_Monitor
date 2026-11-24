@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 
 from db_monitor import retention
 from db_monitor.core.config import settings

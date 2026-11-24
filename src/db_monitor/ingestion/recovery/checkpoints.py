@@ -34,9 +34,9 @@ def _checkpoint_rows_for_events(
             str(location["broker_kind"]),
         )
         existing = checkpoints.get(key)
-        if existing is None or int(location["broker_position"]) > int(
-            existing["broker_position"]
-        ):
+        if existing is None or int(
+            str(location["broker_position"])
+        ) > int(str(existing["broker_position"])):
             checkpoints[key] = {
                 "consumer_group": consumer_group,
                 **location,

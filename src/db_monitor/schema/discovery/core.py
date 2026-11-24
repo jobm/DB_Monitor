@@ -98,11 +98,11 @@ class SchemaDiscovery:
         db_name = source_coordinates.database_name or "unknown"
         service_name = source_coordinates.service_name or "unknown"
 
-        topic_parts = event.service_name.split(".")
+        topic_parts = (event.service_name or "").split(".")
         if len(topic_parts) >= 2:
             service_name = topic_parts[0]
 
-        topic_name = event.service_name
+        topic_name = event.service_name or ""
 
         table_id = await self._upsert_table(
             session=session,

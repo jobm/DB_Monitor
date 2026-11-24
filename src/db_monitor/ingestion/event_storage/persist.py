@@ -6,11 +6,11 @@ import asyncio
 import logging
 import random
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from db_monitor.core.models import KafkaEvent
 from db_monitor.extensions import AsyncSessionLocal
@@ -30,7 +30,7 @@ change_processor = ChangeProcessor(AsyncSessionLocal)
 
 
 async def _store_event_graph_with_retries(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: Callable[[], AsyncSession],
     event_obj: KafkaEvent,
     max_retries: int = 5,
 ) -> bool:
@@ -90,7 +90,7 @@ async def _store_event_graph_with_retries(
 
 
 async def _store_batch_graph_with_retries(
-    session_factory: async_sessionmaker[AsyncSession],
+    session_factory: Callable[[], AsyncSession],
     events: list[KafkaEvent],
     max_retries: int = 5,
 ) -> set[tuple[str | None, int | None, int | None]]:

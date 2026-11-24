@@ -5,8 +5,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.params import Param
 
-from fastapi import HTTPException
-
 from db_monitor.auth import get_tenant_filter, require_viewer_role
 from db_monitor.core.responses import ChangesResponse, PointInTimeValueResponse
 from db_monitor.routes.data.factories import (
@@ -115,6 +113,11 @@ async def get_changes(
     parsed_cursor_time = None
     if cursor is not None and not isinstance(cursor, Param):
         cursor_payload = parse_json_object_query(cursor, "cursor")
+        if cursor_payload is None:
+            raise HTTPException(
+                status_code=400,
+                detail="cursor must be a JSON object.",
+            )
         cursor_value_raw = cursor_payload.get("id")
         if cursor_value_raw is None:
             cursor_value_raw = cursor_payload.get("event_id")
@@ -127,7 +130,7 @@ async def get_changes(
                 ),
             )
         try:
-            cursor_value = int(cursor_value_raw)
+            cursor_value = int(str(cursor_value_raw))
         except (TypeError, ValueError) as exc:
             raise HTTPException(
                 status_code=400,

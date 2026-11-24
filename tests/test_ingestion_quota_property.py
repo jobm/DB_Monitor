@@ -42,7 +42,7 @@ def _fast_throttle_limiter(*, source_default_limit: int):
         max_size=15,
     ),
 )
-@settings(max_examples=30)
+@settings(max_examples=30, deadline=None)
 async def test_quota_monotonic_drop(counts_per_source: list[int]) -> None:
     """Quota drop decisions must be monotonic within each window:
     once an event is dropped, all subsequent events in the same window

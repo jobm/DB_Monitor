@@ -45,7 +45,9 @@ def _update_step_state(
     note: str | None,
 ) -> None:
     """Update one provisioning step and recalculate overall job state."""
-    steps = list(job["steps"])
+    steps = list(
+        cast(list[dict[str, object]], job["steps"])
+    )
     found_step = False
     duration_seconds: float | None = None
     steps_list: list[dict[str, object]] = cast(
@@ -65,7 +67,9 @@ def _update_step_state(
         now_iso = now.isoformat()
         step["updated_at"] = datetime.now(timezone.utc).isoformat()
         if step_status == "in_progress":
-            attempts = int(step.get("attempts") or 0)
+            attempts = int(
+                cast(int, step.get("attempts") or 0)
+            )
             step["attempts"] = attempts + 1
             step["started_at"] = now_iso
             step["completed_at"] = None
@@ -140,7 +144,8 @@ def _append_job_audit(
 ) -> None:
     """Append one audit entry to a provisioning job."""
     audit_entries: list[dict[str, str]] = cast(
-        "list[dict[str, str]]", list(job["audit"])
+        "list[dict[str, str]]",
+        list(cast(list[dict[str, str]], job["audit"])),
     )
     audit_entries.append(
         _new_audit_entry(
@@ -159,7 +164,8 @@ def _set_step_result(
 ) -> None:
     """Store adapter execution output on one provisioning step."""
     steps_list: list[dict[str, object]] = cast(
-        "list[dict[str, object]]", list(job["steps"])
+        "list[dict[str, object]]",
+        list(cast(list[dict[str, object]], job["steps"])),
     )
     for step in steps_list:
         if step["name"] == step_name:
@@ -192,7 +198,8 @@ def _next_executable_step(
 ) -> dict[str, object] | None:
     """Return the next provisioning step that can be executed."""
     steps_list: list[dict[str, object]] = cast(
-        "list[dict[str, object]]", list(job["steps"])
+        "list[dict[str, object]]",
+        list(cast(list[dict[str, object]], job["steps"])),
     )
     for step in steps_list:
         if step["status"] in {"pending", "in_progress"}:

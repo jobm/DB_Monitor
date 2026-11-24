@@ -44,7 +44,9 @@ class WebhookNotifier:
             circuit_breaker_recovery_seconds
         )
         self._failure_counts = {url: 0 for url in self._urls}
-        self._circuit_opened_at = {url: None for url in self._urls}
+        self._circuit_opened_at: dict[str, float | None] = {
+            url: None for url in self._urls
+        }
         for url in self._urls:
             webhook_circuit_breaker_state.labels(url=url).set(0)
 

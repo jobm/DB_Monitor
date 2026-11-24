@@ -34,6 +34,7 @@ router.include_router(jwt_router)
 __all__ = [
     "CUSTOMER_JWT_SECRET_STATE",
     "router",
+    "settings",
     "create_access_token_exchange",
     "create_websocket_session_token",
     "create_api_key",

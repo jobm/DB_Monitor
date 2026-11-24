@@ -32,7 +32,7 @@ async def replay_spill_entries(
     replayed = 0
     failed = 0
 
-    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         async with session.begin():
             if ids:
                 result = await session.execute(
@@ -91,7 +91,7 @@ async def replay_spill_entries(
 
 async def _refresh_spill_pending_gauge() -> None:
     """Set the pending spill gauge to the current unreplayed row count."""
-    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         count_result = await session.execute(
             select(func.count()).where(
                 ApiAuditLogSpill.replayed.is_(False)

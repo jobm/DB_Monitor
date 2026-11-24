@@ -6,7 +6,7 @@ import os
 import ssl
 from dataclasses import dataclass, field
 
-from db_monitor.core.config_loader import get_env_or_file, parse_csv_list
+from db_monitor.core.config_loader import get_env_or_file
 
 
 @dataclass

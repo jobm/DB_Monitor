@@ -13,7 +13,7 @@ Usage:
   PYTHONPATH=../src:. uv run python scripts/scale_test.py \\
       --sources 10 --rate 500 --duration 300 --kafka-broker localhost:9093
 
-Targets (from os-release-readiness-assessment.md):
+Targets (see docs/benchmarks/README.md):
   - 500 events/sec sustained for 5 minutes
   - p95 ingestion latency < 500ms
   - p95 API latency < 200ms

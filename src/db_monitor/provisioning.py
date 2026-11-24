@@ -137,7 +137,7 @@ async def _run_migrations_and_health_checks(
         return await provider(context)
 
     await init_db()
-    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         await session.execute(select(1))
 
     return {

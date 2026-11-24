@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from db_monitor.ingestion.brokers import BrokerMessage
 
 if TYPE_CHECKING:
-    import aio_pika
+    pass
 
 
 class RabbitMQConsumerAdapter:
@@ -29,8 +29,8 @@ class RabbitMQConsumerAdapter:
         self._connection_url = connection_url
         self._queue_names = list(queue_names)
         self._prefetch_count = prefetch_count
-        self._connection: aio_pika.RobustConnection | None = None
-        self._channel: aio_pika.RobustChannel | None = None
+        self._connection: Any = None
+        self._channel: Any = None
         self._consumer_tags: list[tuple[Any, str]] = []
         self._message_queue: asyncio.Queue[BrokerMessage | object] = (
             asyncio.Queue()
@@ -116,8 +116,8 @@ class RabbitMQDeadLetterPublisher:
     ) -> None:
         self._connection_url = connection_url
         self._dlq_destination = dlq_destination
-        self._connection = None
-        self._channel = None
+        self._connection: Any = None
+        self._channel: Any = None
 
     async def start(self) -> None:
         import aio_pika

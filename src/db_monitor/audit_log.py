@@ -277,7 +277,7 @@ class AuditLogWriter:
     async def _flush(self, entries: list[AuditLogEntry]) -> None:
         """Write a batch of audit log entries to the database."""
         with audit_log_flush_duration_seconds.time():
-            async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+            async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
                 async with session.begin():
                     session.add_all(
                         [

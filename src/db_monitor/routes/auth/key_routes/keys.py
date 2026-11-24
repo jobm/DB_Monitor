@@ -16,10 +16,7 @@ from db_monitor.core.config import settings
 from db_monitor.core.models import ApiKey
 from db_monitor.extensions import AsyncSessionLocal
 from db_monitor.routes.auth.helpers import (
-    _require_customer_scope,
-    _utc_now_iso,
     api_key_response,
-    api_key_status,
     serialize_api_key_summary,
 )
 from db_monitor.routes.utils import utc_now
@@ -102,7 +99,7 @@ async def create_api_key(
     key_hash = get_api_key_hash(raw_key)
     expires_at = build_api_key_expiration(ttl_days)
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         async with session.begin():
             new_key = ApiKey(
                 key_hash=key_hash,
@@ -137,12 +134,14 @@ async def list_api_keys(
         ApiKey.id.desc(),
     )
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         result = await session.execute(statement)
         api_keys = result.scalars().all()
 
     serialized = [
-        serialize_api_key_summary(api_key, creator_api_key.id)
+        serialize_api_key_summary(
+            api_key, int(creator_api_key.id or 0)
+        )
         for api_key in api_keys
     ]
     if not include_inactive:
@@ -166,7 +165,7 @@ async def rotate_api_key(
     key_hash = get_api_key_hash(raw_key)
     expires_at = build_api_key_expiration(ttl_days)
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         async with session.begin():
             result = await session.execute(
                 select(ApiKey).where(ApiKey.id == key_id)
@@ -226,7 +225,7 @@ async def revoke_api_key(
             ),
         )
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         async with session.begin():
             result = await session.execute(
                 select(ApiKey).where(ApiKey.id == key_id)
@@ -270,7 +269,7 @@ async def bootstrap_admin_key(
             ),
         )
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         active_api_keys = await session.execute(
             select(ApiKey).where(
                 ApiKey.is_active.is_(True),

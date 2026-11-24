@@ -66,7 +66,7 @@ async def _populate_row_identity_batch(
 
     for event_obj in events:
         pk_cols = pk_by_table.get(
-            event_obj.source_table_id, []
+            event_obj.source_table_id or 0, []
         )
         event_obj.row_identity = extract_row_identity(
             event_obj.event_data,

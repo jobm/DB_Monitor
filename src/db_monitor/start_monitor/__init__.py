@@ -6,8 +6,6 @@ signal handling, and startup/shutdown hooks.
 
 from __future__ import annotations
 
-import os as _os
-
 from db_monitor.start_monitor.manifest import (
     _configure_topics,
     _derived_topics_from_manifest,
@@ -29,9 +27,6 @@ from db_monitor.start_monitor.validation import (
     _validate_manifest_payload,
 )
 
-# Re-export the os module so tests can do start_monitor.os.environ.
-os = _os
-
 __all__ = [
     "CONNECTOR_MANIFEST",
     "CONNECTOR_MANIFEST_SCHEMA",
@@ -45,5 +40,4 @@ __all__ = [
     "_run_server",
     "_validate_manifest_payload",
     "main",
-    "os",
 ]

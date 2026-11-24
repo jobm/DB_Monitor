@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 
@@ -145,6 +146,89 @@ def quota_session_factory() -> FakeQuotaSessionFactory:
     return FakeQuotaSessionFactory()
 
 
+# ── Live PostgreSQL fixture ────────────────────────────────────────────
+
+
+def _postgres_test_url() -> str:
+    """Return the configured PostgreSQL URL for live database tests."""
+    import os
+
+    return (
+        os.environ.get("DB_MONITOR_TEST_URL")
+        or os.environ.get("MONITOR_POSTGRES_URL")
+        or os.environ.get("POSTGRES_URL")
+        or "postgresql+asyncpg://postgres:postgres@localhost:5437/postgres"
+    )
+
+
+@pytest.fixture
+async def migrated_postgres_url() -> AsyncIterator[str]:
+    """Create a temporary database with every migration applied.
+
+    Yields the SQLAlchemy URL for the temporary database and drops it
+    during teardown.  Tests using this fixture only need PostgreSQL to be
+    reachable; they do not need the full HTTP sandbox stack.
+    """
+    import os
+
+    from asyncpg import create_pool
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from db_monitor.core.migrations import MIGRATIONS, apply_migrations
+
+    admin_url = _postgres_test_url()
+    admin_dsn = admin_url.replace("+asyncpg", "")
+
+    probe = create_async_engine(admin_url)
+    try:
+        async with probe.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        await probe.dispose()
+        pytest.skip(f"PostgreSQL at {admin_url} is not reachable: {exc}")
+    else:
+        await probe.dispose()
+
+    test_db = f"db_monitor_pytest_{os.urandom(6).hex()}"
+
+    pool = await create_pool(admin_dsn, min_size=1, max_size=1)
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(f'CREATE DATABASE "{test_db}"')
+    finally:
+        await pool.close()
+
+    test_url = admin_url.rsplit("/", 1)[0] + f"/{test_db}"
+    engine = create_async_engine(test_url)
+    try:
+        session_factory = sessionmaker(
+            bind=engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        await apply_migrations(session_factory, engine, MIGRATIONS)
+        yield test_url
+    finally:
+        await engine.dispose()
+        pool = await create_pool(admin_dsn, min_size=1, max_size=1)
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    SELECT pg_terminate_backend(pg_stat_activity.pid)
+                    FROM pg_stat_activity
+                    WHERE pg_stat_activity.datname = $1
+                      AND pid <> pg_backend_pid()
+                    """,
+                    test_db,
+                )
+                await conn.execute(f'DROP DATABASE IF EXISTS "{test_db}"')
+        finally:
+            await pool.close()
+
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_ROOT = REPO_ROOT / "app"
 SRC_ROOT = REPO_ROOT / "src"
@@ -195,7 +279,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     file to repeat the same marker.
     """
     for item in items:
-        if item.get_closest_marker("sandbox") is None:
+        if (
+            item.get_closest_marker("sandbox") is None
+            and item.get_closest_marker("slow") is None
+        ):
             item.add_marker(pytest.mark.core)
 
 

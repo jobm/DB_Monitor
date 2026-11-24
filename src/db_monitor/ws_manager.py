@@ -176,7 +176,7 @@ class WebSocketManager:
             if event_id is None:
                 return
 
-            async with AsyncSessionLocal() as session:
+            async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
                 result = await session.execute(
                     select(KafkaEvent).where(KafkaEvent.id == event_id)
                 )

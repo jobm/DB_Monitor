@@ -6,17 +6,9 @@ from typing import Any
 
 from db_monitor.provisioning import (
     ProvisioningContext,
+    _sanitize_customer,
     register_step_provider,
 )
-
-
-def _sanitize_customer(customer_id: str) -> str:
-    """Return a deterministic DNS-safe slug for resource names."""
-    normalized = customer_id.strip().lower()
-    slug = "".join(ch if ch.isalnum() else "-" for ch in normalized)
-    while "--" in slug:
-        slug = slug.replace("--", "-")
-    return slug.strip("-") or "customer"
 
 
 def build_observability_labels(customer_id: str) -> dict[str, str]:

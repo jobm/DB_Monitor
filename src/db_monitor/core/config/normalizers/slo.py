@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 import os
 
 from db_monitor.core.config_loader import config_error
@@ -142,5 +143,5 @@ def load_tenant_cohort_slo_policies() -> list[dict[str, object]]:
 
     return sorted(
         normalized_policies,
-        key=lambda p: p["max_sources"],
+        key=lambda p: cast(int, p["max_sources"]),
     )

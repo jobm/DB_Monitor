@@ -69,6 +69,11 @@ async def get_events(
     parsed_cursor_time = None
     if cursor is not None and not isinstance(cursor, Param):
         cursor_payload = parse_json_object_query(cursor, "cursor")
+        if cursor_payload is None:
+            raise HTTPException(
+                status_code=400,
+                detail="cursor must be a JSON object.",
+            )
         cursor_value_raw = cursor_payload.get("event_id")
         if cursor_value_raw is None:
             cursor_value_raw = cursor_payload.get("id")

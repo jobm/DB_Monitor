@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, cast
 
 from db_monitor.extensions import AsyncSessionLocal
 from fastapi import Security
@@ -35,11 +35,13 @@ def is_api_key_usable(
 
 async def _get_api_key_by_id(key_id: int) -> Optional[ApiKey]:
     """Fetch an API key by primary key and enforce lifecycle checks."""
-    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         result = await session.execute(
             select(ApiKey).where(ApiKey.id == key_id)
         )
-        api_key_record = result.scalar_one_or_none()
+        api_key_record = cast(
+            Optional[ApiKey], result.scalar_one_or_none()
+        )
         if is_api_key_usable(api_key_record):
             return api_key_record
     return None
@@ -77,7 +79,7 @@ async def get_current_api_key(
     if not api_key_header_value:
         return None
 
-    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         try:
             key_id_str, raw_key = api_key_header_value.split(".", 1)
             key_id = int(key_id_str)
@@ -86,10 +88,16 @@ async def get_current_api_key(
 
         stmt = select(ApiKey).where(ApiKey.id == key_id)
         result = await session.execute(stmt)
-        api_key_record = result.scalar_one_or_none()
+        api_key_record = cast(
+            Optional[ApiKey], result.scalar_one_or_none()
+        )
 
-        if is_api_key_usable(api_key_record) and verify_api_key_hash(
-            raw_key, api_key_record.key_hash
+        if (
+            is_api_key_usable(api_key_record)
+            and api_key_record is not None
+            and verify_api_key_hash(
+                raw_key, cast(str, api_key_record.key_hash)
+            )
         ):
             return api_key_record
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from db_monitor.core.config_loader import config_error
 
@@ -114,9 +114,13 @@ def load_broker_clusters(broker: "BrokerSettings") -> list[dict[str, object]]:
         return [
             {
                 "name": str(cluster["name"]),
-                "broker_kind": "kafka",
-                "bootstrap_servers": list(cluster["bootstrap_servers"]),
-                "topics": list(cluster["topics"]),
+                "broker_kind": "kafka","bootstrap_servers": list(
+                        cast(list[str], cluster["bootstrap_servers"])
+                    ),
+                    "topics": list(
+                        cast(list[str], cluster["topics"])
+                    ),
+
                 "topic_partitions": cluster.get("topic_partitions"),
                 "consumer_group": str(cluster["consumer_group"]),
                 "connection_url": None,

@@ -5,11 +5,13 @@ This module centralizes low-level parsing and secret-file loading logic.
 
 from __future__ import annotations
 
+from typing import NoReturn
+
 import os
 from pathlib import Path
 
 
-def config_error(message: str, hint: str | None = None) -> None:
+def config_error(message: str, hint: str | None = None) -> NoReturn:
     """Raise a configuration error with an optional remediation hint."""
     detail = message if hint is None else f"{message} {hint}"
     raise ValueError(detail)

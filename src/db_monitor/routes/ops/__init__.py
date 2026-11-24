@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from db_monitor.extensions import AsyncSessionLocal
 from db_monitor.lifecycle_manager import lifecycle_manager
 from db_monitor.routes.ops.dlq import router as dlq_router
 from db_monitor.routes.ops.health import router as health_router
@@ -14,7 +13,6 @@ from db_monitor.routes.ops.metadata import router as metadata_router
 from db_monitor.routes.ops.provisioning import router as provisioning_router
 from db_monitor.routes.ops.provisioning import (
     CUSTOMER_PROVISION_JOBS,
-    PROVISIONING_STEPS,
     get_customer_provision_job,
     list_customer_provision_jobs,
     start_customer_provision_job,
@@ -66,6 +64,11 @@ router.include_router(metadata_router)
 
 __all__ = [
     "router",
+    "CUSTOMER_LIFECYCLE_STATE",
+    "CUSTOMER_PROVISION_JOBS",
+    "ProvisioningStepExecutionError",
+    "lifecycle_manager",
+    "settings",
     "health_check",
     "live_check",
     "readiness_check",

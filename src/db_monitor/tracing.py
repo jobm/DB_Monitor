@@ -62,12 +62,13 @@ def initialize_tracing(
     from opentelemetry.sdk.trace.export import (
         BatchSpanProcessor,
         ConsoleSpanExporter,
+        SpanExporter,
     )
 
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource)
     if exporter == "console":
-        span_exporter = ConsoleSpanExporter()
+        span_exporter: SpanExporter = ConsoleSpanExporter()
     else:
         span_exporter = OTLPSpanExporter(
             endpoint=otlp_endpoint,

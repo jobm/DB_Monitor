@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import secrets
 from datetime import datetime, timezone
+from typing import Optional, cast
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -145,17 +145,23 @@ def _serialize_customer_jwt_state(
     active_secret = state.get("active_secret")
     next_secret = state.get("next_secret")
     previous_active_secret = state.get("previous_active_secret")
-    audit_entries = list(state.get("audit") or [])
+    audit_entries = cast(
+        list[dict[str, object]], state.get("audit") or []
+    )
     last_action = None
     if audit_entries:
         last_action = audit_entries[-1].get("action")
     return {
         "customer_id": customer_id,
-        "generation": int(state.get("generation") or 0),
+        "generation": int(cast(int, state.get("generation") or 0)),
         "last_rotated_at": state.get("last_rotated_at"),
         "last_recovered_at": state.get("last_recovered_at"),
-        "active_fingerprint": _secret_fingerprint(active_secret),
-        "next_fingerprint": _secret_fingerprint(next_secret),
+        "active_fingerprint": _secret_fingerprint(
+            cast(str | None, active_secret)
+        ),
+        "next_fingerprint": _secret_fingerprint(
+            cast(str | None, next_secret)
+        ),
         "has_recovery_secret": previous_active_secret is not None,
         "audit_count": len(audit_entries),
         "last_action": last_action,
@@ -190,7 +196,10 @@ async def _load_customer_jwt_state_row(
             CustomerJWTSecretState.customer_id == customer_id,
         )
     )
-    return result.scalar_one_or_none()
+    return cast(
+        Optional[CustomerJWTSecretState],
+        result.scalar_one_or_none(),
+    )
 
 
 async def _persist_customer_jwt_state(
@@ -215,7 +224,9 @@ def _append_jwt_audit(
     detail: str,
 ) -> None:
     """Append one customer JWT lifecycle audit event."""
-    audit_entries = list(state.get("audit") or [])
+    audit_entries = cast(
+        list[dict[str, object]], state.get("audit") or []
+    )
     audit_entries.append(
         {
             "action": action,

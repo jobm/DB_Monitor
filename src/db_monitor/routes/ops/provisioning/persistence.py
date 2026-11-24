@@ -25,7 +25,7 @@ async def _load_customer_provision_jobs_snapshot(
     if cached:
         return {job_id: dict(job) for job_id, job in cached.items()}
 
-    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         result = await session.execute(
             select(CustomerProvisionJob).where(
                 CustomerProvisionJob.customer_id == customer_id,
@@ -66,7 +66,7 @@ async def _persist_customer_provision_job(
     customer_id = str(job["customer_id"])
     job_id = str(job["job_id"])
     payload = dict(job)
-    async with AsyncSessionLocal() as session:  # type: ignore[type-var]
+    async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
         async with session.begin():
             result = await session.execute(
                 select(CustomerProvisionJob).where(
@@ -75,7 +75,7 @@ async def _persist_customer_provision_job(
             )
             record = result.scalar_one_or_none()
             if record is None:
-                session.add(  # type: ignore[union-attr]
+                session.add(  # type: ignore[union-attr,attr-defined]
                     CustomerProvisionJob(
                         job_id=job_id,
                         customer_id=customer_id,

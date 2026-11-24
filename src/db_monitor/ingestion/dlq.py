@@ -6,7 +6,6 @@ import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from db_monitor.core.config import settings
 from db_monitor.core.models import DeadLetterEvent, KafkaEvent
 from db_monitor.extensions import AsyncSessionLocal
 from db_monitor.ingestion.brokers import DeadLetterPublisher
@@ -14,13 +13,8 @@ from db_monitor.ingestion.event_parser import parse_event_payload
 from db_monitor.ingestion.event_pipeline import event_pipeline
 from db_monitor.ingestion.recovery import (
     _persist_dead_letter_event,
-    _build_broker_location,
     _legacy_event_location,
-    _serialize_broker_fields,
     _get_canonical_service_name,
-    list_dead_letter_events as recovery_list_dead_letter_events,
-    list_consumer_checkpoints_snapshot,
-    persist_consumer_checkpoints,
     refresh_dead_letter_backlog_metric,
 )
 from db_monitor.ingestion.runtime_state import consumer_runtime
@@ -30,6 +24,7 @@ from db_monitor.ingestion.broadcast import _broadcast_event
 from db_monitor.metrics import dlq_messages_total
 from db_monitor.tracing import start_span
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +45,8 @@ async def send_to_dlq(
         if raw_message is not None
         else event.raw_payload
     )
+    if raw_payload is None:
+        raw_payload = ""
     try:
         dlq_record_id = await _persist_dead_letter_event(
             event,
@@ -95,13 +92,13 @@ async def send_to_dlq(
 
 def _build_replay_event(dlq_event: DeadLetterEvent) -> KafkaEvent:
     """Reconstruct a KafkaEvent from a persisted DLQ record."""
-    parsed = parse_event_payload(dlq_event.raw_payload)
+    parsed = parse_event_payload(dlq_event.raw_payload or "")
     operation = extract_operation(parsed.event_data or {})
     destination, partition, offset = _legacy_event_location(
-        dlq_event.broker_kind,
-        dlq_event.broker_destination,
-        dlq_event.broker_substream,
-        dlq_event.broker_position,
+        dlq_event.broker_kind or "",
+        dlq_event.broker_destination or "",
+        dlq_event.broker_substream or "",
+        dlq_event.broker_position or "",
         dlq_event.kafka_topic,
         dlq_event.kafka_partition,
         dlq_event.kafka_offset,
@@ -125,14 +122,16 @@ def _build_replay_event(dlq_event: DeadLetterEvent) -> KafkaEvent:
 
 async def replay_dead_letter_event_record(
     dlq_event_id: int,
-    session_factory: Callable = AsyncSessionLocal,
+    session_factory: Callable[[], AsyncSession] = (
+        AsyncSessionLocal
+    ),
 ) -> dict[str, object]:
     """Replay a persisted DLQ record through the normal ingestion path."""
     with start_span(
         "dlq.replay.record",
         attributes={"db_monitor.dlq_event_id": dlq_event_id},
     ):
-        async with session_factory() as session:  # type: ignore[type-var]
+        async with session_factory() as session:  # type: ignore[type-var,attr-defined]
             result = await session.execute(
                 select(DeadLetterEvent).where(
                     DeadLetterEvent.id == dlq_event_id
@@ -159,7 +158,7 @@ async def replay_dead_letter_event_record(
                 if inserted:
                     await _broadcast_event(replay_event)
 
-            async with session_factory() as session:  # type: ignore[type-var]
+            async with session_factory() as session:  # type: ignore[type-var,attr-defined]
                 async with session.begin():
                     result = await session.execute(
                         select(DeadLetterEvent).where(
@@ -191,26 +190,28 @@ async def replay_dead_letter_event_record(
                 "kafka_offset": replay_event.kafka_offset,
             }
         except Exception as exc:
-            async with session_factory() as session:  # type: ignore[type-var]
+            async with session_factory() as session:  # type: ignore[type-var,attr-defined]
                 async with session.begin():
                     result = await session.execute(
                         select(DeadLetterEvent).where(
                             DeadLetterEvent.id == dlq_event_id
                         )
                     )
-                    replay_row = result.scalar_one_or_none()
-                    if replay_row is not None:
-                        replay_row.replay_error = str(exc)
+                    failed_row = result.scalar_one_or_none()
+                    if failed_row is not None:
+                        failed_row.replay_error = str(exc)
             raise
 
 
 async def replay_dead_letter_event_records(
     limit: int = 100,
     include_replayed: bool = False,
-    session_factory: Callable = AsyncSessionLocal,
+    session_factory: Callable[[], AsyncSession] = (
+        AsyncSessionLocal
+    ),
 ) -> dict[str, object]:
     """Replay multiple persisted DLQ records through ingestion."""
-    async with session_factory() as session:  # type: ignore[type-var]
+    async with session_factory() as session:  # type: ignore[type-var,attr-defined]
         statement = select(DeadLetterEvent.id)
         if not include_replayed:
             statement = statement.where(
@@ -229,6 +230,8 @@ async def replay_dead_letter_event_records(
     failed_count = 0
 
     for dlq_event_id in dlq_event_ids:
+        if dlq_event_id is None:
+            continue
         try:
             replay_result = await replay_dead_letter_event_record(
                 dlq_event_id,

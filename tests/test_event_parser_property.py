@@ -7,9 +7,9 @@ parsing invariants.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 
-from hypothesis import assume, given, settings, strategies as st
+from hypothesis import given, strategies as st
 
 from db_monitor.ingestion.event_parser import ParsedEvent, parse_event_payload
 

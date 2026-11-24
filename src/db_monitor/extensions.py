@@ -10,6 +10,7 @@ from db_monitor.metrics import (
 )
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from typing import Callable, cast
 from sqlalchemy.orm import sessionmaker
 
 
@@ -82,10 +83,13 @@ def build_engine():
 
 engine = build_engine()
 
-AsyncSessionLocal = sessionmaker(
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
+AsyncSessionLocal: Callable[[], AsyncSession] = cast(
+    Callable[[], AsyncSession],
+    sessionmaker(
+        bind=engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    ),
 )
 
 

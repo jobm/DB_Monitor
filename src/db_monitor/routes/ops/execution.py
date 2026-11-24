@@ -18,7 +18,6 @@ from db_monitor.routes.ops.lifecycle import (
     _mark_customer_bootstrap_active,
     _persist_customer_lifecycle_state,
     _require_customer_scope,
-    CUSTOMER_LIFECYCLE_STATE,
 )
 from db_monitor.routes.ops.provisioning import (
     _append_job_audit,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import cast
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -60,7 +61,9 @@ async def start_customer_provision_job(
         "updated_at": now,
     }
 
-    await _persist_customer_provision_job(job)
+    await _persist_customer_provision_job(
+        cast(dict[str, object], job)
+    )
     return job
 
 
@@ -164,5 +167,7 @@ async def update_customer_provision_step(
             f"{detail_note}".strip()
         ),
     )
-    await _persist_customer_provision_job(job)
+    await _persist_customer_provision_job(
+        cast(dict[str, object], job)
+    )
     return job

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import cast
 
 from db_monitor.core.models import KafkaEvent
 from db_monitor.metrics import (
@@ -15,7 +15,6 @@ from db_monitor.metrics import (
 )
 from db_monitor.ingestion.runtime_state.breaker import _get_circuit_breaker
 from db_monitor.ingestion.runtime_state.state import (
-    _get_consumer_runtime,
     consumer_runtimes,
     _timestamp_to_age_seconds,
 )
@@ -34,10 +33,14 @@ def _update_runtime_lag(
         return
 
     lag_key = f"{cluster_name}:{destination}:{partition}"
-    lag_by_partition = dict(runtime.get("lag_by_partition") or {})
+    lag_by_partition = dict(
+        cast(dict[str, int], runtime.get("lag_by_partition") or {})
+    )
     lag_by_partition[lag_key] = lag_value
     runtime["lag_by_partition"] = lag_by_partition
-    highwater_by_partition = dict(runtime.get("highwater_by_partition") or {})
+    highwater_by_partition = dict(
+        cast(dict[str, int], runtime.get("highwater_by_partition") or {})
+    )
     highwater_by_partition[lag_key] = offset + lag_value + 1
     runtime["highwater_by_partition"] = highwater_by_partition
     runtime["lag_total"] = sum(lag_by_partition.values())
@@ -59,7 +62,9 @@ def _record_committed_offsets(
     events: list[KafkaEvent],
 ) -> None:
     """Update offset and commit-lag gauges from the committed batch."""
-    highwater_by_partition = dict(runtime.get("highwater_by_partition") or {})
+    highwater_by_partition = dict(
+        cast(dict[str, int], runtime.get("highwater_by_partition") or {})
+    )
     for event in events:
         if event.kafka_topic is None or event.kafka_partition is None:
             continue
@@ -120,9 +125,13 @@ def get_consumer_health() -> dict[str, object]:
     clusters_payload: dict[str, dict[str, object]] = {}
 
     for cluster_name, runtime in runtimes.items():
-        cluster_topics = list(runtime.get("topics") or [])
+        cluster_topics = list(
+            cast(list[str], runtime.get("topics") or [])
+        )
         topics.extend(cluster_topics)
-        lag_by_partition.update(dict(runtime.get("lag_by_partition") or {}))
+        lag_by_partition.update(
+            cast(dict[str, int], runtime.get("lag_by_partition") or {})
+        )
         if runtime.get("last_error"):
             errors.append(f"{cluster_name}: {runtime['last_error']}")
         if runtime.get("last_message_at"):
@@ -137,7 +146,7 @@ def get_consumer_health() -> dict[str, object]:
             "connected": runtime["connected"],
             "reconnecting": bool(runtime.get("reconnecting")),
             "reconnect_attempts": int(
-                runtime.get("reconnect_attempts") or 0
+                cast(int, runtime.get("reconnect_attempts") or 0)
             ),
             "broker_kind": runtime.get("broker_kind", "kafka"),
             "topics": cluster_topics,
@@ -145,9 +154,11 @@ def get_consumer_health() -> dict[str, object]:
             "last_message_at": runtime["last_message_at"],
             "last_commit_at": runtime["last_commit_at"],
             "last_commit_age_seconds": _timestamp_to_age_seconds(
-                runtime["last_commit_at"]
+                cast(str | None, runtime["last_commit_at"])
             ),
-            "lag_by_partition": dict(runtime.get("lag_by_partition") or {}),
+            "lag_by_partition": dict(
+            cast(dict[str, int], runtime.get("lag_by_partition") or {})
+        ),
             "lag_total": runtime["lag_total"],
             "dlq_messages_total": runtime["dlq_messages_total"],
             "circuit_breaker_state": breaker_state,
@@ -183,12 +194,12 @@ def get_consumer_health() -> dict[str, object]:
         ),
         "lag_by_partition": lag_by_partition,
         "lag_total": sum(
-            int(runtime.get("lag_total") or 0)
+            int(cast(int, runtime.get("lag_total") or 0))
             for runtime in runtimes.values()
         ),
         "dlq_messages_total": max(
             [
-                int(runtime.get("dlq_messages_total") or 0)
+                int(cast(int, runtime.get("dlq_messages_total") or 0))
                 for runtime in runtimes.values()
             ]
             or [0]
