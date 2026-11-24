@@ -81,6 +81,31 @@ All new code should include type annotations for public functions and methods.
 Use `from __future__ import annotations` for postponed evaluation of annotations
 (Python 3.11+).
 
+### Context Memory Checks
+
+The assistant's always-on context comes from `.goosehints` and `.goosemem`.
+Both are checked by a single target:
+
+```bash
+make monitor-check-context
+```
+
+It runs two scripts and fails on the first problem:
+
+- **Structure, grounding and retrieval**
+  (`scripts/verify_goosemem_retrieval.py`) — every `.goosemem` block parses,
+  has valid keyword tags, names only repository paths that exist, and routes
+  the natural-language and keyworded test questions to the expected domain.
+- **Module coverage** (`scripts/validate_goosemem_coverage.sh`) — every
+  non-`__init__` module under `src/db_monitor/` is named by a single block, so
+  a new file cannot land without a home in the memory.
+
+Run it whenever you edit `.goosemem`, and when you add or move a module under
+`src/db_monitor/` — the coverage check will fail until the block that owns the
+package names the new file. The checks also run in CI and as pre-commit hooks
+whenever `.goosemem` changes. `GOOSE_CONTEXT_STRATEGY.md` explains the block
+format and the retrieval-scoring rules behind the tests.
+
 ### Module docstrings
 
 Every public module should have a module-level docstring describing:
@@ -147,6 +172,7 @@ uv run python -m pytest tests/test_migration_schema.py -m slow -v
    make monitor-lint
    make monitor-typecheck
    make monitor-test-core
+   make monitor-check-context
    ```
 5. **Open a pull request** against `main`. Include:
    - A clear description of what the change does and why.

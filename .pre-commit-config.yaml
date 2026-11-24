@@ -33,7 +33,7 @@ repos:
         files: ^\.goosemem$
         pass_filenames: false
       - id: goosemem-coverage
-        name: verify .goosemem directory coverage
+        name: verify .goosemem module coverage
         entry: bash scripts/validate_goosemem_coverage.sh
         language: system
         files: ^\.goosemem$

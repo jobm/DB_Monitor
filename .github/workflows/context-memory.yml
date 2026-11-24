@@ -11,6 +11,7 @@ on:
       - "GOOSE_CONTEXT_STRATEGY.md"
       - "scripts/verify_goosemem_retrieval.py"
       - "scripts/validate_goosemem_coverage.sh"
+      - "scripts/validate_goosemem_coverage.py"
   pull_request:
     branches: [main]
     paths:
@@ -19,6 +20,7 @@ on:
       - "GOOSE_CONTEXT_STRATEGY.md"
       - "scripts/verify_goosemem_retrieval.py"
       - "scripts/validate_goosemem_coverage.sh"
+      - "scripts/validate_goosemem_coverage.py"
   workflow_dispatch:
 
 permissions:
@@ -44,5 +46,5 @@ jobs:
       - name: Structure, path grounding and retrieval
         run: python scripts/verify_goosemem_retrieval.py -v
 
-      - name: Directory coverage under src/db_monitor
+      - name: Module coverage under src/db_monitor
         run: bash scripts/validate_goosemem_coverage.sh

@@ -1,4 +1,4 @@
-.PHONY: monitor-help monitor-up monitor-validate-goosemem monitor-up-sandbox monitor-down monitor-down-sandbox monitor-logs monitor-logs-sandbox monitor-register monitor-dev monitor-migrate monitor-test monitor-test-core monitor-test-integration monitor-test-sandbox monitor-test-sandbox-pytest monitor-test-smoke monitor-test-scale monitor-test-scale-target monitor-test-container-readyz monitor-lint monitor-lint-fix monitor-typecheck monitor-package-smoke monitor-recovery monitor-tui monitor-tui-build monitor-test-quota monitor-test-lifecycle test lint typecheck
+.PHONY: monitor-help monitor-up monitor-check-context monitor-up-sandbox monitor-down monitor-down-sandbox monitor-logs monitor-logs-sandbox monitor-register monitor-dev monitor-migrate monitor-test monitor-test-core monitor-test-integration monitor-test-sandbox monitor-test-sandbox-pytest monitor-test-smoke monitor-test-scale monitor-test-scale-target monitor-test-container-readyz monitor-lint monitor-lint-fix monitor-typecheck monitor-package-smoke monitor-recovery monitor-tui monitor-tui-build monitor-test-quota monitor-test-lifecycle test lint typecheck
 
 PODMAN_COMPOSE ?= $(shell command -v podman-compose 2>/dev/null || echo "docker compose")
 
@@ -184,5 +184,6 @@ monitor-docs-serve: ## Serve the MkDocs documentation site locally
 monitor-docs-deploy: ## Deploy the MkDocs documentation site to GitHub Pages
 	uv run --group dev mkdocs gh-deploy --force
 
-monitor-validate-goosemem: ## Validate .goosemem coverage against source files
+monitor-check-context: ## Verify .goosemem structure, grounding, retrieval and module coverage
+	python3 scripts/verify_goosemem_retrieval.py
 	bash scripts/validate_goosemem_coverage.sh

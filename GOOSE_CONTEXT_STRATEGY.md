@@ -14,9 +14,9 @@ The DB Monitor codebase is too large for a 9B model to hold in active context. L
 | File | Size | Purpose | When Loaded |
 |------|------|---------|-------------|
 | `.goosehints` | ~1,300 tokens (8 KB) | Behavioral guardrails injected into **every turn** | Always — per-turn system prompt |
-| `.goosemem` | ~8,600 tokens (64 KB) | 20 semantic memory blocks retrieved **on demand** | Only when keywords match the user's request |
+| `.goosemem` | ~9,300 tokens (73 KB) | 20 semantic memory blocks retrieved **on demand** | Only when keywords match the user's request |
 
-### Total budget: ~10,000 tokens (vs. 33,000+ lines of raw source)
+### Total budget: ~10,600 tokens (vs. 33,000+ lines of raw source)
 
 ---
 
@@ -169,16 +169,21 @@ Compare to loading all 33,000 lines (~130K tokens) which would immediately excee
 
 ### Validating Keyword Coverage
 
-Coverage is measured at the **directory** level, because blocks intentionally summarize packages (`core/config/dataclasses/ (core.py, db.py, ...)`) instead of naming every file. Every directory under `src/db_monitor/` that contains Python must be named by at least one block; directories with no `.py` files are ignored.
+Coverage is measured per **module**, and scoped to a **single block**. A module counts as referenced when one block either contains its `package/file.py` path, or names its package path and its filename together. A directory mention in one block plus a filename in another does not count, because Goose only ever has the retrieved block in context — a split reference is a reference the agent cannot see.
+
+`__init__.py` is exempt: it marks a package, and the package directory is covered by the same rule. Every other module under `src/db_monitor/` must be named.
 
 ```bash
 bash scripts/validate_goosemem_coverage.sh   # exit 1 on gaps, 2 if the tree is missing
 ```
 
+The shell script is the stable entrypoint (CI and pre-commit call it); the block parsing and matching live in `scripts/validate_goosemem_coverage.py`.
+
 **Interpreting the output**
-- Each `GAP:` line is a package directory that no block references. Add it to the `FILES:` line of the block that owns it — a mention of the directory path is enough, individual files need not be listed.
-- File-level counts are printed for information only. Most files live inside summarized packages, so a low ratio there is expected and is not a failure.
+- Each `GAP:` line is a module no single block references. Add it to the `FILES:` line of the block that owns its package (or a nearby section that names both), keeping the parenthetical role hint short.
+- `Directories` and `__init__ files` are informational; the module count is the gate.
 - The validator requires `src/db_monitor/` to exist, so it cannot report a vacuous pass on a stale checkout.
+- New modules fail the check until they are added to a block, which is the intended pressure — the memory is only useful if it names what exists.
 - `app/`-prefixed references in `.goosemem` would become stale if the legacy tree returned; there are none today.
 
 ### Re-verifying Retrieval and Grounding
@@ -198,7 +203,7 @@ python3 scripts/verify_goosemem_retrieval.py --list-blocks
 
 When you add or rename a block, add one question per new domain to `NATURAL_QUERIES` and `KEYWORD_QUERIES` in the script. Natural-language questions are the important ones: if they only pass with tags appended, the block's aliases are too thin.
 
-Both scripts run automatically:
+Both scripts are also wrapped by `make monitor-check-context` (see `CONTRIBUTING.md`), and run automatically:
 
 - **CI** — `.github/workflows/context-memory.yml` is path-filtered on `.goosemem`, `.goosehints`, this document, and the two scripts, so it does not add time to unrelated PRs.
 - **Pre-commit** — the `goosemem-retrieval` and `goosemem-coverage` local hooks in `.pre-commit-config.yaml` run whenever `.goosemem` is staged.
@@ -209,8 +214,8 @@ Both scripts run automatically:
 
 | Metric | `.goosehints` | `.goosemem` | Total |
 |--------|--------------|-------------|-------|
-| Lines | 111 | 1,044 | 1,155 |
-| Words | 997 | 7,399 | 8,396 |
-| Bytes | 8,222 | 73,729 | 81,951 |
-| Est. Tokens | ~1,300 | ~8,600 | ~9,900 |
+| Lines | 111 | 1,046 | 1,157 |
+| Words | 997 | 7,454 | 8,451 |
+| Bytes | 8,222 | 74,439 | 82,661 |
+| Est. Tokens | ~1,300 | ~9,300 | ~10,600 |
 | Memory Blocks | — | 20 | — |

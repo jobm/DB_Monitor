@@ -8,7 +8,7 @@
 ================================================================================
 
 DOMAIN: Configuration & Environment Variables
-FILES: src/db_monitor/core/config/__init__.py (settings singleton), src/db_monitor/core/config/dataclasses/ (core.py, db.py, auth_settings.py, broker.py, ingestion.py, observability.py, retention.py, webhook.py, backplane.py, validation.py, factory.py), src/db_monitor/core/config/normalizers/ (quotas.py, slo.py, urls.py), src/db_monitor/core/config/normalizers/clusters/ (defaults.py, loader.py, normalizers.py), src/db_monitor/core/config_loader.py (get_env_or_file, parse_csv_list, config_error, default_schema_mode)
+FILES: src/db_monitor/core/config/__init__.py (settings singleton), src/db_monitor/core/config/dataclasses/ (core.py, db.py, auth_settings.py, broker.py, ingestion.py, observability.py, retention.py, webhook.py, backplane.py, validation.py, factory.py), src/db_monitor/core/config/normalizers/ (quotas.py, slo.py, urls.py), src/db_monitor/core/config/normalizers/clusters/ (defaults.py, loader.py, normalizers.py), src/db_monitor/core/config_loader.py (get_env_or_file, parse_csv_list, config_error, default_schema_mode), src/db_monitor/core/config/loaders.py (re-exports only)
 NOTE: There is no flat config module and no module-level constants. Config is a validated dataclass tree: use `from db_monitor.core.config import settings` and read nested fields (`settings.db.postgres_url`, `settings.auth.jwt_secret`, `settings.broker.kafka_topics`, `settings.observability.otel_exporter`). Never import `POSTGRES_URL`/`JWT_SECRET`/`DB_POOL_SIZE` — those names no longer exist.
 ENTRY: `settings = _get_settings()` runs at import of db_monitor.core.config → `AppSettings.from_env()` (cached once, validated). Env vars are read at import time.
 
@@ -107,7 +107,7 @@ PITFALLS:
 ================================================================================
 
 DOMAIN: Ingestion Pipeline & Consumer Service
-FILES: src/db_monitor/consumer/consumer.py (consumer_task), src/db_monitor/consumer/loop.py, src/db_monitor/consumer/batch/ (core.py, processing.py, helpers.py), src/db_monitor/ingestion/consumer.py, src/db_monitor/ingestion/pipeline.py, src/db_monitor/ingestion/event_pipeline.py (filter/transform logic), src/db_monitor/ingestion/brokers/ (kafka.py, rabbitmq.py adapters), src/db_monitor/ingestion/runtime_state/ (state.py, breaker.py, metrics.py), src/db_monitor/ingestion/recovery/ (checkpoints.py, dlq.py, broker.py), src/db_monitor/ingestion/changes/ (__init__.py ChangeProcessor, queries.py)
+FILES: src/db_monitor/consumer/consumer.py (consumer_task), src/db_monitor/consumer/loop.py, src/db_monitor/consumer/batch/ (core.py, processing.py, helpers.py), src/db_monitor/ingestion/consumer.py, src/db_monitor/ingestion/pipeline.py, src/db_monitor/ingestion/event_pipeline.py (filter/transform logic), src/db_monitor/ingestion/brokers/ (kafka.py, rabbitmq.py adapters), src/db_monitor/ingestion/runtime_state/ (state.py, breaker.py, metrics.py), src/db_monitor/ingestion/recovery/ (checkpoints.py, dlq.py, broker.py), src/db_monitor/ingestion/changes/ (__init__.py ChangeProcessor, queries.py), src/db_monitor/consumer/ (checkpoint.py, connection.py, handlers.py), src/db_monitor/ingestion/broadcast.py (ws + webhook fanout)
 NOTE: All ingestion modules are first-party implementations under src/db_monitor — no legacy app/ re-export layer remains.
 ENTRY: consumer_task() in src/db_monitor/consumer/consumer.py — main async loop per broker cluster.
 
@@ -172,7 +172,7 @@ PITFALLS:
 ================================================================================
 
 DOMAIN: Event Parsing & Source Metadata
-FILES: src/db_monitor/ingestion/event_parser.py, src/db_monitor/ingestion/source_metadata.py, src/db_monitor/ingestion/row_identity.py, src/db_monitor/schema/discovery/ (core.py, batch.py, queries.py, state.py, upserts.py), src/db_monitor/repositories/events.py
+FILES: src/db_monitor/ingestion/event_parser.py, src/db_monitor/ingestion/source_metadata.py, src/db_monitor/ingestion/row_identity.py, src/db_monitor/schema/discovery/ (core.py, batch.py, queries.py, state.py, upserts.py), src/db_monitor/schema/ (cache.py, columns.py, operations.py), src/db_monitor/repositories/events.py
 ENTRY: parse_event_payload(raw_payload) → ParsedEvent dataclass.
 
 PARSED EVENT (event_parser.py):
@@ -206,6 +206,7 @@ SCHEMA DISCOVERY (src/db_monitor/schema/discovery/):
 - _extract_columns_from_schema(): reads schema.fields → finds row container (after/before) → extracts field defs
 - _extract_columns_from_payload(): infers columns from before/after dict keys + sample values
 - Schema cache with TTL (default 60s) per (service_name, table_name)
+- Support modules: schema/cache.py (cross-replica invalidation on a dedicated backplane channel), schema/columns.py (extract_column_definitions), schema/operations.py (extract_operation, infer_data_type)
 
 EVENT PIPELINE (src/db_monitor/ingestion/event_pipeline.py):
 - EventPipelineConfig: loads FILTER_ALLOWED_EVENT_TYPES, FILTER_IGNORED_EVENT_TYPES, FILTER_ALLOWED_TABLES, FILTER_IGNORED_TABLES, VALIDATION_REQUIRED_FIELDS, TRANSFORM_MASK_FIELDS, CUSTOM_EVENT_PROCESSORS
@@ -281,7 +282,7 @@ PITFALLS:
 ================================================================================
 
 DOMAIN: API Routes & HTTP Endpoints
-FILES: src/db_monitor/routes/__init__.py (router composition), src/db_monitor/routes/data/ (events.py, tables.py, changes.py, factories.py), src/db_monitor/routes/auth/ (jwt_routes.py, key_routes/keys.py, key_routes/tokens.py, helpers.py), src/db_monitor/routes/ops/ (health.py, dlq.py, lifecycle.py, metadata.py, execution.py, provisioning/routes.py), src/db_monitor/routes/utils.py
+FILES: src/db_monitor/routes/__init__.py (router composition), src/db_monitor/routes/data/ (events.py, tables.py, changes.py, factories.py), src/db_monitor/routes/auth/ (jwt_routes.py, key_routes/keys.py, key_routes/tokens.py, helpers.py), src/db_monitor/routes/ops/ (health.py, dlq.py, lifecycle.py, metadata.py, execution.py, provisioning/routes.py), src/db_monitor/routes/utils.py, src/db_monitor/app_factory.py (create_application), src/db_monitor/asgi.py (ASGI app re-export), src/db_monitor/public_api.py (public symbol contract)
 ENTRY: router = APIRouter() composed from data, ops, auth sub-routers.
 
 ROUTE COMPOSITION (routes/__init__.py):
@@ -668,6 +669,7 @@ CLI ENTRY POINTS (from pyproject.toml):
 - db-monitor → db_monitor.cli:main
 - db-monitor-serve → db_monitor.cli:serve
 - db-monitor-migrate → db_monitor.cli:migrate
+- python -m db_monitor → db_monitor/__main__.py (delegates to cli.main)
 
 PYTHON SDK:
 - sdk/python/db_monitor_sdk/client.py: async HTTP client for DB Monitor API
