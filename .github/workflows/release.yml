@@ -56,7 +56,7 @@ jobs:
       - name: Generate artifact checksums
         run: |
           cd dist
-          sha256sum *.whl *.tar.gz > SHA256SUMS
+          sha256sum -- ./*.whl ./*.tar.gz > SHA256SUMS
           sha256sum --check SHA256SUMS
 
       - name: Upload build artifacts
