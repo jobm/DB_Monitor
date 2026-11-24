@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# validate_goosemem_coverage.sh — Ensure .goosemem references all meaningful source files.
+# validate_goosemem_coverage.sh — Ensure every package directory under
+# src/db_monitor/ is referenced by at least one .goosemem block.
+#
+# .goosemem intentionally summarizes many packages instead of listing every
+# file (see GOOSE_CONTEXT_STRATEGY.md), so coverage is measured at the
+# directory level. File-level counts are printed for information only.
 #
 # Excludes:
-#   - __init__.py files (trivial module markers)
-#   - __pycache__, .venv, site-packages
-#   - app/core/ (compatibility shims re-exporting from db_monitor)
-#   - app/ingestion/ (compatibility shims re-exporting from db_monitor)
-#   - app/api/ (compatibility shims re-exporting from db_monitor)
-#   - app/repositories/ (covered by dedicated #repositories block)
-#   - app/routes/ (covered by api block endpoint listings)
-#   - src/db_monitor/ (all thin proxies to app/ per .goosehints architecture)
+#   - __pycache__ and other bytecode caches
+#   - .venv / site-packages
 #
 # Exit codes:
-#   0 — all files covered
-#   1 — coverage gaps found (prints offending files)
+#   2 — .goosemem or src/db_monitor/ missing
+#   1 — unreferenced directories found
+#   0 — every directory is covered
 #
 # Usage:
 #   bash scripts/validate_goosemem_coverage.sh
@@ -21,85 +21,81 @@
 set -euo pipefail
 
 GOOSEMEM=".goosemem"
-APP_DIR="app"
+SRC_DIR="src/db_monitor"
 
 if [ ! -f "$GOOSEMEM" ]; then
   echo "ERROR: $GOOSEMEM not found" >&2
-  exit 1
+  exit 2
+fi
+
+if [ ! -d "$SRC_DIR" ]; then
+  echo "ERROR: $SRC_DIR not found (run from the repository root)" >&2
+  exit 2
 fi
 
 # ---------------------------------------------------------------------------
-# 1. Collect app/ implementation files, excluding known shim directories
+# 1. Enumerate package directories that contain Python source
+#    (an empty leftover directory is not worth mentioning in .goosemem).
 # ---------------------------------------------------------------------------
-find_files() {
-  find "$1" -name '*.py' \
-    -not -name '__init__.py' \
+mapfile -t dirs < <(
+  find "$SRC_DIR" -name '*.py' \
     -not -path '*/__pycache__/*' \
     -not -path '*/.venv/*' \
     -not -path '*/site-packages/*' \
-    -not -path 'app/core/*' \
-    -not -path 'app/ingestion/*' \
-    -not -path 'app/api/*' \
-    -not -path 'app/repositories/*' \
-    -not -path 'app/routes/*' \
-    -not -path 'src/db_monitor/*' \
-    -not -path 'app/app_factory.py' \
-    -not -path 'app/extensions.py' \
-    -not -path 'app/migrations.py' \
-    -not -path 'app/start_monitor.py' \
-    | sed 's|^./||' | sort -u
-}
+    | xargs -r -n1 dirname | LC_ALL=C sort -u
+)
 
 # ---------------------------------------------------------------------------
-# 2. Collect all .py paths referenced in .goosemem
+# 2. Check each directory for a mention in .goosemem
+#
+# A mention counts if the directory path appears with a non-identifier
+# character on both sides, so "core/config/dataclasses/" and
+# "src/db_monitor/core/config/dataclasses" both match, while "core" does not
+# match inside "core_utils".
 # ---------------------------------------------------------------------------
-grep -ohE '[a-zA-Z0-9_/.-]+\.py' "$GOOSEMEM" \
-  | sed 's|^|/|' | sort -u > /tmp/goosemem_refs.txt
-
-# ---------------------------------------------------------------------------
-# 3. Check a directory, excluding known shim paths
-# ---------------------------------------------------------------------------
-check_dir() {
-  local dir="$1"
-  local missing=0
-
-  while IFS= read -r file; do
-    local normalized="/${file}"
-    if ! grep -qxF "$normalized" /tmp/goosemem_refs.txt; then
-      echo "  GAP: $file"
-      missing=$((missing + 1))
-    fi
-  done < <(find_files "$dir")
-
-  return $missing
-}
-
-echo "=== .goosemem coverage validation ==="
+echo "=== .goosemem directory coverage ($SRC_DIR) ==="
 echo ""
 
-total_gaps=0
+covered=0
+total=0
+gaps=()
 
-echo "--- $APP_DIR/ (implementation files, excluding shim directories) ---"
-if check_dir "$APP_DIR" "app"; then
-  echo "  (all covered)"
-else
-  total_gaps=$((total_gaps + $?))
-fi
+for dir in "${dirs[@]}"; do
+  rel="${dir#"$SRC_DIR"/}"
+  [ "$rel" = "$dir" ] && continue          # the root, handled by any src/ mention
+  total=$((total + 1))
+
+  if grep -qE "(^|/)${rel}(/|[^A-Za-z0-9_]|$)" "$GOOSEMEM"; then
+    covered=$((covered + 1))
+  else
+    gaps+=("$rel")
+  fi
+done
+
+for gap in "${gaps[@]:-}"; do
+  [ -n "$gap" ] && echo "  GAP: $SRC_DIR/$gap/"
+done
+
 echo ""
-
 echo "--- Stats ---"
 blocks=$(grep -c '^=' "$GOOSEMEM" | awk '{print int($1/2)}')
-lines=$(wc -l < "$GOOSEMEM")
-bytes=$(wc -c < "$GOOSEMEM")
-echo "  Blocks:     $blocks"
-echo "  Lines:      $lines"
-echo "  Bytes:      $bytes"
+existing=$(find "$SRC_DIR" -name '*.py' -not -path '*/__pycache__/*' | wc -l)
+referenced=$(
+  grep -ohE "$SRC_DIR/[A-Za-z0-9_/.-]+\.py" "$GOOSEMEM" \
+    | sed 's/^/.\//' | sort -u | wc -l
+)
+echo "  Blocks:          $blocks"
+echo "  Lines:           $(wc -l < "$GOOSEMEM")"
+echo "  Bytes:           $(wc -c < "$GOOSEMEM")"
+echo "  Directories:     $covered/$total covered"
+echo "  Files by path:   $referenced named / $existing existing (info only)"
 echo ""
 
-if [ "$total_gaps" -gt 0 ]; then
-  echo "FAIL: $total_gaps file(s) not referenced. Add them to the relevant .goosemem block."
+if [ "${#gaps[@]}" -gt 0 ]; then
+  echo "FAIL: ${#gaps[@]} director$([ "${#gaps[@]}" -eq 1 ] && echo y || echo ies) not referenced."
+  echo "Add each to the FILES:/references of the block that owns it."
   exit 1
-else
-  echo "PASS: all meaningful source files are covered."
-  exit 0
 fi
+
+echo "PASS: every package directory is referenced."
+exit 0

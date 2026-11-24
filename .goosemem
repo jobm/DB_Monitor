@@ -4,78 +4,69 @@
 # Do NOT load all blocks at once. Match keywords, load relevant block, act.
 
 ================================================================================
-#configuration #config #env #environment #settings #postgres #kafka #broker #jwt #webhook #otel #retention #quota #tuning #production #validation
+#configuration #config #configs #env #envvar #envvars #environment #settings #setting #constants #variables #pool #pools #size #file #files #secret #secrets #postgres #kafka #broker #jwt #webhook #otel #retention #quota #tuning #production #validation
 ================================================================================
 
 DOMAIN: Configuration & Environment Variables
-FILES: src/db_monitor/config.py (thin proxy to core/config_loader.py), src/db_monitor/core/config_loader.py (utility functions), app/config.py (legacy monolith — ~400 lines of env var loading, the actual source of truth for all config constants)
-NOTE: app/config.py is NOT a shim — it is the real config module. src/db_monitor/config.py proxies to it. Read app/config.py for the full set of env var loading and validation rules.
-ENTRY: Module-level constants loaded at import time from os.environ via dotenv.
+FILES: src/db_monitor/core/config/__init__.py (settings singleton), src/db_monitor/core/config/dataclasses/ (core.py, db.py, auth_settings.py, broker.py, ingestion.py, observability.py, retention.py, webhook.py, backplane.py, validation.py, factory.py), src/db_monitor/core/config/normalizers/ (quotas.py, slo.py, urls.py), src/db_monitor/core/config/normalizers/clusters/ (defaults.py, loader.py, normalizers.py), src/db_monitor/core/config_loader.py (get_env_or_file, parse_csv_list, config_error, default_schema_mode)
+NOTE: There is no flat config module and no module-level constants. Config is a validated dataclass tree: use `from db_monitor.core.config import settings` and read nested fields (`settings.db.postgres_url`, `settings.auth.jwt_secret`, `settings.broker.kafka_topics`, `settings.observability.otel_exporter`). Never import `POSTGRES_URL`/`JWT_SECRET`/`DB_POOL_SIZE` — those names no longer exist.
+ENTRY: `settings = _get_settings()` runs at import of db_monitor.core.config → `AppSettings.from_env()` (cached once, validated). Env vars are read at import time.
 
-CRITICAL CONSTANTS (all are plain module-level vars, NOT class instances):
-- POSTGRES_URL — asyncpg DSN, default "postgresql+asyncpg://postgres:postgres@localhost:5437/postgres"
-- KAFKA_BROKER — default "kafka:9092"
-- KAFKA_TOPICS — CSV list, auto-derived from connectors/sources.json manifest when env var absent
-- BROKER_CLUSTERS — JSON array of {name, broker_kind, bootstrap_servers, topics, consumer_group, ...}
-- KAFKA_CLUSTERS — legacy single-kind format, superseded by BROKER_CLUSTERS
-- MESSAGE_BROKER — "kafka" or "rabbitmq", selects default cluster builder
-- JWT_SECRET / JWT_SECRET_NEXT — HS256 signing, rotation support
-- JWT_ALGORITHM — default "HS256"
-- ACCESS_TOKEN_TTL_MINUTES — default 15
-- WS_SESSION_TOKEN_TTL_SECONDS — default 60
-- DB_POOL_SIZE / DB_MAX_OVERFLOW / DB_POOL_TIMEOUT_SECONDS — asyncpg pool tuning
-- DB_SCHEMA_MODE — "apply" | "validate" | "skip", controls startup migration behavior
-- APP_ENV — "development" | "production", production enforces stricter validation
-- ALLOW_BOOTSTRAP — disabled in production, enables POST /auth/bootstrap
-- DLQ_ENABLED / BATCH_ENABLED / BATCH_SIZE — consumer behavior toggles
-- RETENTION_CLEANUP_ENABLED / RETENTION_CLEANUP_INTERVAL_SECONDS — background cleanup
-- EVENT_RETENTION_DAYS / COLUMN_CHANGES_RETENTION_DAYS / DEAD_LETTER_RETENTION_DAYS / API_AUDIT_LOG_RETENTION_DAYS
-- INGESTION_QUOTA_ENABLED / INGESTION_QUOTA_WINDOW_SECONDS / INGESTION_QUOTA_MODE ("throttle"|"drop")
-- WEBHOOK_URLS / WEBHOOK_SHARED_SECRET / WEBHOOK_TIMEOUT_SECONDS / WEBHOOK_MAX_RETRIES
-- OTEL_TRACING_ENABLED / OTEL_SERVICE_NAME / OTEL_EXPORTER ("otlp"|"console")
-- AUDIT_LOG_QUEUE_MAXSIZE / AUDIT_LOG_BATCH_SIZE / AUDIT_LOG_FLUSH_INTERVAL_SECONDS
-- APP_SHUTDOWN_TIMEOUT_SECONDS — default 45
-- READINESS_MAX_COMMIT_AGE_SECONDS / READINESS_MAX_CONSUMER_LAG / READINESS_MAX_DLQ_MESSAGES
-- SLO_ROLLING_WINDOW_DAYS / TENANT_COHORT_SLO_POLICIES — JSON array of cohort SLO tiers
-- WS_BACKPLANE_ENABLED / WS_BACKPLANE_CHANNEL — Postgres LISTEN/NOTIFY clustering
+SETTINGS TREE (attribute ← env var, default):
+- AppSettings (core.py): env ← APP_ENV (development); db_schema_mode ← DB_SCHEMA_MODE (apply in dev, validate in prod); app_shutdown_timeout_seconds ← APP_SHUTDOWN_TIMEOUT_SECONDS (45); readiness_max_commit_age_seconds ← READINESS_MAX_COMMIT_AGE_SECONDS (300); readiness_max_consumer_lag ← READINESS_MAX_CONSUMER_LAG (1000); readiness_max_dlq_messages ← READINESS_MAX_DLQ_MESSAGES (0); slo_rolling_window_days ← SLO_ROLLING_WINDOW_DAYS (30); tenant_cohort_slo_policies ← TENANT_COHORT_SLO_POLICIES (JSON)
+- settings.db (db.py): postgres_url ← POSTGRES_URL (postgresql+asyncpg://postgres:postgres@localhost:5437/postgres); sqlalchemy_echo ← SQLALCHEMY_ECHO; pool_size ← DB_POOL_SIZE (10); max_overflow ← DB_MAX_OVERFLOW (20); pool_timeout_seconds ← DB_POOL_TIMEOUT_SECONDS (30); pool_recycle_seconds ← DB_POOL_RECYCLE_SECONDS (1800); pool_pre_ping ← DB_POOL_PRE_PING (true)
+- settings.auth (auth_settings.py): jwt_secret ← JWT_SECRET; jwt_secret_next ← JWT_SECRET_NEXT; jwt_algorithm ← JWT_ALGORITHM (HS256); access_token_ttl_minutes ← ACCESS_TOKEN_TTL_MINUTES (15); ws_session_token_ttl_seconds ← WS_SESSION_TOKEN_TTL_SECONDS (60); api_key_default_ttl_days ← API_KEY_DEFAULT_TTL_DAYS (90); allow_bootstrap ← ALLOW_BOOTSTRAP; ws_backplane_enabled ← WS_BACKPLANE_ENABLED (true); ws_backplane_channel ← WS_BACKPLANE_CHANNEL (db_monitor_ws_events)
+- settings.broker (broker.py): message_broker ← MESSAGE_BROKER (kafka); dlq_enabled ← DLQ_ENABLED (true); batch_enabled ← BATCH_ENABLED (true); batch_size ← BATCH_SIZE (100); kafka_broker ← KAFKA_BROKER (kafka:9092); kafka_security_protocol ← KAFKA_SECURITY_PROTOCOL (PLAINTEXT); kafka_ssl_cafile/certfile/keyfile/password ← KAFKA_SSL_*; kafka_topic ← KAFKA_TOPIC (orderdb.public.orders); kafka_consumer_group ← KAFKA_CONSUMER_GROUP (fastapi-consumer-group); rabbitmq_url ← RABBITMQ_URL; rabbitmq_queue ← RABBITMQ_QUEUE (db-monitor-events); rabbitmq_prefetch_count ← RABBITMQ_PREFETCH_COUNT (100); rabbitmq_dlq_queue ← RABBITMQ_DLQ_QUEUE (db-monitor-dlq)
+- settings.backplane (backplane.py): backend ← WS_BACKPLANE_BACKEND (postgres|redis); redis_url ← REDIS_URL; redis_channel_prefix ← REDIS_BACKPLANE_CHANNEL_PREFIX (db_monitor)
+- settings.ingestion (ingestion.py): quota_enabled ← INGESTION_QUOTA_ENABLED (false); quota_window_seconds ← INGESTION_QUOTA_WINDOW_SECONDS (60); source_default_events_per_window ← INGESTION_SOURCE_DEFAULT_EVENTS_PER_WINDOW (0=unlimited); tenant_default_events_per_window ← INGESTION_TENANT_DEFAULT_EVENTS_PER_WINDOW (0); quota_mode ← INGESTION_QUOTA_MODE (throttle|drop); quota_max_throttle_seconds ← INGESTION_QUOTA_MAX_THROTTLE_SECONDS (5.0); bulk_write_enabled ← INGESTION_BULK_WRITE_ENABLED (true)
+- settings.observability (observability.py): otel_tracing_enabled ← OTEL_TRACING_ENABLED (false); otel_service_name ← OTEL_SERVICE_NAME (db-monitor); otel_exporter ← OTEL_EXPORTER (otlp|console); otel_exporter_otlp_endpoint/headers ← OTEL_EXPORTER_OTLP_ENDPOINT/HEADERS; audit_log_queue_maxsize ← AUDIT_LOG_QUEUE_MAXSIZE (10000); audit_log_batch_size ← AUDIT_LOG_BATCH_SIZE (100); audit_log_flush_interval_seconds ← AUDIT_LOG_FLUSH_INTERVAL_SECONDS (1.0); audit_log_queue_mode ← AUDIT_LOG_QUEUE_MODE (drop|block|spill)
+- settings.retention (retention.py): cleanup_enabled ← RETENTION_CLEANUP_ENABLED (false); cleanup_interval_seconds ← RETENTION_CLEANUP_INTERVAL_SECONDS (3600); cleanup_batch_size ← RETENTION_CLEANUP_BATCH_SIZE (1000); cleanup_max_batches_per_table ← RETENTION_CLEANUP_MAX_BATCHES_PER_TABLE (10); archive_before_delete ← RETENTION_ARCHIVE_BEFORE_DELETE; archive_dir ← RETENTION_ARCHIVE_DIR (retention-archive); event_retention_days ← EVENT_RETENTION_DAYS (30); column_changes_retention_days ← COLUMN_CHANGES_RETENTION_DAYS (30); dead_letter_retention_days ← DEAD_LETTER_RETENTION_DAYS (30); api_audit_log_retention_days ← API_AUDIT_LOG_RETENTION_DAYS (90); spill_retention_days ← SPILL_RETENTION_DAYS (30)
+- settings.webhook (webhook.py): urls ← WEBHOOK_URLS (CSV); timeout_seconds ← WEBHOOK_TIMEOUT_SECONDS (5.0); shared_secret ← WEBHOOK_SHARED_SECRET; max_retries ← WEBHOOK_MAX_RETRIES (3); retry_backoff_seconds ← WEBHOOK_RETRY_BACKOFF_SECONDS (0.5); circuit_breaker_threshold ← WEBHOOK_CIRCUIT_BREAKER_THRESHOLD (5); circuit_breaker_recovery_seconds ← WEBHOOK_CIRCUIT_BREAKER_RECOVERY_SECONDS (30.0)
 
-PRODUCTION VALIDATION RULES (APP_ENV=production):
-- DB_POOL_SIZE >= 1, DB_MAX_OVERFLOW >= 0, DB_POOL_TIMEOUT_SECONDS >= 1
-- POSTGRES_URL must NOT be the default localhost URL
-- JWT_SECRET must be explicitly set and >= 32 chars
-- OTEL_EXPORTER must be "otlp" or "console"; if otlp, endpoint required
-- MESSAGE_BROKER must be "kafka" or "rabbitmq"
-- All *_DAYS retention values must be >= 0
-- WEBHOOK_URLS entries must start with http:// or https://
+COMPUTED FIELDS (populated in factory.py after construction):
+- broker.kafka_topics ← KAFKA_TOPICS CSV, else [kafka_topic]
+- broker.rabbitmq_queues ← RABBITMQ_QUEUES CSV, else [rabbitmq_queue]
+- broker.kafka_ssl_context ← built when protocol is SSL/SASL_SSL
+- broker.kafka_clusters ← load_kafka_clusters(); broker.broker_clusters ← load_broker_clusters() (BROKER_CLUSTERS supersedes KAFKA_CLUSTERS)
+- ingestion.source_quotas ← INGESTION_SOURCE_QUOTAS JSON; ingestion.tenant_quotas ← INGESTION_TENANT_QUOTAS JSON
+- webhook.urls ← WEBHOOK_URLS CSV
 
-HELPER FUNCTIONS (in core/config_loader.py):
-- get_env_or_file(env_name, default) — reads env var or file path (for secrets)
-- parse_csv_list(value) — splits comma-separated strings
-- config_error(message, hint) — raises ValueError with remediation hint
+SECRETS: get_env_or_file(name, default) reads NAME, then NAME_FILE (file contents, stripped). A missing NAME_FILE path raises config_error. Use the _FILE variant for Docker/K8s secrets (JWT_SECRET_FILE, POSTGRES_URL_FILE, RABBITMQ_URL_FILE, WEBHOOK_SHARED_SECRET_FILE, KAFKA_SSL_PASSWORD_FILE, REDIS_URL_FILE, DB_SCHEMA_MODE_FILE).
+
+VALIDATION (validation.py, runs inside from_env()):
+- DB_SCHEMA_MODE ∈ {apply, validate, skip}
+- APP_ENV=production|prod adds hardening: DB_POOL_SIZE>=1, DB_MAX_OVERFLOW>=0, DB_POOL_TIMEOUT_SECONDS>=1, DB_POOL_RECYCLE_SECONDS>=0, POSTGRES_URL not the default localhost DSN, JWT_SECRET set and >=32 chars (JWT_SECRET_NEXT also >=32 if set), ALLOW_BOOTSTRAP forced off unless the env var is present
+- OTEL_EXPORTER ∈ {otlp, console}; tracing + otlp requires OTEL_EXPORTER_OTLP_ENDPOINT
+- WEBHOOK_TIMEOUT_SECONDS>0, MAX_RETRIES>=0, RETRY_BACKOFF_SECONDS>=0, CIRCUIT_BREAKER_THRESHOLD>=1, recovery>0, every URL starts http:// or https://
+- MESSAGE_BROKER ∈ {kafka, rabbitmq}; RABBITMQ_PREFETCH_COUNT>0
+- INGESTION_QUOTA_WINDOW_SECONDS>0, default limits>=0, QUOTA_MODE ∈ {throttle, drop}, MAX_THROTTLE_SECONDS>0
+- SLO_ROLLING_WINDOW_DAYS>0; retention interval/batch/max-batches>0 and all *_DAYS>=0
 
 PITFALLS:
-- Config is loaded at IMPORT TIME. Changing env vars after import has no effect.
-- BROKER_CLUSTERS and KAFKA_CLUSTERS are mutually exclusive config paths.
+- settings is built once at import of db_monitor.core.config. Changing os.environ afterwards has no effect — restart the process, or monkeypatch the settings object in tests.
+- Attribute names are lowercase and nested (settings.db.pool_size), not SCREAMING_SNAKE env-var names.
+- BROKER_CLUSTERS and KAFKA_CLUSTERS are mutually exclusive; BROKER_CLUSTERS wins.
 - JWT_SECRET_NEXT enables zero-downtime rotation; both secrets are tried during decode.
+- ws_backplane_enabled lives on settings.auth, but the backend/Redis knobs live on settings.backplane.
 
 ================================================================================
-#database #db #sql #postgres #asyncpg #sqlalchemy #engine #session #pool #orm #models #tables #migration
+#database #db #sql #postgres #asyncpg #sqlalchemy #engine #session #pool #connection #transaction #orm #models #tables #migration #dedup #deduplication #idempotent #idempotency #upsert #conflict #unique #insert #duplicate #duplicates
 ================================================================================
 
 DOMAIN: Database Layer, ORM Models, and Migrations
-FILES: src/db_monitor/core/db.py, src/db_monitor/extensions.py, app/models.py, src/db_monitor/migrations.py, app/migrate.py
+FILES: src/db_monitor/extensions.py (engine, AsyncSessionLocal, pool instrumentation), src/db_monitor/core/models/ (base.py, events.py, consumer.py, auth.py, ops.py, schema.py), src/db_monitor/core/migrations/ (tracked migrations), src/db_monitor/ingestion/event_storage/ (identity.py, insert.py, persist.py), src/db_monitor/cli.py (db-monitor migrate)
 ENTRY: engine and AsyncSessionLocal created at module import in extensions.py.
 
-ENGINE: src/db_monitor/core/db.py → proxies to extensions.build_engine()
-- create_async_engine(POSTGRES_URL, pool_size=DB_POOL_SIZE, max_overflow=DB_MAX_OVERFLOW, ...)
+ENGINE: extensions.build_engine()
+- create_async_engine(settings.db.postgres_url, pool_size=settings.db.pool_size, max_overflow=settings.db.max_overflow, ...)
 - Pool metrics instrumented via SQLAlchemy pool event hooks (connect/checkout/checkin/close/invalidate/reset)
 
-SESSION FACTORY: src/db_monitor/core/db.py → proxies to extensions.AsyncSessionLocal
+SESSION FACTORY: extensions.AsyncSessionLocal
 - sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 - Usage: `async with AsyncSessionLocal() as session: async with session.begin(): ...`
 - WARNING: AsyncSessionLocal is a sessionmaker, NOT a session instance
 
-ORM MODELS (app/models.py, re-exported via src/db_monitor/core/models.py):
+ORM MODELS (src/db_monitor/core/models/*.py, re-exported from core/models/__init__.py):
 - Base — declarative_base()
 - MonitoredTable — "monitored_tables" — {id, service_name, database_name, table_name, topic_name, is_active, created_at}
   - Unique index on (service_name, database_name, table_name)
@@ -102,30 +93,23 @@ ORM MODELS (app/models.py, re-exported via src/db_monitor/core/models.py):
 - CustomerLifecycleState — "customer_lifecycle_state" — {customer_id PK, state JSONB, updated_at}
 - CustomerProvisionJob — "customer_provision_jobs" — {job_id PK, customer_id, state JSONB, updated_at}
 
-MIGRATIONS (src/db_monitor/migrations.py):
-- 14 tracked migrations (0001–0014), stored in schema_migrations table
-- Advisory lock ID: 7273646 ("dbmonitor" on phone keypad) — prevents concurrent migration runs
-- apply_migrations(session_factory, engine) → acquires lock, applies pending, releases
-- validate_migrations(engine) → raises RuntimeError if any pending
-- Migration 0013: converts events/column_changes to PARTITIONED BY RANGE
-- Migration 0014: adds cursor pagination composite indexes
-- create_monthly_partitions(connection, table, column, months_ahead=3)
-- drop_old_partitions(connection, table, column, older_than) — drops child partitions, never DEFAULT
+DEDUP / IDEMPOTENT WRITES: src/db_monitor/ingestion/event_storage/ — identity.py (row identity), insert.py (ON CONFLICT DO NOTHING batch insert), persist.py (persist path). Duplicate events are dropped by the unique index (kafka_topic, kafka_partition, kafka_offset, capture_time), never by application-level checks.
+
+MIGRATIONS: 18 tracked migrations with advisory lock — see #migration block for full list, locking, and partitioning details.
 
 PITFALLS:
 - Do NOT call Base.metadata.create_all() in production — use migrations
 - Partition pruning requires WHERE clause on the partition key (capture_time / changed_at)
 - ON CONFLICT DO NOTHING on events means duplicates are silently skipped
-- Advisory lock is per-connection; only one migration process runs at a time
 
 ================================================================================
-#ingestion #consumer #kafka #rabbitmq #broker #pipeline #batch #dlq #deadletter #checkpoint #offset #circuitbreaker
+#ingestion #ingest #consumer #consume #kafka #rabbitmq #broker #pipeline #batch #dlq #deadletter #checkpoint #offset #circuitbreaker #loop #message #messages #topic #topics #queue #stream #worker
 ================================================================================
 
 DOMAIN: Ingestion Pipeline & Consumer Service
-FILES: src/db_monitor/ingestion/consumer.py (compatibility wrapper), app/consumer_service.py (MAIN consumer logic — ~1000 lines, the real implementation), src/db_monitor/ingestion/pipeline.py (compatibility wrapper), app/event_pipeline.py (filter/transform logic), src/db_monitor/ingestion/brokers.py (compatibility wrapper), app/message_brokers.py (Kafka/RabbitMQ adapter implementations), app/consumer/runtime_state.py (CircuitBreaker, consumer runtime dicts — ACTUAL implementation, not a shim), app/consumer/recovery.py (checkpoint persistence, DLQ record management — ACTUAL implementation), app/change_processor.py (ChangeProcessor — extracts column-level changes from events, supports batch and single-event processing)
-NOTE: app/consumer/ contains real implementation files, NOT shims. The src/db_monitor/ingestion/ wrappers re-export from these.
-ENTRY: consumer_task() in consumer_service.py — main async loop per broker cluster.
+FILES: src/db_monitor/consumer/consumer.py (consumer_task), src/db_monitor/consumer/loop.py, src/db_monitor/consumer/batch/ (core.py, processing.py, helpers.py), src/db_monitor/ingestion/consumer.py, src/db_monitor/ingestion/pipeline.py, src/db_monitor/ingestion/event_pipeline.py (filter/transform logic), src/db_monitor/ingestion/brokers/ (kafka.py, rabbitmq.py adapters), src/db_monitor/ingestion/runtime_state/ (state.py, breaker.py, metrics.py), src/db_monitor/ingestion/recovery/ (checkpoints.py, dlq.py, broker.py), src/db_monitor/ingestion/changes/ (__init__.py ChangeProcessor, queries.py)
+NOTE: All ingestion modules are first-party implementations under src/db_monitor — no legacy app/ re-export layer remains.
+ENTRY: consumer_task() in src/db_monitor/consumer/consumer.py — main async loop per broker cluster.
 
 CONSUMER TASK SIGNATURE:
 consumer_task(cluster_name, broker_kind, bootstrap_servers, consumer_group, topics, topic_partitions, connection_url, queue_names, prefetch_count, dlq_destination, enable_dlq, enable_batch, batch_size)
@@ -144,12 +128,12 @@ BATCH WRITING (INGESTION_BULK_WRITE_ENABLED=true):
 - Batch change extraction: one query for audit-enabled columns, bulk insert changes
 - Falls back to per-event writes on batch failure
 
-CONSUMER RUNTIME STATE (app/consumer/runtime_state.py):
+CONSUMER RUNTIME STATE (src/db_monitor/ingestion/runtime_state/):
 - consumer_runtimes dict: per-cluster {running, connected, topics, lag_by_partition, lag_total, last_message_at, last_commit_at, ...}
 - CircuitBreaker per cluster: can_execute(), record_success(), record_failure()
 - consumer_task delegates to runtime state for health reporting
 
-RECOVERY (app/consumer/recovery.py):
+RECOVERY (src/db_monitor/ingestion/recovery/):
 - persist_consumer_checkpoints(): upserts latest committed position per (consumer_group, broker_kind, destination, substream)
 - _persist_dead_letter_event(): stores failed message in dead_letter_events table
 - list_dead_letter_events(): returns DLQ records for operator inspection
@@ -161,7 +145,7 @@ DEAD LETTER QUEUE:
 - Batch replay: replay_dead_letter_event_records(limit, include_replayed)
 - Metrics: dlq_messages_total counter, dlq_records_pending gauge
 
-CHANGE PROCESSOR (app/change_processor.py):
+CHANGE PROCESSOR (src/db_monitor/ingestion/changes/):
 - ChangeProcessor class: extracts column-level changes from Debezium event payloads
 - process_event(event, session) → single-event extraction, queries audit-enabled columns per table
 - process_events_batch(events, session) → batch extraction: fetches columns once per table_id, computes deltas in memory, bulk inserts ColumnChange rows
@@ -170,7 +154,7 @@ CHANGE PROCESSOR (app/change_processor.py):
 - Operation mapping: INSERT → new values from 'after', UPDATE → diff before/after, DELETE → old values from 'before'
 - Only extracts changes for columns with MonitoredColumn.audit_enabled=True
 
-ADAPTERS (app/message_brokers.py):
+ADAPTERS (src/db_monitor/ingestion/brokers/):
 - MessageConsumerAdapter protocol: start(), stop(), ack_batch(messages), __aiter__
 - KafkaConsumerAdapter: aiokafka AIOKafkaConsumer, manual commit, lag tracking via highwater
 - RabbitMQConsumerAdapter: aio_pika, prefetch_count, durable queues, async Queue bridge
@@ -184,11 +168,11 @@ PITFALLS:
 - RabbitMQ adapter uses delivery_tag as offset equivalent; partition is always 0
 
 ================================================================================
-#events #event #parser #parsing #payload #debezium #cdc #json #timestamp #operation #insert #update #delete
+#events #event #parser #parsing #payload #envelope #debezium #cdc #snapshot #json #timestamp #operation #insert #update #delete #rowidentity #filter #transform #masking #schema #discovery #discovered #column #columns #table
 ================================================================================
 
 DOMAIN: Event Parsing & Source Metadata
-FILES: src/db_monitor/event_parser.py, app/event_parser.py, app/source_metadata.py, app/row_identity.py, app/schema_discovery.py, app/repositories/events.py
+FILES: src/db_monitor/ingestion/event_parser.py, src/db_monitor/ingestion/source_metadata.py, src/db_monitor/ingestion/row_identity.py, src/db_monitor/schema/discovery/ (core.py, batch.py, queries.py, state.py, upserts.py), src/db_monitor/repositories/events.py
 ENTRY: parse_event_payload(raw_payload) → ParsedEvent dataclass.
 
 PARSED EVENT (event_parser.py):
@@ -208,12 +192,12 @@ DEBEZIUM ENVELOPE HANDLING:
   - SourceCoordinates.table_filter_names() → list of candidate names for config matching
 - extract_operation(payload) → maps Debezium op codes: c→INSERT, r→INSERT (snapshot), u→UPDATE, d→DELETE
 
-ROW IDENTITY (app/row_identity.py):
+ROW IDENTITY (src/db_monitor/ingestion/row_identity.py):
 - extract_row_identity(event_data, primary_key_columns) → dict or None
 - Preference: declared PK columns → "id" → *_id columns → any column containing "id"
 - Returns {column: value} for non-null values only
 
-SCHEMA DISCOVERY (app/schema_discovery.py):
+SCHEMA DISCOVERY (src/db_monitor/schema/discovery/):
 - SchemaDiscovery class: processes events to discover/update table/column schemas
 - SchemaCacheBackplane: Postgres LISTEN/NOTIFY for multi-instance cache invalidation
 - process_event(event, session) → upserts MonitoredTable + MonitoredColumn, returns table_id
@@ -223,7 +207,7 @@ SCHEMA DISCOVERY (app/schema_discovery.py):
 - _extract_columns_from_payload(): infers columns from before/after dict keys + sample values
 - Schema cache with TTL (default 60s) per (service_name, table_name)
 
-EVENT PIPELINE (app/event_pipeline.py):
+EVENT PIPELINE (src/db_monitor/ingestion/event_pipeline.py):
 - EventPipelineConfig: loads FILTER_ALLOWED_EVENT_TYPES, FILTER_IGNORED_EVENT_TYPES, FILTER_ALLOWED_TABLES, FILTER_IGNORED_TABLES, VALIDATION_REQUIRED_FIELDS, TRANSFORM_MASK_FIELDS, CUSTOM_EVENT_PROCESSORS
 - EventPipeline.should_process(event) → bool: type filtering → table filtering → required field validation
 - EventPipeline.transform(event) → KafkaEvent: runs custom processors, applies field masking ("***MASKED***")
@@ -236,14 +220,14 @@ PITFALLS:
 - Custom event processors are loaded via importlib from CUSTOM_EVENT_PROCESSORS env var
 
 ================================================================================
-#repositories #repository #readmodel #query #pagination #keyset #auditlog #spill #replay #events #responsemodels
+#repositories #repository #readmodel #query #queries #read #list #search #pagination #keyset #cursor #auditlog #spill #replay #events #responsemodels #responsemodel
 ================================================================================
 
 DOMAIN: Data Repositories, Query Patterns & Response Models
-FILES: app/repositories/events.py, app/repositories/audit_log_replay.py, app/repositories/audit_log_spill.py, app/response_models.py, app/core/responses.py (re-export wrapper)
+FILES: src/db_monitor/repositories/events.py, src/db_monitor/repositories/audit_log_replay.py, src/db_monitor/repositories/audit_log_spill.py, src/db_monitor/core/responses.py (response models)
 ENTRY: Instantiate with session factory, then call async methods.
 
-EVENTS REPOSITORY (app/repositories/events.py):
+EVENTS REPOSITORY (src/db_monitor/repositories/events.py):
 - EventsRepository(session_factory): read-model for event query endpoints
 - list_events(*, filters, limit, offset, cursor_id, cursor_time, include_total) → (events, total)
   - Keyset pagination: (capture_time DESC, id DESC) when both cursor_time and cursor_id provided
@@ -254,23 +238,23 @@ EVENTS REPOSITORY (app/repositories/events.py):
 - EventQueryFilters dataclass: service_name, source_table_id, row_identity, event_type, start_time, end_time, search_term
 - EventPageCursor dataclass: capture_time, event_id (composite keyset boundary)
 - search_term uses raw_payload ILIKE — full-text search across raw payloads
-- Cross-references: used by GET /events and GET /events/stats in routes/data.py (Block #api)
+- Cross-references: used by GET /events and GET /events/stats in routes/data/events.py (Block #api)
 
-AUDIT LOG SPILL REPOSITORY (app/repositories/audit_log_spill.py):
+AUDIT LOG SPILL REPOSITORY (src/db_monitor/repositories/audit_log_spill.py):
 - list_audit_log_spill_snapshot(limit=100) → list[dict]
   - Returns recent spill entries ordered by spilled_at DESC
   - Each dict: {id, entry (JSONB), error_message, spilled_at}
-- Cross-references: used by GET /admin/audit-log/spill in routes/ops.py (Block #api)
+- Cross-references: used by GET /admin/audit-log/spill in routes/ops/dlq.py (Block #api)
 
-AUDIT LOG REPLAY REPOSITORY (app/repositories/audit_log_replay.py):
+AUDIT LOG REPLAY REPOSITORY (src/db_monitor/repositories/audit_log_replay.py):
 - replay_spill_entries(limit=100, ids=None, actor=None) → {attempted, replayed, failed}
   - If ids provided: replay only those spill rows
   - Otherwise: replay up to limit most recent unreplayed rows
   - Marks each spill row: replayed=True, replayed_by=actor, replayed_at=now(UTC)
   - Inserts into api_audit_logs table (not raw engine — uses session for atomicity)
-- Cross-references: used by POST /admin/audit-log/spill/replay in routes/ops.py (Block #api)
+- Cross-references: used by POST /admin/audit-log/spill/replay in routes/ops/dlq.py (Block #api)
 
-RESPONSE MODELS (app/response_models.py, Pydantic v2 BaseModel):
+RESPONSE MODELS (src/db_monitor/core/responses.py, Pydantic v2 BaseModel):
 - TableListResponse — {tables: list[dict], count: int}
 - TableColumnsResponse — {columns: list[dict]}
 - EventItemResponse — single event row: {id, event_type, event_time, capture_time, user_id, service_name, operation, source_table_id, row_identity, event_data}
@@ -282,8 +266,8 @@ RESPONSE MODELS (app/response_models.py, Pydantic v2 BaseModel):
 - AppInfoResponse — app metadata: {title, description, healthy, shutting_down}
 - AccessTokenExchangeResponse — token exchange: {access_token, token_type, expires_at, owner_name, role}
 - WebSocketTokenExchangeResponse — WS token: {session_token, expires_at, owner_name, role}
-- All re-exported via app/core/responses.py compatibility wrapper
-- Cross-references: all used in routes/data.py, routes/auth.py, routes/ops.py (Block #api)
+- Imported directly from db_monitor.core.responses (no compatibility wrapper)
+- Cross-references: all used in routes/data/, routes/auth/, routes/ops/ (Block #api)
 
 PITFALLS:
 - EventsRepository.list_events() returns count=0 when keyset cursor is active (no COUNT query)
@@ -293,17 +277,17 @@ PITFALLS:
 - EventQueryFilters.search_term does ILIKE on raw_payload — performance concern on large tables without GIN index on raw_payload
 
 ================================================================================
-#api #routes #rest #http #endpoints #fastapi #tables #events #changes #pagination #cursor #health #readiness #admin #auth #token
+#api #route #routes #endpoint #endpoints #rest #http #request #response #fastapi #openapi #tables #events #changes #pagination #cursor #health #readiness #admin #auth #token
 ================================================================================
 
 DOMAIN: API Routes & HTTP Endpoints
-FILES: src/db_monitor/api/router.py, src/db_monitor/routes/data.py, src/db_monitor/routes/auth.py, src/db_monitor/routes/ops.py, src/db_monitor/routes/utils.py, app/routes/
+FILES: src/db_monitor/routes/__init__.py (router composition), src/db_monitor/routes/data/ (events.py, tables.py, changes.py, factories.py), src/db_monitor/routes/auth/ (jwt_routes.py, key_routes/keys.py, key_routes/tokens.py, helpers.py), src/db_monitor/routes/ops/ (health.py, dlq.py, lifecycle.py, metadata.py, execution.py, provisioning/routes.py), src/db_monitor/routes/utils.py
 ENTRY: router = APIRouter() composed from data, ops, auth sub-routers.
 
 ROUTE COMPOSITION (routes/__init__.py):
 - router includes: routes_data.router, routes_ops.router, routes_auth.router
 
-DATA ENDPOINTS (routes/data.py) — require viewer role:
+DATA ENDPOINTS (routes/data/) — require viewer role:
 - GET /tables → list all monitored tables
 - GET /tables/{service_name}/{table_name} → table details + columns
 - GET /tables/{service_name}/{table_name}/columns → column list
@@ -316,7 +300,7 @@ DATA ENDPOINTS (routes/data.py) — require viewer role:
 - GET /changes/{service_name}/{table_name}/{column_name}/at?timestamp=... → point-in-time value lookup
 - GET /changes/{table_name}/{column_name}/at → legacy-compatible route (resolves service.table notation)
 
-AUTH ENDPOINTS (routes/auth.py):
+AUTH ENDPOINTS (routes/auth/):
 - POST /auth/token → exchange credential for short-lived bearer token
 - POST /auth/ws-token → exchange credential for WebSocket session token
 - POST /auth/keys → create API key (admin only)
@@ -329,7 +313,7 @@ AUTH ENDPOINTS (routes/auth.py):
 - POST /admin/customers/{customer_id}/auth/jwt/rotate → rotate customer JWT secrets
 - POST /admin/customers/{customer_id}/auth/jwt/recover → recover previous JWT secret
 
-OPERATIONAL ENDPOINTS (routes/ops.py):
+OPERATIONAL ENDPOINTS (routes/ops/):
 - GET /health → comprehensive health check (DB, consumer, lifecycle, audit log)
 - GET /livez → liveness probe (process-level)
 - GET /readyz → readiness probe (consumer + lifecycle + audit log health, 503 when not ready)
@@ -373,11 +357,11 @@ PITFALLS:
 - /readyz returns 503 until consumer has committed at least once (last_commit_at not None)
 
 ================================================================================
-#auth #rbac #apikeys #jwt #tokens #argon2 #hashing #bootstrap #admin #viewer #credentials #bearer
+#auth #authn #authz #rbac #apikey #apikeys #key #keys #jwt #token #tokens #bearer #credentials #argon2 #hashing #password #secret #login #verify #verified #verification #authenticate #authentication #authorization #role #roles #permission #permissions #bootstrap #admin #viewer
 ================================================================================
 
 DOMAIN: Authentication, RBAC & API Key Lifecycle
-FILES: src/db_monitor/auth.py, app/auth.py
+FILES: src/db_monitor/auth/ (__init__.py, deps.py, tokens.py, utils.py, db.py), src/db_monitor/routes/auth/ (jwt_routes.py, helpers.py), src/db_monitor/routes/auth/key_routes/ (keys.py, tokens.py)
 ENTRY: authenticate_credentials() is the unified auth entry point.
 
 AUTHENTICATION FLOW:
@@ -409,7 +393,7 @@ RBAC DEPENDENCIES (FastAPI Depends):
 - require_admin_role() → raises 403 if role != "admin"
 - require_viewer_role() → raises 403 if role not in ("admin", "viewer")
 
-CUSTOMER JWT SECRET MANAGEMENT (routes/auth.py):
+CUSTOMER JWT SECRET MANAGEMENT (routes/auth/jwt_routes.py):
 - Per-customer active/next/previous secrets stored in customer_jwt_secret_state table
 - Bootstrap: initializes active + next secrets, generation=1
 - Rotate: promotes next→active, generates new next, increments generation
@@ -423,11 +407,11 @@ PITFALLS:
 - Customer JWT state is dual-written: in-memory cache + DB persistence
 
 ================================================================================
-#websocket #ws #broadcast #realtime #live #backplane #listen #notify #pubsub #clustering
+#websocket #ws #socket #sockets #broadcast #fanout #realtime #live #backplane #listen #notify #pubsub #clustering #connection #connections
 ================================================================================
 
 DOMAIN: WebSocket Broadcasting & Backplane
-FILES: src/db_monitor/ws_manager.py, app/ws_manager.py
+FILES: src/db_monitor/ws_manager.py, src/db_monitor/backplane/ (base.py, factory.py, postgres.py, redis.py)
 ENTRY: ws_manager = WebSocketManager() singleton.
 
 WEBSOCKET MANAGER:
@@ -462,11 +446,11 @@ PITFALLS:
 - Backplane is optional — disabled when WS_BACKPLANE_ENABLED=false
 
 ================================================================================
-#metrics #prometheus #observability #counters #histograms #gauges #monitoring #tracing #otel
+#metrics #metric #prometheus #observability #instrumentation #counters #histograms #gauges #monitoring #latency #tracing #otel #grafana
 ================================================================================
 
 DOMAIN: Prometheus Metrics, Observability & Tracing
-FILES: src/db_monitor/metrics.py, src/db_monitor/tracing.py, app/metrics.py, app/tracing.py
+FILES: src/db_monitor/metrics.py, src/db_monitor/tracing.py
 ENTRY: Import metric objects directly from db_monitor.metrics.
 
 PROMETHEUS METRICS (metrics.py):
@@ -505,19 +489,14 @@ GAUGES:
 - db_monitor_webhook_circuit_breaker_state{url}
 - db_monitor_audit_log_queue_size
 
-AUDIT LOG (app/audit_log.py):
+AUDIT LOG (src/db_monitor/audit_log.py):
 - AuditLogWriter: asyncio.Queue-based buffer, batched flush to api_audit_logs table
 - enqueue(entry) → non-blocking put, drops on full queue with metric
 - run() → background task: drain queue, batch flush with retry
 - On persistent failure: spills to api_audit_log_spill table via raw engine
 - Retry: 3 attempts with exponential backoff, then spill
 
-OPEN TELEMETRY TRACING (tracing.py):
-- Optional, enabled via OTEL_TRACING_ENABLED=true
-- initialize_tracing(app, engine, service_name, exporter, otlp_endpoint, otlp_headers)
-- start_span(name, attributes) → context manager for custom spans
-- current_trace_context() → dict for structured log correlation
-- Instruments FastAPI and SQLAlchemy automatically
+TRACING: see #tracing block for OpenTelemetry initialization, span creation, exporters, and context-log correlation.
 
 PITFALLS:
 - Metric labels are string literals — typo in label = new time series
@@ -525,11 +504,11 @@ PITFALLS:
 - Pool metrics are refreshed on every pool event (connect/checkout/checkin), not polled
 
 ================================================================================
-#webhooks #http #outbound #hmac #signing #circuitbreaker #retry #delivery #notifications
+#webhooks #webhook #http #outbound #hmac #signature #signatures #signing #callback #callbacks #circuitbreaker #retry #delivery #notification #notifications
 ================================================================================
 
 DOMAIN: Outbound Webhook Delivery
-FILES: src/db_monitor/webhooks.py, app/webhooks.py
+FILES: src/db_monitor/webhooks.py
 ENTRY: webhook_notifier = WebhookNotifier(urls, timeout, shared_secret) singleton.
 
 WEBHOOK NOTIFIER:
@@ -560,11 +539,11 @@ PITFALLS:
 - HMAC signature uses sha256 with shared secret as key
 
 ================================================================================
-#retention #cleanup #partition #archive #deletion #lifecycle #maintenance
+#retention #cleanup #partition #partitions #archive #deletion #delete #purge #prune #ttl #expiry #expire #lifecycle #maintenance
 ================================================================================
 
 DOMAIN: Retention, Cleanup & Partition Maintenance
-FILES: src/db_monitor/retention.py, app/retention.py
+FILES: src/db_monitor/retention.py, src/db_monitor/core/migrations/partition_ops.py
 ENTRY: retention_cleanup_task() and partition_maintenance_task() — background asyncio tasks.
 
 RETENTION POLICIES:
@@ -579,11 +558,7 @@ CLEANUP FLOW:
 3. If not partitioned: batched DELETE with RETENTION_CLEANUP_BATCH_SIZE rows per batch
 4. Optional: archive before delete (JSONL files in RETENTION_ARCHIVE_DIR)
 
-PARTITION MAINTENANCE:
-- partition_maintenance_task() runs once per day (86400s interval)
-- create_monthly_partitions(connection, table, column, months_ahead=3)
-- Creates monthly range partitions for events and column_changes
-- Idempotent: skips existing partitions
+PARTITION MAINTENANCE: partition_maintenance_task() runs daily and creates future monthly partitions — see #migration block for create_monthly_partitions() / drop_old_partitions().
 
 CONFIGURATION:
 - RETENTION_CLEANUP_ENABLED=false by default
@@ -599,11 +574,11 @@ PITFALLS:
 - Archive format is JSONL (one JSON object per line)
 
 ================================================================================
-#provisioning #customer #tenant #onboarding #lifecycle #namespace #secrets #deploy #orchestration #controlplane
+#provisioning #provision #provisioner #customer #tenant #onboarding #lifecycle #namespace #secrets #deploy #orchestration #controlplane #job #jobs
 ================================================================================
 
 DOMAIN: Customer Provisioning & Control Plane
-FILES: src/db_monitor/provisioning.py, src/db_monitor/provisioning_local.py, app/routes/ops.py (provisioning endpoints)
+FILES: src/db_monitor/provisioning.py, src/db_monitor/provisioning_local.py, src/db_monitor/routes/ops/provisioning/ (routes.py, helpers.py, persistence.py)
 ENTRY: execute_provisioning_step(step_name, customer_id, job_id, note)
 
 PROVISIONING STEPS (ordered):
@@ -640,11 +615,11 @@ PITFALLS:
 - Step providers are pluggable — local providers are in-process stubs
 
 ================================================================================
-#quotas #rate #limiting #throttle #window #ingestion #source #tenant
+#quotas #quota #rate #ratelimit #limiting #limit #limits #throttle #throttling #window #ingestion #source #tenant #budget
 ================================================================================
 
 DOMAIN: Ingestion Quota Enforcement
-FILES: src/db_monitor/ingestion/quota.py, app/ingestion_quota.py
+FILES: src/db_monitor/ingestion/quota.py
 ENTRY: quota_limiter = IngestionQuotaLimiter(...) singleton, applied in consumer pipeline.
 
 QUOTA LIMITER:
@@ -670,11 +645,11 @@ PITFALLS:
 - Quota disabled by default (INGESTION_QUOTA_ENABLED=false)
 
 ================================================================================
-#cli #commandline #terminal #tui #textual #dashboard #terminalui #screens #login #event_detail #admin #sdk #client #python #javascript #library #api
+#cli #commandline #command #commands #terminal #tui #textual #dashboard #terminalui #screens #login #eventdetail #admin #sdk #client #python #javascript #library #api
 ================================================================================
 
 DOMAIN: CLI, TUI, Terminal Interface & SDKs
-FILES: tui/app.py, tui/main.py, tui/client.py, tui/screens/dashboard.py, tui/screens/login.py, tui/screens/event_detail.py, tui/screens/admin.py, tui/presentation.py, sdk/python/, sdk/javascript/
+FILES: tui/app.py, tui/main.py, tui/client.py, tui/screens/dashboard.py, tui/screens/login.py, tui/screens/event_detail.py, tui/screens/admin.py, tui/presentation.py, sdk/python/, sdk/javascript/, src/db_monitor/start_monitor/ (manifest.py, paths.py, server.py, validation.py)
 ENTRY: tui/main.py — launches Textual app.
 
 TUI ARCHITECTURE:
@@ -710,7 +685,7 @@ PITFALLS:
 - SDKs target the public REST API, not internal modules
 
 ================================================================================
-#deploy #helm #terraform #kubernetes #k8s #azure #postgres #kafka #secrets #hpa #ingress #networkpolicy #pvc #servicemonitor
+#deploy #deployment #deployments #helm #chart #charts #terraform #kubernetes #k8s #azure #postgres #kafka #secrets #hpa #ingress #networkpolicy #pvc #servicemonitor
 ================================================================================
 
 DOMAIN: Deployment Infrastructure (Helm Chart + Terraform)
@@ -789,11 +764,11 @@ PITFALLS:
 - ServiceMonitor requires Prometheus Operator CRDs installed in cluster
 
 ================================================================================
-#lifecycle #startup #shutdown #graceful #signals #tasks #background #readiness
+#lifecycle #startup #shutdown #graceful #signal #signals #task #tasks #background #backgroundtask #readiness
 ================================================================================
 
 DOMAIN: Application Lifecycle & Background Task Management
-FILES: src/db_monitor/lifespan.py, src/db_monitor/lifecycle_manager.py, app/lifespan.py, app/lifecycle_manager.py
+FILES: src/db_monitor/lifespan.py, src/db_monitor/lifecycle_manager/ (lifecycle.py, shutdown.py)
 ENTRY: managed_lifespan() in lifespan.py — orchestrates startup/shutdown; lifecycle_manager singleton in lifecycle_manager.py.
 
 MANAGED LIFESPAN (lifespan.py):
@@ -833,7 +808,7 @@ PITFALLS:
 - init_db() runs on startup — controlled by DB_SCHEMA_MODE (apply/validate/skip)
 
 ================================================================================
-#conftest #fixtures #fakesession #mock #testing #pytest #isolation #monkeypatch #autouse
+#conftest #fixtures #fixture #fakesession #fake #stub #mock #testing #test #pytest #isolation #monkeypatch #autouse
 ================================================================================
 
 DOMAIN: Test Fixtures, Fake Sessions & Mock Patterns
@@ -841,7 +816,7 @@ FILES: tests/conftest.py, tests/test_routes.py (defines reusable fakes)
 ENTRY: conftest.py configures sys.path and markers; test_routes.py defines the canonical fake session classes.
 
 CONTEST.PY SETUP:
-- Adds REPO_ROOT, APP_ROOT (app/), SRC_ROOT (src/) to sys.path at collection time
+- Adds REPO_ROOT and SRC_ROOT (src/) to sys.path at collection time; a legacy APP_ROOT (app/) entry remains but now points at a nonexistent directory
 - pytest_collection_modifyitems: auto-marks all tests WITHOUT @pytest.mark.sandbox as @pytest.mark.core
 - pytest_runtest_setup: skips @pytest.mark.sandbox tests when live stack unavailable (via examples.sandbox.preflight)
 - No shared pytest fixtures defined — each test module defines its own fakes inline
@@ -865,8 +840,8 @@ MOCKING PATTERNS:
 - _make_event(event_data) helper — builds minimal KafkaEvent for pipeline tests
 
 ISOLATION RULES:
-- Tests use bare module imports (e.g., `import routes.auth as routes_auth`) because conftest adds app/ to sys.path
-- Tests do NOT import from db_monitor.* — they test the legacy app/ modules directly
+- Tests import the installed package, e.g. `from db_monitor.routes.auth.key_routes import keys` or `from db_monitor.core.models import ApiKey`
+- No bare-module imports (config, models, auth) remain — the app/ sys.path entry is a legacy leftover pointing at a missing directory
 - Each test module is self-contained with its own fakes; no cross-test state leakage
 - Provisioning/lifecycle tests clear module-level dicts (routes_ops.CUSTOMER_PROVISION_JOBS.clear()) in test body
 - FakeWriteSession.customer_jwt_records etc. are in-memory stores that reset per test via fixture recreation
@@ -874,23 +849,23 @@ ISOLATION RULES:
 PITFALLS:
 - FakeWriteSession.execute() routes by string-matching statement text — fragile if table names change
 - control_plane_session is autouse in test_routes.py only — other test modules must patch independently
-- Tests import from bare module names (config, models, auth) not from db_monitor.* — this works because conftest adds app/ to sys.path
+- Tests import db_monitor.* only; config values come from the settings singleton, so monkeypatch.setenv must run before import or patch the settings object
 - FakeEventsSession returns count then scalars on sequential execute() calls — order matters
 
 ================================================================================
-#migration #sql #partitioning #schema #ddl #advisory #lock #backfill #version #tracked
+#migration #migrations #migrate #partitioning #schema #ddl #advisory #advisorylock #lock #backfill #version #tracked
 ================================================================================
 
 DOMAIN: Database Migrations, Schema Evolution & Partitioning
-FILES: src/db_monitor/migrations.py (Python-tracked migrations, 14 steps), migrations/sql/ (raw SQL supplements), app/migrate.py (CLI entrypoint)
-ENTRY: apply_migrations(session_factory, engine) or validate_migrations(engine).
+FILES: src/db_monitor/core/migrations/__init__.py (MIGRATIONS tuple, CURRENT_SCHEMA_VERSION), src/db_monitor/core/migrations/ (core.py, schema.py, legacy.py, auth.py, infra.py, partitioning.py, partition_ops.py, recovery_migration.py), migrations/sql/ (raw SQL supplements), src/db_monitor/cli.py (db-monitor migrate)
+ENTRY: apply_migrations(session_factory, engine, MIGRATIONS) or validate_migrations(engine, MIGRATIONS).
 
-MIGRATION SYSTEM (migrations.py):
-- 14 tracked Python migrations stored in MIGRATIONS tuple
+MIGRATION SYSTEM (core/migrations/):
+- 18 tracked Python migrations stored in MIGRATIONS tuple
 - Each Migration(version, description, apply_callable) is idempotent
 - Applied versions recorded in schema_migrations table
 - Advisory lock ID: 7273646 — prevents concurrent migration runs via pg_try_advisory_lock
-- Current schema version: 0014_cursor_pagination_indexes
+- Current schema version: 0018_high_cardinality_indexes (CURRENT_SCHEMA_VERSION = MIGRATIONS[-1].version)
 
 MIGRATION LIST (in order):
 0001_base_schema — Base.metadata.create_all() for fresh databases
@@ -907,11 +882,18 @@ MIGRATION LIST (in order):
 0012_api_audit_log_spill — CREATE api_audit_log_spill table (also in migrations/sql/0012_*.sql)
 0013_event_partitioning — ALTER TABLE events/column_changes → PARTITION BY RANGE + monthly partitions
 0014_cursor_pagination_indexes — CREATE composite indexes for keyset pagination on events/column_changes
+0015_events_unique_constraint — replace unique index with a unique constraint on events so ON CONFLICT works on the partitioned table
+0016_api_audit_log_spill_unreplayed_index — partial index for unreplayed spill lookups
+0017_api_key_tenant_id — ADD tenant_id to api_keys for multi-tenant isolation
+0018_high_cardinality_indexes — targeted indexes for tenant-scoped time ranges, source-table lookups, column-changes keyset pagination, row-identity equality
 
 RAW SQL FILES (migrations/sql/):
 - 0012_api_audit_log_spill.sql — CREATE TABLE api_audit_log_spill + index (standalone SQL supplement)
 - 0013_api_audit_log_spill_replay_columns.sql — ALTER TABLE ADD replayed/replayed_by/replayed_at + index
-- NOTE: These SQL files are reference copies. The Python migrations.py is the authoritative migration runner.
+- 0016_api_audit_log_spill_unreplayed_index.sql — partial index on unreplayed rows
+- 0017_api_key_tenant_id.sql — ADD tenant_id to api_keys
+- 0018_high_cardinality_indexes.sql — high-cardinality filter indexes
+- NOTE: These SQL files are reference copies. The Python MIGRATIONS tuple is the authoritative migration runner.
 
 PARTITIONING (Migration 0013):
 - events table: PARTITION BY RANGE (capture_time), monthly partitions (e.g., events_202601)
@@ -920,7 +902,7 @@ PARTITIONING (Migration 0013):
 - Unique indexes recreated with partition key included (required by PostgreSQL)
 - GIN indexes on row_identity preserved
 
-PARTITION MANAGEMENT (retention.py + migrations.py):
+PARTITION MANAGEMENT (retention.py + core/migrations/partition_ops.py):
 - create_monthly_partitions(connection, table, column, months_ahead=3) — creates future monthly partitions
 - drop_old_partitions(connection, table, column, older_than) — drops child partitions by upper bound, never DEFAULT
 - partition_maintenance_task() — background task, runs daily, creates next 3 months of partitions
@@ -933,9 +915,9 @@ ADVISORY LOCKING:
 - _release_migration_lock() → pg_advisory_unlock in finally block
 - Tests: test_migration_locking.py validates concurrent migration safety
 
-CLI (app/migrate.py):
-- db-monitor-migrate apply — runs all pending migrations with advisory lock
-- db-monitor-migrate validate — checks pending without applying, raises if any
+CLI (src/db_monitor/cli.py → run_legacy_migrate):
+- db-monitor migrate apply — runs all pending migrations with advisory lock
+- db-monitor migrate validate — checks pending without applying, raises if any
 - Also accessible via: make monitor-migrate
 
 SCHEMA MODE (DB_SCHEMA_MODE env var):
@@ -952,14 +934,14 @@ PITFALLS:
 - DEFAULT partition catches rows that don't match any range — important for retention (never dropped)
 
 ================================================================================
-#tracing #otel #opentelemetry #spans #otlp #distributed #correlation #traces #instrumentation
+#tracing #trace #traces #span #spans #otel #opentelemetry #otlp #distributed #correlation #traceid #jaeger #collector #instrumentation
 ================================================================================
 
 DOMAIN: OpenTelemetry Distributed Tracing Integration
-FILES: src/db_monitor/tracing.py (canonical proxy), app/tracing.py (actual implementation), app/main.py (_configure_tracing)
+FILES: src/db_monitor/tracing.py (implementation), src/db_monitor/main.py (_configure_tracing)
 ENTRY: initialize_tracing() called once at startup; start_span() used throughout.
 
-TRACING INITIALIZATION (tracing.py — app/tracing.py):
+TRACING INITIALIZATION (src/db_monitor/tracing.py):
 - initialize_tracing(app, engine, service_name, exporter, otlp_endpoint, otlp_headers)
 - Idempotent: global _instrumented flag prevents double-instrumentation
 - Resource: Resource.create({"service.name": service_name})
@@ -976,13 +958,13 @@ SPAN CREATION (start_span context manager):
 - start_span(name, attributes) → context manager yielding span or None
 - Best-effort: if opentelemetry not installed, yields None gracefully
 - Tracer name: "db_monitor"
-- Used in consumer_service.py for: kafka.consumer.message, kafka.process.event, kafka.process.batch, websocket.broadcast.event, websocket.backplane.deliver, dlq.replay.record
+- Used in src/db_monitor/consumer/ (consumer.py, batch/) and ws_manager.py for: kafka.consumer.message, kafka.process.event, kafka.process.batch, websocket.broadcast.event, websocket.backplane.deliver, dlq.replay.record
 - Attributes follow OpenTelemetry semantic conventions: messaging.system, messaging.destination.name, messaging.kafka.partition, messaging.message.id, db_monitor.* custom namespace
 
 TRACE CONTEXT LOGGING (current_trace_context):
 - current_trace_context() → dict with trace_id (32-char hex) and span_id (16-char hex)
 - Returns empty dict when no active span or opentelemetry not installed
-- Injected into StructuredFormatter in app/main.py → every structured log includes trace_id and span_id
+- Injected into StructuredFormatter in src/db_monitor/main.py → every structured log includes trace_id and span_id
 - Enables log-to-trace correlation in observability backends (Grafana, Jaeger, etc.)
 
 CONFIGURATION (env vars):
@@ -993,16 +975,16 @@ CONFIGURATION (env vars):
 - OTEL_EXPORTER_OTLP_HEADERS (optional, comma-separated key=value)
 - Startup validation: if otlp exporter selected without endpoint → config_error raised
 
-STARTUP INTEGRATION (app/main.py):
+STARTUP INTEGRATION (src/db_monitor/main.py):
 - _configure_tracing(app) called after create_application()
 - Checks OTEL_TRACING_ENABLED flag, skips if false
 - Passes engine (SQLAlchemy async engine) for DB instrumentation
 - StructuredFormatter always calls current_trace_context() for log correlation
 
 SPAN INSTRUMENTATION POINTS (across codebase):
-- consumer_service.py: "kafka.consumer.message" (per-message), "kafka.process.event" (per-event), "kafka.process.batch" (per-batch)
+- src/db_monitor/consumer/consumer.py: "kafka.consumer.message" (per-message), "kafka.process.event" (per-event), "kafka.process.batch" (per-batch)
 - ws_manager.py: "websocket.broadcast" (per-broadcast), "websocket.backplane.deliver" (per-backplane notification)
-- consumer_service.py: "dlq.replay.record" (per-DLQ replay)
+- src/db_monitor/consumer/ (replay path): "dlq.replay.record" (per-DLQ replay)
 
 DEPENDENCIES (pyproject.toml):
 - opentelemetry-api>=1.36.0 — trace API (no-op when disabled)
@@ -1021,7 +1003,7 @@ PITFALLS:
 - Tracer provider is set globally — only one initialize_tracing() call needed per process
 
 ================================================================================
-#tests #pytest #testing #integration #unit #loadtest #scale
+#tests #test #testing #suite #integration #unit #unittest #e2e #smoke #coverage #loadtest #scale
 ================================================================================
 
 DOMAIN: Testing & Quality Gates
@@ -1029,7 +1011,7 @@ FILES: tests/, scripts/run_integration_tests.py, scripts/scale_test.py, scripts/
 ENTRY: uv run pytest tests/ (unit), scripts/run_integration_tests.py (integration)
 
 TEST CATEGORIES:
-- Unit tests: tests/test_*.py — 38 test files covering all major modules
+- Unit tests: tests/test_*.py — 52 test files covering all major modules
 - Integration tests: scripts/run_integration_tests.py (requires running stack on localhost:8000)
 - Scale tests: scripts/scale_test.py (provisions N source DBs, generates events)
 - Load tests: scripts/load_test.py, examples/sandbox/load_test.py
@@ -1047,7 +1029,7 @@ KEY TEST FILES:
 - test_migration_locking.py — concurrent migration safety
 - test_cursor_indexes.py — pagination index verification
 - test_package_*.py — namespace/packaging validation
-- conftest.py — shared fixtures (test DB sessions, mock factories)
+- conftest.py — see #conftest block for fixture and fake-session details
 
 MAKEFILE TARGETS:
 - make monitor-test — unit tests via uv
@@ -1060,4 +1042,3 @@ MAKEFILE TARGETS:
 PITFALLS:
 - Integration tests require the full stack (Postgres + Kafka + app) running
 - Scale tests generate real events — clean up after running
-- conftest.py provides AsyncSessionLocal fixtures for test isolation

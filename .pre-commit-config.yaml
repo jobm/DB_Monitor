@@ -24,6 +24,21 @@ repos:
           - sqlalchemy[mypy]>=2.0.25
         pass_filenames: false
 
+  - repo: local
+    hooks:
+      - id: goosemem-retrieval
+        name: verify .goosemem structure, grounding and retrieval
+        entry: python3 scripts/verify_goosemem_retrieval.py
+        language: system
+        files: ^\.goosemem$
+        pass_filenames: false
+      - id: goosemem-coverage
+        name: verify .goosemem directory coverage
+        entry: bash scripts/validate_goosemem_coverage.sh
+        language: system
+        files: ^\.goosemem$
+        pass_filenames: false
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
     hooks:

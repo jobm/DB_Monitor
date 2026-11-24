@@ -14,9 +14,9 @@ The DB Monitor codebase is too large for a 9B model to hold in active context. L
 | File | Size | Purpose | When Loaded |
 |------|------|---------|-------------|
 | `.goosehints` | ~1,300 tokens (8 KB) | Behavioral guardrails injected into **every turn** | Always — per-turn system prompt |
-| `.goosemem` | ~8,900 tokens (66 KB) | 20 semantic memory blocks retrieved **on demand** | Only when keywords match the user's request |
+| `.goosemem` | ~8,600 tokens (64 KB) | 20 semantic memory blocks retrieved **on demand** | Only when keywords match the user's request |
 
-### Total budget: ~10,200 tokens (vs. 33,000+ lines of raw source)
+### Total budget: ~10,000 tokens (vs. 33,000+ lines of raw source)
 
 ---
 
@@ -41,49 +41,43 @@ This file contains **20 isolated memory blocks**, each prefixed with space-separ
 
 ### Memory Blocks
 
-| # | Keywords | Domain | Approx Tokens |
-|---|----------|--------|---------------|
-| 1 | `#configuration #config #env` | Environment Variables & Config | ~600 |
-| 2 | `#database #db #sql #orm` | Database Layer, ORM Models, Migrations | ~700 |
-| 3 | `#ingestion #consumer #kafka` | Ingestion Pipeline & Consumer Service | ~500 |
-| 4 | `#events #debezium #cdc` | Event Parsing & Source Metadata | ~500 |
-| 5 | `#api #routes #rest #endpoints` | API Routes & HTTP Endpoints | ~700 |
-| 6 | `#auth #rbac #jwt` | Authentication, RBAC & API Key Lifecycle | ~400 |
-| 7 | `#websocket #ws #broadcast` | WebSocket Broadcasting & Backplane | ~300 |
-| 8 | `#metrics #prometheus #otel` | Prometheus Metrics, Observability & Tracing | ~400 |
-| 9 | `#webhooks #hmac #circuitbreaker` | Outbound Webhook Delivery | ~300 |
-| 10 | `#retention #partition #cleanup` | Retention, Cleanup & Partition Maintenance | ~300 |
-| 11 | `#provisioning #customer #controlplane` | Customer Provisioning & Control Plane | ~400 |
-| 12 | `#quotas #rate #limiting` | Ingestion Quota Enforcement | ~300 |
-| 13 | `#cli #tui #sdk` | CLI, TUI, Terminal Interface & SDKs | ~300 |
-| 14 | `#deploy #helm #terraform #k8s` | Deployment Infrastructure | ~600 |
-| 15 | `#lifecycle #startup #shutdown` | Application Lifecycle & Background Tasks | ~400 |
-| 16 | `#conftest #fixtures #mock` | Test Fixtures & Mock Patterns | ~500 |
-| 17 | `#migration #sql #partitioning` | Database Migrations & Schema Evolution | ~500 |
-| 18 | `#tracing #otel #opentelemetry` | OpenTelemetry Distributed Tracing | ~400 |
-| 19 | `#tests #pytest #integration` | Testing & Quality Gates | ~300 |
-| 20 | `#repositories #readmodel #query #keyset` | Data Repositories, Query Patterns & Response Models | ~500 |
+| # | Keywords | Domain |
+|---|----------|--------|
+| 1 | `#configuration #config #env` | Environment Variables & Config |
+| 2 | `#database #db #sql #orm` | Database Layer, ORM Models, Migrations |
+| 3 | `#ingestion #consumer #kafka` | Ingestion Pipeline & Consumer Service |
+| 4 | `#events #debezium #cdc` | Event Parsing & Source Metadata |
+| 5 | `#repositories #readmodel #query` | Data Repositories, Query Patterns & Response Models |
+| 6 | `#api #routes #rest #endpoints` | API Routes & HTTP Endpoints |
+| 7 | `#auth #rbac #jwt` | Authentication, RBAC & API Key Lifecycle |
+| 8 | `#websocket #ws #broadcast` | WebSocket Broadcasting & Backplane |
+| 9 | `#metrics #prometheus #otel` | Prometheus Metrics, Observability & Tracing |
+| 10 | `#webhooks #hmac #circuitbreaker` | Outbound Webhook Delivery |
+| 11 | `#retention #partition #cleanup` | Retention, Cleanup & Partition Maintenance |
+| 12 | `#provisioning #customer #controlplane` | Customer Provisioning & Control Plane |
+| 13 | `#quotas #rate #limiting` | Ingestion Quota Enforcement |
+| 14 | `#cli #tui #sdk` | CLI, TUI, Terminal Interface & SDKs |
+| 15 | `#deploy #helm #terraform #k8s` | Deployment Infrastructure |
+| 16 | `#lifecycle #startup #shutdown` | Application Lifecycle & Background Tasks |
+| 17 | `#conftest #fixtures #mock` | Test Fixtures & Mock Patterns |
+| 18 | `#migration #sql #partitioning` | Database Migrations & Schema Evolution |
+| 19 | `#tracing #otel #opentelemetry` | OpenTelemetry Distributed Tracing |
+| 20 | `#tests #pytest #integration` | Testing & Quality Gates |
 
 ### How Keyword Retrieval Works
 
 When a user asks: *"How does the auth system work?"*
 
 1. Goose's Memory Extension scans `.goosemem` for blocks matching `#auth`
-2. It retrieves block #6 (Authentication, RBAC & API Key Lifecycle) — ~400 tokens
-3. Blocks #1–5, #7–20 are **not loaded** into context
-4. The 9B model receives: `.goosehints` (guardrails) + block #6 (auth details) + user question
+2. It retrieves block #7 (Authentication, RBAC & API Key Lifecycle)
+3. The other 19 blocks are **not loaded** into context
+4. The 9B model receives: `.goosehints` (guardrails) + block #7 (auth details) + user question
 
 When a user asks: *"Add a new retention policy"*
 
 1. Keywords matched: `#retention`, `#database`, `#config`, `#migration`
-2. Blocks #2, #10, #17 are retrieved — ~1,500 tokens total
+2. Blocks #2, #11, #18 are retrieved
 3. The model has exactly the context it needs: database schema, retention logic, and migration patterns
-
-When a user asks: *"What does EventsRepository do?"*
-
-1. Keywords matched: `#repositories`, `#events`, `#readmodel`, `#query`
-2. Block #20 (Data Repositories, Query Patterns & Response Models) is retrieved — ~500 tokens
-3. Block #4 (Event Parsing & Source Metadata) may also match on `#events` — ~500 tokens
 
 ---
 
@@ -91,13 +85,15 @@ When a user asks: *"What does EventsRepository do?"*
 
 ### Option 1: System Prompt Injection (Recommended)
 
-Configure Goose to load `.goosehints` as a system prompt prefix. In your Goose configuration:
+Configure Goose to load `.goosehints` as a system prompt prefix and `.goosemem` as its memory file:
 
 ```yaml
 # .goose.yaml or equivalent
 system_prompt_file: .goosehints
 memory_file: .goosemem
 ```
+
+> Note: exact directive names depend on your Goose version. If `system_prompt_file`/`memory_file` are not recognized, fall back to Option 2 and check the Goose docs for your build.
 
 ### Option 2: Manual Injection
 
@@ -128,9 +124,9 @@ Each block includes its own FILE list, ENTRY point, and PITFALLS section. A bloc
 
 Blocks use `#keyword` prefixes so Goose's memory retrieval can match on any subset. A block tagged `#auth #rbac #jwt` will be retrieved when the user mentions any of those three terms.
 
-### 4. Cross-References Are Explicit
+### 4. Cross-References Are Explicit, Not Duplicated
 
-When one block references another (e.g., the ingestion pipeline references auth), it uses the block's keyword tags so the model knows which additional block to retrieve.
+When one block depends on another (e.g., the ingestion pipeline references auth), it uses a short `see #keyword block` pointer instead of repeating the other block's content. This keeps each block dense and avoids paying twice for the same information when several blocks are retrieved together.
 
 ### 5. Pitfalls Are Prioritized
 
@@ -163,7 +159,7 @@ Compare to loading all 33,000 lines (~130K tokens) which would immediately excee
 1. Choose keywords that describe the domain (e.g., `#cache #redis #caching`)
 2. Add the block to `.goosemem` with `================================================================================` separators
 3. Include: DOMAIN, FILES, ENTRY, key content, PITFALLS
-4. Update the table above with the new block's approx token count
+4. Update the block table above with the new block's keywords
 
 ### Updating an Existing Block
 
@@ -173,12 +169,39 @@ Compare to loading all 33,000 lines (~130K tokens) which would immediately excee
 
 ### Validating Keyword Coverage
 
+Coverage is measured at the **directory** level, because blocks intentionally summarize packages (`core/config/dataclasses/ (core.py, db.py, ...)`) instead of naming every file. Every directory under `src/db_monitor/` that contains Python must be named by at least one block; directories with no `.py` files are ignored.
+
 ```bash
-# Check that all source files are referenced in at least one block
-grep -roh "app/[a-z_]*\.py" .goosemem | sort -u > referenced.txt
-find app/ -name "*.py" -not -path "*/__pycache__/*" | sed 's|^|app/|' | sort -u > actual.txt
-comm -23 actual.txt referenced.txt
+bash scripts/validate_goosemem_coverage.sh   # exit 1 on gaps, 2 if the tree is missing
 ```
+
+**Interpreting the output**
+- Each `GAP:` line is a package directory that no block references. Add it to the `FILES:` line of the block that owns it — a mention of the directory path is enough, individual files need not be listed.
+- File-level counts are printed for information only. Most files live inside summarized packages, so a low ratio there is expected and is not a failure.
+- The validator requires `src/db_monitor/` to exist, so it cannot report a vacuous pass on a stale checkout.
+- `app/`-prefixed references in `.goosemem` would become stale if the legacy tree returned; there are none today.
+
+### Re-verifying Retrieval and Grounding
+
+`scripts/verify_goosemem_retrieval.py` is the committed harness for the strategy itself. It runs with the standard library only and checks three things:
+
+1. **Structure** — every block parses, has a `DOMAIN:` line, and no header has invalid or duplicate tags. A tag containing anything outside `[a-z0-9]` (e.g. `#event_detail`) silently makes the whole block unmatchable, so this is a hard failure.
+2. **Grounding** — every `src/`, `tests/`, `scripts/`, `migrations/`, `tui/`, `sdk/`, or `docs/` path named in a block exists in the working tree.
+3. **Retrieval** — 34 natural-language questions (no tags appended) and 14 keyworded questions must route to the expected domain. Each block has at least two natural-language cases; `#configuration` and `#cli`/TUI have eight each. Scoring matches Goose: exact tag hit = 4, body word-prefix hit = 1; the expected domain must appear in the top 3 (all 48 currently land at rank 1).
+
+```bash
+python3 scripts/verify_goosemem_retrieval.py            # all checks, exit 1 on failure
+python3 scripts/verify_goosemem_retrieval.py -v         # show rank 1-3 for every query
+python3 scripts/verify_goosemem_retrieval.py --only retrieval --top 1
+python3 scripts/verify_goosemem_retrieval.py --list-blocks
+```
+
+When you add or rename a block, add one question per new domain to `NATURAL_QUERIES` and `KEYWORD_QUERIES` in the script. Natural-language questions are the important ones: if they only pass with tags appended, the block's aliases are too thin.
+
+Both scripts run automatically:
+
+- **CI** — `.github/workflows/context-memory.yml` is path-filtered on `.goosemem`, `.goosehints`, this document, and the two scripts, so it does not add time to unrelated PRs.
+- **Pre-commit** — the `goosemem-retrieval` and `goosemem-coverage` local hooks in `.pre-commit-config.yaml` run whenever `.goosemem` is staged.
 
 ---
 
@@ -186,7 +209,8 @@ comm -23 actual.txt referenced.txt
 
 | Metric | `.goosehints` | `.goosemem` | Total |
 |--------|--------------|-------------|-------|
-| Lines | 111 | 1,054 | 1,165 |
-| Bytes | 8,222 | 65,676 | 73,898 |
-| Est. Tokens | ~1,300 | ~8,900 | ~10,200 |
+| Lines | 111 | 1,044 | 1,155 |
+| Words | 997 | 7,399 | 8,396 |
+| Bytes | 8,222 | 73,729 | 81,951 |
+| Est. Tokens | ~1,300 | ~8,600 | ~9,900 |
 | Memory Blocks | — | 20 | — |
