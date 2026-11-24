@@ -44,6 +44,8 @@ internal or external customers.
 | Operational complexity | Low | Medium (automated onboarding) |
 | Isolation guarantee | N/A | Strong (dedicated per cell) |
 
+This model is recorded as [ADR-007](adr/ADR-007-deployment-topology.md), which
+also covers the blast-radius trade-off and the migration path from Model A.
 See [`docs/pre-v1-tenant-isolation-strategy.md`](pre-v1-tenant-isolation-strategy.md)
 for the full strategy document covering the recommended cell architecture,
 Kubernetes namespace layout, security baseline, onboarding flow, and

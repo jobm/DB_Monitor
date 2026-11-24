@@ -186,7 +186,7 @@ uv run python -m pytest tests/test_migration_schema.py -m slow -v
 
 - Keep PRs focused on a single concern. A 200-line change is easier to review
   than a 2000-line change.
-- Large workstreams (like the ones tracked in `docs/remaining-gaps.md`) may be
+- Large workstreams (like the ones tracked in `docs/BACKLOG.md`) may be
   broken into multiple sequential PRs.
 
 ## Documentation
@@ -195,8 +195,9 @@ uv run python -m pytest tests/test_migration_schema.py -m slow -v
   `docs/configuration.md`.
 - New API endpoints should update `api-docs.md`.
 - Architectural decisions should be recorded as ADRs in `docs/adr/`.
-- The `docs/remaining-gaps.md` file tracks all open workstreams — update it
-  when closing items.
+- The `docs/BACKLOG.md` file is the single source of truth for open work —
+  update it when starting, changing, or closing an item, and record the shipped
+  change in `CHANGELOG.md` instead of keeping a completed checklist.
 
 ## Release Process
 

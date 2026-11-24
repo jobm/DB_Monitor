@@ -7,6 +7,8 @@ reducing noisy-neighbor risk.
 ## Decision Summary
 
 Use a **shared control plane** with **isolated customer cells**.
+The decision, its trade-offs, and the revisit criteria are recorded in
+[ADR-007](adr/ADR-007-deployment-topology.md).
 
 - Shared control plane: onboarding API/workflows, release pipeline, templates,
   monitoring aggregation, and operator tooling.

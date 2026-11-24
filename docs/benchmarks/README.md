@@ -5,10 +5,10 @@ ingestion throughput at various event rates.
 
 ## Current Status
 
-- `results-100.json` — Placeholder / initial run. Shows the benchmark harness
-  detected the API as not ready (expected when the full stack is not running).
-  Replace with real results after running the benchmark from an environment
-  with a healthy stack.
+Recorded runs live in `results-*.json`. The current results are below target
+because the benchmark topics use a single partition; see
+[Ingestion Throughput](ingestion-throughput.md) for methodology and the
+open scaling item in [Backlog](../BACKLOG.md).
 
 ## How to Run Benchmarks
 
@@ -26,7 +26,7 @@ python scripts/scale_test.py --kafka-broker localhost:9093 --rate 5000 --duratio
 Results are saved as `.json` files in this directory and recorded in release
 notes.
 
-## Target Thresholds (from os-release-readiness-assessment)
+## Target Thresholds
 
 | Metric | Target |
 |--------|--------|

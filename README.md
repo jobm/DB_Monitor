@@ -92,6 +92,7 @@ the core platform with your own infrastructure.
 
 | Document | Description |
 |----------|-------------|
+| [Documentation Index](docs/index.md) | Start here for all maintained guides |
 | [API Reference](docs/api-reference.html) | Interactive API documentation (Redoc) |
 | [API-Docs.md](api-docs.md) | Full endpoint reference with examples |
 | [Architecture](docs/architecture.md) | System design, components, data flow |
@@ -99,6 +100,7 @@ the core platform with your own infrastructure.
 | [Deployment](docs/deployment.md) | Docker, Helm, Terraform, production hardening |
 | [Migrations](docs/migrations.md) | Database migration workflow |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and resolutions |
+| [Backlog](docs/BACKLOG.md) | Single source of truth for open work |
 | [Contributing](CONTRIBUTING.md) | Development setup, code style, PR process |
 | [Changelog](CHANGELOG.md) | Release history |
 | [Security](SECURITY.md) | Vulnerability reporting and security practices |

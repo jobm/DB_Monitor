@@ -3,7 +3,7 @@
 **Status:** Implemented  
 **Date:** 2026-07-05  
 **Deciders:** Project leads  
-**Context:** [WebSocket endpoint](../api-docs.md#realtime-endpoint), [Backplane config](../configuration.md#websocket-and-backplane-settings)
+**Context:** [WebSocket endpoint](../api-docs.md#websocket-endpoint), [Backplane config](../configuration.md#websocket-backplane-settings)
 
 ---
 

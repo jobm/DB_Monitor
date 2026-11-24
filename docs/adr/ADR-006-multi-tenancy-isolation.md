@@ -3,7 +3,7 @@
 **Status:** Implemented
 **Date:** 2026-07-05
 **Deciders:** Project leads
-**Context:** [Remaining gaps OS-7](../remaining-gaps.md#os-7-multi-tenancy-hardening)
+**Context:** [Auth and session settings](../configuration.md#auth-and-session-settings)
 
 ---
 
