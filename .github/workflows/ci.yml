@@ -59,6 +59,21 @@ jobs:
       - name: Build docs (strict)
         run: uv run --group dev mkdocs build --strict
 
+  monitoring:
+    name: Prometheus config and rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate scrape config and alert rules
+        run: |
+          docker run --rm \
+            -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool \
+            docker.io/prom/prometheus:v2.53.0 \
+            check config /etc/prometheus/prometheus.yml
+
   test-core:
     name: Core tests
     runs-on: ubuntu-latest
