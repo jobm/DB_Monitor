@@ -10,7 +10,7 @@ __pycache__/
 
 .DS_Store
 .venv*
-.github
+.pkg-smoke-*/
 
 secrets/*
 !secrets/README.md
