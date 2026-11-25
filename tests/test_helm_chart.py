@@ -172,6 +172,18 @@ def test_services_select_only_their_own_workload():
         )
 
 
+def test_service_account_is_created_and_referenced():
+    documents = _render()
+
+    accounts = _documents_of_kind(documents, "ServiceAccount")
+    assert [doc["metadata"]["name"] for doc in accounts] == [
+        "test-release-db-monitor"
+    ]
+    for role in ("api", "consumer"):
+        pod = _deployment(documents, role)["spec"]["template"]["spec"]
+        assert pod["serviceAccountName"] == "test-release-db-monitor"
+
+
 def test_archive_volume_is_mounted_only_by_the_consumer():
     documents = _render(
         "--set",
@@ -183,18 +195,37 @@ def test_archive_volume_is_mounted_only_by_the_consumer():
     consumer_pod = _deployment(documents, "consumer")["spec"]["template"]["spec"]
     api_pod = _deployment(documents, "api")["spec"]["template"]["spec"]
 
-    consumer_mounts = consumer_pod["containers"][0].get("volumeMounts", [])
-    assert any(
-        mount["name"] == "archive" for mount in consumer_mounts
-    )
-    assert any(
-        volume["name"] == "archive" for volume in consumer_pod["volumes"]
-    )
-    assert "volumeMounts" not in api_pod["containers"][0]
-    assert "volumes" not in api_pod
+    consumer_mounts = consumer_pod["containers"][0]["volumeMounts"]
+    api_mounts = api_pod["containers"][0]["volumeMounts"]
+    assert {mount["name"] for mount in consumer_mounts} == {
+        "tmp",
+        "archive",
+    }
+    assert {mount["name"] for mount in api_mounts} == {"tmp"}
+    assert [volume["name"] for volume in consumer_pod["volumes"]] == [
+        "tmp",
+        "archive",
+    ]
+    assert [volume["name"] for volume in api_pod["volumes"]] == ["tmp"]
 
     claim = _documents_of_kind(documents, "PersistentVolumeClaim")[0]
     assert claim["metadata"]["name"] == "test-release-db-monitor-archive"
+
+
+def test_both_roles_get_a_writable_tmp_volume_for_the_read_only_rootfs():
+    documents = _render()
+
+    for role in ("api", "consumer"):
+        pod = _deployment(documents, role)["spec"]["template"]["spec"]
+        tmp = next(
+            volume for volume in pod["volumes"] if volume["name"] == "tmp"
+        )
+        assert tmp["emptyDir"] == {}
+        mounts = pod["containers"][0]["volumeMounts"]
+        assert any(
+            mount["name"] == "tmp" and mount["mountPath"] == "/tmp"
+            for mount in mounts
+        )
 
 
 def test_hpa_and_pdb_cover_both_workloads():

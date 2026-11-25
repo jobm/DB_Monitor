@@ -20,6 +20,8 @@ imagePullSecrets: []
 serviceAccount:
   create: true
   name: ""
+  # -- Annotations for the shared ServiceAccount
+  annotations: {}
 
 # ── Workloads (ADR-007) ──────────────────────────────────────────────
 #

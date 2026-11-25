@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Services, HPAs, PDBs, NetworkPolicies, and ServiceMonitors, with per-role
     `replicaCount`, `resources`, `autoscaling`, and `podDisruptionBudget`
     values; the old top-level workload knobs moved under those sections
+  - Chart now creates the ServiceAccount it references and mounts a writable
+    `emptyDir` at `/tmp`, matching the Compose sandbox's tmpfs under a
+    read-only root filesystem
 - **Tenant-cohort SLOs:**
   - `docs/runbooks/slo-and-error-budgets.md`: published availability and
     freshness targets, error budgets, metric mapping, and cohort assignment

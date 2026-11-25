@@ -58,8 +58,9 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if or (and $.Values.retention.archiveBeforeDelete $.Values.persistence.enabled (eq $role "consumer")) $.Values.extraVolumes }}
       volumes:
+        - name: tmp
+          emptyDir: {}
         {{- if and $.Values.retention.archiveBeforeDelete $.Values.persistence.enabled (eq $role "consumer") }}
         - name: archive
           persistentVolumeClaim:
@@ -68,5 +69,4 @@ spec:
         {{- with $.Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- end }}
 {{- end }}

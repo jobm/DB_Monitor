@@ -94,8 +94,9 @@ starts only the tasks it owns.
     {{- with $root.Values.extraEnv }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- if or (and $root.Values.retention.archiveBeforeDelete $root.Values.persistence.enabled (eq $role "consumer")) $root.Values.extraVolumeMounts }}
   volumeMounts:
+    - name: tmp
+      mountPath: /tmp
     {{- if and $root.Values.retention.archiveBeforeDelete $root.Values.persistence.enabled (eq $role "consumer") }}
     - name: archive
       mountPath: {{ $root.Values.retention.archiveDir }}
@@ -103,7 +104,6 @@ starts only the tasks it owns.
     {{- with $root.Values.extraVolumeMounts }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
-  {{- end }}
   resources:
     {{- toYaml (index $root.Values $role).resources | nindent 4 }}
   livenessProbe:
