@@ -47,12 +47,19 @@ one `INSERT` and one schema-discovery query per batch, and a repeatable run at
 100 / 500 / 1,000 / 5,000 events/sec sustains ≥ 5,000 events/sec with p95 DB
 write latency < 500 ms, results committed under `docs/benchmarks/`.
 
-**First step:** re-run with multi-partition topics before touching application
-code — the current ceiling is partition-bound, not code-bound.
+**Multi-partition re-run (2026-11-24):** six partitions on
+`orderdb.public.orders` received the load evenly and the fixed load generator
+published at 4,982 ev/s, but the consumer sustained only 190 ev/s. DB batch
+writes accounted for ~96 ms per 100-event batch, so the ceiling is per-event
+work in the consumer loop, not partitioning. Raw result:
+[`benchmarks/results-5000-multipartition.json`](benchmarks/results-5000-multipartition.json).
+
+**Next step:** profile the per-event path (`parse_event_payload`, pipeline
+transform, span/metric bookkeeping) before re-running the matrix.
 
 ```bash
-make monitor-test-scale-target        # 10 sources, 500 ev/s, 5 min
-python scripts/scale_test.py --rate 5000 --duration 300
+uv run python scripts/scale_test.py --kafka-broker localhost:9093 \
+  --rate 5000 --duration 300 --admin-api-key "$DB_MONITOR_ADMIN_API_KEY"
 ```
 
 ---

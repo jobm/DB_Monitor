@@ -84,15 +84,59 @@ latency. At 500 ev/s, throughput plateaus at ~382 ev/s — limited by
 the sequential per-message processing in the consumer.
 
 **Next step:** Re-run benchmarks after increasing Kafka topic partitions
-to 6+ and scaling consumer replicas.
+to 6+ and scaling consumer replicas. (Done — see the re-run below, which
+changes the conclusion.)
 
 ### Raw Data
 
 See `docs/benchmarks/results-{100,500,1000,5000}.json` for full details.
 
+## Results (REL-1 re-run — 6 partitions, 2026-11-24)
+
+### Environment
+- Six partitions on `orderdb.public.orders`; offsets after the run were spread
+  evenly (~50k new records per partition), so partitioning was exercised
+- Single `monitor-server`, `INGESTION_BULK_WRITE_ENABLED=true`, `BATCH_SIZE=100`
+- Load generator and monitor stack on the same host (local podman)
+
+### Harness corrections required first
+
+The original matrix could not test rates above ~460 ev/s because of the load
+generator, not the pipeline:
+
+- It slept per event instead of per batch, and slept a fixed interval **after**
+  the work, so scheduling drift compounded
+- Its API-sampling tasks ran blocking `urllib` calls on the same event loop as
+  the producer, stalling publishing
+- It used gzip compression for one small message at a time, dominating the
+  producer's CPU budget
+
+`scripts/scale_test.py` now paces whole batches against absolute deadlines, runs
+sampling requests in a worker thread, and publishes uncompressed.
+
+### Throughput
+
+| Metric | Value |
+|---|---|
+| Target rate | 5,000 ev/s |
+| Published | 299,000 events in 60 s (4,982 ev/s) |
+| Processed | 11,227 events (190 ev/s) |
+| Broker lag after run | 227,099 messages |
+| `/health` reported lag (max) | 15,408 messages |
+| p95 API latency | 1,673 ms |
+| DLQ events | 0 |
+| DB batch write duration | 95.7 ms mean per 100-event batch |
+
+**Verdict: FAIL.** Partitioning is not the binding constraint. The batch write
+on its own would support roughly 1,000 ev/s; the remaining time per batch is
+per-event Python work in the consumer loop.
+
+### Raw Data
+
+[`results-5000-multipartition.json`](results-5000-multipartition.json)
+
 ## Verification
 
-These benchmarks establish the baseline on single-partition Kafka
-infrastructure. The target throughput of ≥ 5000 events/sec sustained
-with < 500ms p95 DB write latency requires topic partitioning to
-achieve.
+The single-partition matrix established the baseline. The 6-partition re-run
+shows the ceiling is the per-event consumer path, so the ≥ 5,000 ev/s target is
+still unmet and REL-1 stays open.

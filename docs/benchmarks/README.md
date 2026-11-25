@@ -5,10 +5,12 @@ ingestion throughput at various event rates.
 
 ## Current Status
 
-Recorded runs live in `results-*.json`. The current results are below target
-because the benchmark topics use a single partition; see
-[Ingestion Throughput](ingestion-throughput.md) for methodology and the
-open scaling item in [Backlog](../BACKLOG.md).
+Recorded runs live in `results-*.json`. The single-partition baseline is below
+target; the 2026-11-24 re-run with six partitions
+(`results-5000-multipartition.json`) spread load evenly but still sustained only
+190 ev/s, so partitioning is not the binding constraint. See
+[Ingestion Throughput](ingestion-throughput.md) for methodology and the open
+scaling item in [Backlog](../BACKLOG.md).
 
 ## How to Run Benchmarks
 

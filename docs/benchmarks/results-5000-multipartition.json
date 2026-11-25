@@ -1,0 +1,32 @@
+{
+  "benchmark": "REL-1 — Multi-partition ingestion re-run",
+  "run": 1,
+  "target_rate": 5000,
+  "duration_seconds": 60,
+  "sources": 10,
+  "kafka_broker": "localhost:9093",
+  "kafka_topic": "orderdb.public.orders",
+  "kafka_partitions": 6,
+  "consumer_instances": 1,
+  "bulk_write_enabled": true,
+  "batch_size": 100,
+  "timestamp": "2026-11-24T23:38:00Z",
+  "results": {
+    "published_events": 299000,
+    "publish_rate_ev_s": 4982.0,
+    "events_processed": 11227,
+    "processing_rate_ev_s": 190.3,
+    "kafka_group_lag_after_run": 227099,
+    "app_reported_lag_max": 15408,
+    "latency_ms": {
+      "p95_api": 1673.2
+    },
+    "db_write_ms": {
+      "batches": 1844,
+      "mean_per_100_event_batch": 95.7
+    },
+    "dlq_count": 0,
+    "passed": false,
+    "notes": "Topic partitioning was exercised: each of the 6 partitions received ~50k new records. Publishing reached 4,982 ev/s after the generator fixes, but the consumer sustained only 190 ev/s, so 274k messages were still queued when the run ended. DB batch writes account for only ~96 ms per 100-event batch (~1,044 ev/s of write capacity); the remaining per-batch time is per-event Python work in the consumer loop, not Kafka partitioning. Partitions are therefore not the binding constraint for this run. Two measurement bugs surfaced during this run and were fixed afterwards: /health lag_total came from a stale per-message highwater cache (15k reported vs 274k real) and is now refreshed from broker end offsets every 5 s; ingestion latency used capture_time, which mirrors event_time for dedupe, and now uses the ingested_at column added by migration 0019."
+  }
+}
