@@ -165,6 +165,84 @@ class TestWebSocketManagerBackplane:
         assert mgr.backplane_backend is None
 
     @patch("db_monitor.ws_manager.settings")
+    async def test_publish_event_notifications_coalesces_batch(
+        self, mock_settings
+    ) -> None:
+        import json
+
+        from db_monitor.ws_manager import WebSocketManager
+
+        mock_settings.auth.ws_backplane_enabled = True
+        mgr = WebSocketManager()
+        mgr._backplane = AsyncMock()
+
+        await mgr.publish_event_notifications([11, 12, 13])
+
+        mgr._backplane.publish.assert_awaited_once()
+        payload = json.loads(mgr._backplane.publish.await_args.args[0])
+        assert payload["event_ids"] == [11, 12, 13]
+        assert payload["origin_instance_id"] == mgr._instance_id
+
+    @patch("db_monitor.ws_manager.settings")
+    async def test_publish_event_notifications_chunks_large_batches(
+        self, mock_settings
+    ) -> None:
+        from db_monitor.ws_manager import WebSocketManager
+
+        mock_settings.auth.ws_backplane_enabled = True
+        mgr = WebSocketManager()
+        mgr._backplane = AsyncMock()
+
+        await mgr.publish_event_notifications(list(range(1200)))
+
+        assert mgr._backplane.publish.await_count == 3
+
+    @patch("db_monitor.ws_manager.settings")
+    async def test_broadcast_can_skip_backplane_publish(
+        self, mock_settings
+    ) -> None:
+        from db_monitor.ws_manager import WebSocketManager
+
+        mock_settings.auth.ws_backplane_enabled = True
+        mgr = WebSocketManager()
+        mgr._backplane = AsyncMock()
+
+        await mgr.broadcast(
+            {"type": "new_event"},
+            event_id=7,
+            publish_backplane=False,
+        )
+
+        mgr._backplane.publish.assert_not_awaited()
+
+    @patch("db_monitor.ws_manager.settings")
+    async def test_backplane_payloads_route_to_fanout(self, mock_settings) -> None:
+        import json
+
+        from db_monitor.ws_manager import WebSocketManager
+
+        mock_settings.auth.ws_backplane_enabled = True
+        mgr = WebSocketManager()
+        seen: list[int] = []
+
+        async def fake_fanout(event_id: int) -> None:
+            seen.append(event_id)
+
+        mgr._fanout_event = fake_fanout  # type: ignore[method-assign]
+
+        await mgr._deliver_backplane_notification(
+            json.dumps({"origin_instance_id": "remote", "event_ids": [4, 5]})
+        )
+        await mgr._deliver_backplane_notification(
+            json.dumps({"origin_instance_id": "remote", "event_id": 6})
+        )
+        await mgr._deliver_backplane_notification(
+            json.dumps({"origin_instance_id": mgr._instance_id, "event_id": 7})
+        )
+
+        assert seen == [4, 5, 6]
+
+    @patch("db_monitor.ws_manager.settings")
     async def test_backplane_disabled(self, mock_settings) -> None:
         from db_monitor.ws_manager import WebSocketManager
 

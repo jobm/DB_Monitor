@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Sequence
 from uuid import uuid4
 
 from db_monitor.backplane import create_backplane
@@ -31,6 +32,9 @@ from sqlalchemy import select
 from db_monitor.tracing import start_span
 
 logger = logging.getLogger(__name__)
+
+# A pg_notify payload is limited to ~8 KB, so batch ids are chunked well below it.
+_BACKPLANE_EVENT_CHUNK = 500
 
 
 class WebSocketManager:
@@ -72,6 +76,8 @@ class WebSocketManager:
         message: dict,
         event_id: int | None = None,
         tenant_id: str | None = None,
+        *,
+        publish_backplane: bool = True,
     ) -> None:
         with start_span(
             "websocket.broadcast",
@@ -83,7 +89,11 @@ class WebSocketManager:
             },
         ):
             await self._broadcast_local(message, tenant_id=tenant_id)
-            if self._backplane_enabled and event_id is not None:
+            if (
+                publish_backplane
+                and self._backplane_enabled
+                and event_id is not None
+            ):
                 await self._publish_event(event_id)
 
     async def _broadcast_local(
@@ -120,6 +130,31 @@ class WebSocketManager:
             }
         )
         await self._backplane.publish(payload)
+
+    async def publish_event_notifications(
+        self,
+        event_ids: Sequence[int],
+    ) -> None:
+        """Publish one backplane notification for a whole batch of events.
+
+        The Postgres backplane spends three round trips (begin, notify,
+        commit) per notification.  Publishing once per event capped ingestion
+        near 300 ev/s, so batches are coalesced into a single notification.
+        """
+        if not self._backplane_enabled or self._backplane is None:
+            return
+        for start in range(0, len(event_ids), _BACKPLANE_EVENT_CHUNK):
+            chunk = list(event_ids[start : start + _BACKPLANE_EVENT_CHUNK])
+            if not chunk:
+                continue
+            await self._backplane.publish(
+                json.dumps(
+                    {
+                        "origin_instance_id": self._instance_id,
+                        "event_ids": chunk,
+                    }
+                )
+            )
 
     async def start_backplane_listener(self) -> asyncio.Task | None:
         """Start the backplane listener if clustering is enabled."""
@@ -172,44 +207,50 @@ class WebSocketManager:
             if envelope.get("origin_instance_id") == self._instance_id:
                 return
 
-            event_id = envelope.get("event_id")
-            if event_id is None:
-                return
+            event_ids = envelope.get("event_ids")
+            if event_ids is None:
+                event_id = envelope.get("event_id")
+                event_ids = [event_id] if event_id is not None else []
 
-            async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
-                result = await session.execute(
-                    select(KafkaEvent).where(KafkaEvent.id == event_id)
-                )
-                event = result.scalar_one_or_none()
+            for event_id in event_ids:
+                await self._fanout_event(event_id)
 
-            if event is None:
-                logger.warning(
-                    "Could not load event %s from websocket backplane payload",
-                    event_id,
-                )
-                return
-
-            await self._broadcast_local(
-                {
-                    "type": "new_event",
-                    "event": {
-                        "id": event.id,
-                        "event_type": event.event_type,
-                        "event_time": (
-                            event.event_time.isoformat()
-                            if event.event_time
-                            else None
-                        ),
-                        "user_id": event.user_id,
-                        "service_name": event.service_name,
-                        "operation": event.operation,
-                        "source_table_id": event.source_table_id,
-                        "row_identity": event.row_identity,
-                        "event_data": event.event_data,
-                    },
-                },
-                tenant_id=event.service_name,
+    async def _fanout_event(self, event_id: int) -> None:
+        """Load one event and forward it to local WebSocket clients."""
+        async with AsyncSessionLocal() as session:  # type: ignore[type-var,attr-defined]
+            result = await session.execute(
+                select(KafkaEvent).where(KafkaEvent.id == event_id)
             )
+            event = result.scalar_one_or_none()
+
+        if event is None:
+            logger.warning(
+                "Could not load event %s from websocket backplane payload",
+                event_id,
+            )
+            return
+
+        await self._broadcast_local(
+            {
+                "type": "new_event",
+                "event": {
+                    "id": event.id,
+                    "event_type": event.event_type,
+                    "event_time": (
+                        event.event_time.isoformat()
+                        if event.event_time
+                        else None
+                    ),
+                    "user_id": event.user_id,
+                    "service_name": event.service_name,
+                    "operation": event.operation,
+                    "source_table_id": event.source_table_id,
+                    "row_identity": event.row_identity,
+                    "event_data": event.event_data,
+                },
+            },
+            tenant_id=event.service_name,
+        )
 
     @property
     def connection_count(self) -> int:

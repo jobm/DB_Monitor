@@ -32,10 +32,16 @@ def _event_to_ws_payload(event: KafkaEvent) -> dict:
     }
 
 
-async def _broadcast_event(event: KafkaEvent) -> None:
+async def _broadcast_event(
+    event: KafkaEvent,
+    *,
+    publish_backplane: bool = True,
+) -> None:
     """Broadcast an event via WebSocket and deliver via webhooks.
 
     Failed webhook deliveries are persisted as dead-letter events.
+    Batch callers suppress the per-event backplane notification and publish
+    once for the batch instead.
     """
     payload = {
         "type": "new_event",
@@ -54,6 +60,7 @@ async def _broadcast_event(event: KafkaEvent) -> None:
                 payload,
                 event_id=event.id,
                 tenant_id=event.service_name,
+                publish_backplane=publish_backplane,
             )
     except Exception as e:
         logger.warning("Failed to broadcast event via WebSocket: %s", e)

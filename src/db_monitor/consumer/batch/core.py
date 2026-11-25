@@ -22,6 +22,7 @@ from db_monitor.metrics import (
     kafka_commit_duration_seconds,
 )
 from db_monitor.tracing import start_span
+from db_monitor.ws_manager import ws_manager
 from db_monitor.consumer.batch.processing import _process_batch_individually
 from db_monitor.consumer.checkpoint import _requeue_broker_messages
 
@@ -74,6 +75,7 @@ async def _process_batch(
                     await _requeue_broker_messages(batch_messages)
                     return False
             else:
+                published_event_ids: list[int] = []
                 for event, _raw_data, _message in batch:
                     event_key = (
                         event.kafka_topic,
@@ -95,11 +97,21 @@ async def _process_batch(
                         ).inc()
                         continue
 
-                    await _broadcast_event(event)
+                    await _broadcast_event(
+                        event,
+                        publish_backplane=False,
+                    )
+                    if event.id is not None:
+                        published_event_ids.append(event.id)
                     events_processed_total.labels(
                         service=event.service_name or "unknown",
                         operation=event.operation or "unknown",
                     ).inc()
+
+                # One backplane round trip per batch instead of one per event.
+                await ws_manager.publish_event_notifications(
+                    published_event_ids
+                )
         else:
             processed = await _process_batch_individually(
                 batch,

@@ -709,7 +709,12 @@ async def test_broadcast_event_delivers_webhooks(monkeypatch):
     websocket_messages = []
     webhook_messages = []
 
-    async def fake_broadcast(message, event_id=None, tenant_id=None):
+    async def fake_broadcast(
+        message,
+        event_id=None,
+        tenant_id=None,
+        **_kwargs,
+    ):
         websocket_messages.append((message, event_id))
 
     async def fake_send_message(message):
@@ -771,7 +776,12 @@ async def test_broadcast_event_persists_webhook_failures_to_dlq(
     )
     persisted: list[tuple[KafkaEvent, str, str, str]] = []
 
-    async def fake_broadcast(message, event_id=None, tenant_id=None):
+    async def fake_broadcast(
+        message,
+        event_id=None,
+        tenant_id=None,
+        **_kwargs,
+    ):
         del message
         del event_id
 
@@ -1111,7 +1121,7 @@ async def test_consumer_task_processes_rabbitmq_messages(monkeypatch):
         fake_build_dead_letter_publisher,
     )
 
-    async def fake_broadcast_event(_event):
+    async def fake_broadcast_event(_event, **_kwargs):
         return None
 
     monkeypatch.setattr(
@@ -1588,7 +1598,7 @@ async def test_process_batch_uses_bulk_write_path(monkeypatch):
         del broker_kind
         del session_factory
 
-    async def fake_broadcast(_event):
+    async def fake_broadcast(_event, **_kwargs):
         return None
 
     monkeypatch.setattr(
@@ -1644,6 +1654,102 @@ async def test_process_batch_uses_bulk_write_path(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_process_batch_publishes_one_backplane_notification(monkeypatch):
+    batch = []
+    inserted_keys = set()
+    for offset, event_id in ((21, 501), (22, 502)):
+        event = KafkaEvent(
+            event_type="u",
+            event_time=datetime.now(timezone.utc),
+            user_id=None,
+            service_name="orderdb",
+            kafka_topic="orderdb.public.orders",
+            kafka_partition=0,
+            kafka_offset=offset,
+            event_data={"after": {"id": offset}},
+            raw_payload="{}",
+            operation="UPDATE",
+        )
+        event.id = event_id
+        batch.append(
+            (
+                event,
+                event.raw_payload,
+                FakeBrokerMessage("orderdb.public.orders", event.raw_payload),
+            )
+        )
+        inserted_keys.add(
+            (event.kafka_topic, event.kafka_partition, event.kafka_offset)
+        )
+
+    backplane_events: list[list[int]] = []
+    broadcast_flags: list[bool] = []
+
+    async def fake_store_batch(*_args, **_kwargs):
+        return inserted_keys
+
+    async def fake_broadcast(_event, **_kwargs):
+        broadcast_flags.append(_kwargs.get("publish_backplane", True))
+
+    async def fake_publish_event_notifications(event_ids):
+        backplane_events.append(list(event_ids))
+
+    async def fake_ack(_messages):
+        return None
+
+    async def fake_persist_checkpoints(
+        events,
+        consumer_group,
+        broker_kind="kafka",
+        session_factory=None,
+    ):
+        del events, consumer_group, broker_kind, session_factory
+
+    monkeypatch.setattr(settings.ingestion, "bulk_write_enabled", True)
+    monkeypatch.setattr(
+        batch_core,
+        "_store_batch_graph_with_retries",
+        fake_store_batch,
+    )
+    monkeypatch.setattr(batch_core, "_broadcast_event", fake_broadcast)
+    monkeypatch.setattr(
+        batch_core,
+        "persist_consumer_checkpoints",
+        fake_persist_checkpoints,
+    )
+    monkeypatch.setattr(
+        batch_core.ws_manager,
+        "publish_event_notifications",
+        fake_publish_event_notifications,
+    )
+    monkeypatch.setattr(
+        batch_core,
+        "kafka_commit_duration_seconds",
+        FakeTimerMetric(),
+    )
+    monkeypatch.setattr(
+        batch_core,
+        "events_processed_total",
+        FakeTimerMetric(),
+    )
+
+    processed = await consumer_batch._process_batch(
+        batch,
+        fake_ack,
+        dlq_publisher=FakeDeadLetterPublisher(),
+        dlq_destination="rabbit-dlq",
+        enable_dlq=True,
+        runtime=consumer_mod.consumer_runtime,
+        consumer_group="rabbit-group",
+        broker_kind="rabbitmq",
+    )
+
+    assert processed is True
+    assert broadcast_flags == [False, False]
+    assert backplane_events == [[501, 502]]
+
+
+@pytest.mark.anyio
 async def test_process_batch_falls_back_when_bulk_write_fails(monkeypatch):
     event = KafkaEvent(
         event_type="u",
@@ -1684,7 +1790,7 @@ async def test_process_batch_falls_back_when_bulk_write_fails(monkeypatch):
         del broker_kind
         del session_factory
 
-    async def fake_broadcast(_event):
+    async def fake_broadcast(_event, **_kwargs):
         return None
 
     monkeypatch.setattr(
