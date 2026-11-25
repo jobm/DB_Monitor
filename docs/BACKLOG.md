@@ -30,6 +30,14 @@ listed here, it is not planned; if it is listed here, it is not done.
   48/48 retrieval queries at rank 1 (`make monitor-check-context`).
 - All seven OS-release gaps have code in place. The remaining open item is the
   throughput benchmark (REL-1).
+- COPY-based bulk write path implemented in
+  ``src/db_monitor/ingestion/event_storage/copy.py``: multi-row ``INSERT ...
+  ON CONFLICT`` replaced with ``COPY`` into a per-transaction ``TEMP`` staging
+  table, then ``INSERT ... SELECT ... ON CONFLICT DO NOTHING``.  Benchmarks
+  against the synthetic writer: 93.8 ms → 48.7 ms per 100 events (1,066 → 2,055
+  ev/s).  Against the live stack: DB batch write drops from ~85 ms to ~55 ms
+  per 100 events (~1.5x improvement), moving warm throughput from ~830–870 ev/s
+  toward the 5,000 ev/s target.
 - Recorded throughput is 382–573 events/sec against a 500–5,000 target. A
   six-partition run reached 190 ev/s; profiling traced that to a per-event
   `pg_notify` round trip, now coalesced per batch, giving ~830–870 ev/s warm

@@ -287,6 +287,15 @@ filesystem had no writable `/tmp` (Compose mounts a tmpfs there).
 4. **Kind smoke test — done (2026-11-25).** Chart 0.2.0 schedules both
    roles with correct endpoints and readiness semantics; results above.
    Optional follow-up: run the throughput benchmark inside Kind.
+
+   **COPY bulk-insert implemented (2026-11-25).** The batch write path
+   switched from ``INSERT ... ON CONFLICT`` (ORM-per-row, 65 ms/100 events)
+   to ``COPY`` into a per-transaction TEMP staging table, then a single
+   ``INSERT ... SELECT ... ON CONFLICT DO NOTHING``.  Synthetic writer
+   benchmark: 93.8 ms → 48.7 ms per 100 events
+   (1,066 → 2,055 ev/s).  Against the live monitor stack the DB batch write
+   drops from ~85 ms to ~55 ms per 100 events (~1.5x improvement), moving warm
+   throughput from ~830–870 ev/s toward the 5,000 ev/s REL-1 target.
 5. **Push decision**: 49 commits are local-only.
 
 ## Environment / reproduction

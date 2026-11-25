@@ -12,6 +12,7 @@ from db_monitor.core.models import (
     KafkaEvent,
     MonitoredColumn,
 )
+from db_monitor.ingestion.changes.copy import copy_column_changes
 from db_monitor.ingestion.changes.queries import (
     get_changes as _get_changes_impl,
     get_value_at_time as _get_value_at_time_impl,
@@ -50,8 +51,33 @@ class ChangeProcessor:
         per-event column deltas in memory, and bulk-inserts the resulting
         ``ColumnChange`` rows in a single ``session.add_all()`` call.
         """
+        changes = await self._collect_batch_changes(events, session)
+        if changes:
+            session.add_all(changes)
+
+    async def copy_changes_batch(
+        self,
+        events: list[KafkaEvent],
+        session,
+    ) -> None:
+        """Extract a batch's column changes and insert them with COPY.
+
+        Uses the same in-memory delta computation as
+        :meth:`process_events_batch`, but streams the resulting rows through
+        ``COPY`` instead of the ORM unit of work.
+        """
+        changes = await self._collect_batch_changes(events, session)
+        if changes:
+            await copy_column_changes(session, changes)
+
+    async def _collect_batch_changes(
+        self,
+        events: list[KafkaEvent],
+        session,
+    ) -> list[ColumnChange]:
+        """Compute the ``ColumnChange`` rows derived from a batch of events."""
         if not events:
-            return
+            return []
 
         # Collect events that are eligible for change extraction
         eligible: list[KafkaEvent] = []
@@ -66,7 +92,7 @@ class ChangeProcessor:
                 table_ids.add(event.source_table_id)
 
         if not eligible:
-            return
+            return []
 
         # Fetch audit-enabled columns once per unique table
         col_stmt = select(MonitoredColumn).where(
@@ -80,7 +106,7 @@ class ChangeProcessor:
         for col in all_columns:
             columns_by_table.setdefault(col.table_id, []).append(col)
 
-        # Compute all changes in memory and bulk-insert
+        # Compute all changes in memory
         all_changes: list[ColumnChange] = []
         for event in eligible:
             payload = event.event_data or {}
@@ -126,8 +152,7 @@ class ChangeProcessor:
                     )
                 )
 
-        if all_changes:
-            session.add_all(all_changes)
+        return all_changes
 
     async def _process_event(self, event: KafkaEvent, session) -> None:
         """Process an event within an existing database session."""

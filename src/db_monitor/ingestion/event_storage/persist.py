@@ -5,16 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, OperationalError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db_monitor.core.models import KafkaEvent
 from db_monitor.extensions import AsyncSessionLocal
 from db_monitor.ingestion.changes import ChangeProcessor
+from db_monitor.ingestion.event_storage.copy import copy_events_batch
 from db_monitor.ingestion.event_storage.identity import (
     _populate_row_identity,
     _populate_row_identity_batch,
@@ -123,68 +122,9 @@ async def _store_batch_graph_with_retries(
 
                         await _populate_row_identity_batch(session, events)
 
-                        now = datetime.now(timezone.utc)
-                        values: list[dict[str, object]] = [
-                            {
-                                "event_type": event_obj.event_type,
-                                "event_time": event_obj.event_time,
-                                "user_id": event_obj.user_id,
-                                "service_name": (
-                                    event_obj.service_name
-                                ),
-                                "kafka_topic": event_obj.kafka_topic,
-                                "kafka_partition": (
-                                    event_obj.kafka_partition
-                                ),
-                                "kafka_offset": event_obj.kafka_offset,
-                                "source_table_id": (
-                                    event_obj.source_table_id
-                                ),
-                                "operation": event_obj.operation,
-                                "row_identity": (
-                                    event_obj.row_identity
-                                ),
-                                "event_data": event_obj.event_data,
-                                "raw_payload": event_obj.raw_payload,
-                                "capture_time": (
-                                    event_obj.event_time
-                                    if event_obj.event_time
-                                    is not None
-                                    else now
-                                ),
-                                "ingested_at": now,
-                            }
-                            for event_obj in events
-                        ]
-                        insert_stmt = (
-                            pg_insert(KafkaEvent)
-                            .values(values)
-                            .on_conflict_do_nothing(
-                                index_elements=[
-                                    "kafka_topic",
-                                    "kafka_partition",
-                                    "kafka_offset",
-                                    "capture_time",
-                                ]
-                            )
-                            .returning(
-                                KafkaEvent.id,
-                                KafkaEvent.kafka_topic,
-                                KafkaEvent.kafka_partition,
-                                KafkaEvent.kafka_offset,
-                            )
+                        inserted_lookup = await copy_events_batch(
+                            session, events
                         )
-
-                        result = await session.execute(insert_stmt)
-                        inserted_rows = result.all()
-                        inserted_lookup: dict[
-                            tuple[str | None, int | None, int | None], int | None
-                        ] = {}
-                        for row in inserted_rows:
-                            row_id: int | None = row.id
-                            inserted_lookup[
-                                (row.kafka_topic, row.kafka_partition, row.kafka_offset)
-                            ] = row_id
 
                         inserted_keys: set[tuple[str | None, int | None, int | None]] = set()
                         for event_obj in events:
@@ -202,7 +142,7 @@ async def _store_batch_graph_with_retries(
                             if inserted_id is not None:
                                 event_obj.id = inserted_id
 
-                        await change_processor.process_events_batch(
+                        await change_processor.copy_changes_batch(
                             inserted_events,
                             session=session,
                         )
