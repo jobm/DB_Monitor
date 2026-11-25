@@ -144,7 +144,7 @@ class FakeBrokerMessage:
         self.destination = destination
         self.partition = partition
         self.offset = offset
-        self.value = value.encode("utf-8")
+        self.value = value.encode("utf-8") if value is not None else None
         self.lag = lag
         self.acked = 0
         self.nacked = 0
@@ -1264,6 +1264,62 @@ async def test_consumer_task_acks_filtered_events(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_consumer_task_skips_tombstone_messages(monkeypatch):
+    runtime = consumer_mod._get_consumer_runtime("rabbit-tombstone")
+    runtime["last_commit_at"] = None
+    broker_message = FakeBrokerMessage("cdc.orders", None, offset=47)
+    consumer_adapter = FakeBrokerConsumerAdapter([broker_message])
+
+    async def fake_refresh_dead_letter_backlog_metric(*_args, **_kwargs):
+        return 0
+
+    def fake_build_message_consumer(**kwargs):
+        assert kwargs["broker_kind"] == "rabbitmq"
+        return consumer_adapter
+
+    def fake_build_dead_letter_publisher(**kwargs):
+        return None
+
+    async def fail_store_event_graph(*_args, **_kwargs):
+        raise AssertionError("Tombstones should not be persisted")
+
+    monkeypatch.setattr(
+        consumer_mod,
+        "refresh_dead_letter_backlog_metric",
+        fake_refresh_dead_letter_backlog_metric,
+    )
+    monkeypatch.setattr(
+        "db_monitor.consumer.connection.build_message_consumer",
+        fake_build_message_consumer,
+    )
+    monkeypatch.setattr(
+        consumer_mod,
+        "build_dead_letter_publisher",
+        fake_build_dead_letter_publisher,
+    )
+    monkeypatch.setattr(
+        consumer_batch,
+        "_store_event_graph_with_retries",
+        fail_store_event_graph,
+    )
+
+    await consumer_mod.consumer_task(
+        cluster_name="rabbit-tombstone",
+        broker_kind="rabbitmq",
+        consumer_group="rabbit-group",
+        topics=["cdc.orders"],
+        connection_url="amqp://rabbit/",
+        queue_names=["cdc.orders"],
+        enable_dlq=False,
+        enable_batch=False,
+    )
+
+    assert broker_message.acked == 1
+    assert broker_message.nacked == 0
+    assert runtime["last_message_at"] is not None
+
+
+@pytest.mark.anyio
 async def test_consumer_task_acks_quota_dropped_events(monkeypatch):
     runtime = consumer_mod._get_consumer_runtime("rabbit-quota")
     runtime["last_commit_at"] = None
@@ -1832,3 +1888,4 @@ def test_get_consumer_health_aggregates_multiple_cluster_runtimes() -> None:
     assert health["circuit_breaker_state"] == "open"
     assert "secondary" in health["clusters"]
     assert health["clusters"]["secondary"]["last_error"] == "timeout"
+

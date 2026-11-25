@@ -65,6 +65,19 @@ async def _message_loop(
 
         current_event: KafkaEvent | None = None
         try:
+            if msg.value is None:
+                # Debezium emits tombstones (null values) after delete events;
+                # the delete itself already arrived as a payload with op="d".
+                logger.debug(
+                    "Skipping tombstone destination=%s partition=%d offset=%d",
+                    msg.destination,
+                    msg.partition,
+                    msg.offset,
+                )
+                await msg.ack_callback()
+                runtime["last_message_at"] = _utc_now_iso()
+                continue
+
             data = msg.value.decode("utf-8")
             logger.debug(
                 "Received message destination=%s partition=%d offset=%d",
@@ -203,7 +216,11 @@ async def _message_loop(
             raise
         except Exception as e:
             logger.exception("Error processing message: %s", e)
-            raw_payload = msg.value.decode("utf-8", errors="replace")
+            raw_payload = (
+                msg.value.decode("utf-8", errors="replace")
+                if msg.value is not None
+                else ""
+            )
             should_continue = await _handle_message_processing_error(
                 msg=msg,
                 raw_payload=raw_payload,
