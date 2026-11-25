@@ -9,6 +9,7 @@ from fastapi import Response
 from starlette.requests import Request
 
 from db_monitor import main
+from db_monitor.lifespan import managed_lifespan
 
 
 async def _receive() -> dict[str, Any]:
@@ -587,6 +588,120 @@ def test_configure_tracing_skips_when_disabled(
     main._configure_tracing(main.app)
 
     assert called is False
+
+
+class _RoleLifecycleManager:
+    """Minimal lifecycle manager that records registered tasks."""
+
+    def __init__(self) -> None:
+        self.registered: list[asyncio.Task[None]] = []
+
+    def setup_signal_handlers(self, _loop) -> None:
+        return None
+
+    async def startup(self) -> None:
+        return None
+
+    async def shutdown(self) -> None:
+        return None
+
+    def register_task(self, task, critical: bool = True) -> None:
+        self.registered.append(task)
+
+
+def _role_dependencies(calls: dict[str, list[str]]):
+    """Build lifespan collaborators that record what each role starts."""
+    from types import SimpleNamespace
+
+    async def fake_audit_run() -> None:
+        calls["audit"].append("started")
+
+    async def fake_schema_listener():
+        return None
+
+    async def fake_ws_listener():
+        calls["ws"].append("started")
+        return None
+
+    async def fake_consumer_task(**kwargs) -> None:
+        calls["consumer"].append(kwargs["cluster_name"])
+
+    async def fake_retention() -> None:
+        calls["retention"].append("started")
+
+    return SimpleNamespace(
+        audit_log_writer=SimpleNamespace(run=fake_audit_run),
+        schema_cache_backplane=SimpleNamespace(
+            start_listener=fake_schema_listener
+        ),
+        ws_manager=SimpleNamespace(start_backplane_listener=fake_ws_listener),
+        consumer_task=fake_consumer_task,
+        retention_cleanup_task=fake_retention,
+    )
+
+
+async def _run_role_lifespan(service_role: str) -> dict[str, list[str]]:
+    calls: dict[str, list[str]] = {
+        "audit": [],
+        "ws": [],
+        "consumer": [],
+        "retention": [],
+    }
+    deps = _role_dependencies(calls)
+    async with managed_lifespan(
+        main.app,
+        lifecycle_manager=_RoleLifecycleManager(),
+        audit_log_writer=deps.audit_log_writer,
+        schema_cache_backplane=deps.schema_cache_backplane,
+        ws_manager=deps.ws_manager,
+        broker_clusters=[
+            {
+                "name": "primary",
+                "broker_kind": "kafka",
+                "bootstrap_servers": ["kafka-a:9092"],
+                "topics": ["orders.events"],
+                "topic_partitions": None,
+                "consumer_group": "group-a",
+                "connection_url": None,
+                "queue_names": None,
+                "prefetch_count": None,
+                "dlq_destination": "db-monitor-dlq",
+            }
+        ],
+        consumer_task=deps.consumer_task,
+        retention_cleanup_task=deps.retention_cleanup_task,
+        partition_maintenance_task=None,
+        retention_cleanup_enabled=True,
+        dlq_enabled=True,
+        batch_enabled=True,
+        batch_size=100,
+        logger=main.logger,
+        service_role=service_role,
+    ):
+        await asyncio.sleep(0)
+    return calls
+
+
+@pytest.mark.anyio
+async def test_lifespan_api_role_skips_consumer_and_retention_tasks() -> None:
+    """SERVICE_ROLE=api serves clients but must not consume or retain."""
+    calls = await _run_role_lifespan("api")
+
+    assert calls["consumer"] == []
+    assert calls["retention"] == []
+    assert calls["ws"] == ["started"]
+    assert calls["audit"] == ["started"]  # API still writes its audit log
+
+
+@pytest.mark.anyio
+async def test_lifespan_consumer_role_skips_client_only_tasks() -> None:
+    """SERVICE_ROLE=consumer ingests and retains but serves no clients."""
+    calls = await _run_role_lifespan("consumer")
+
+    assert calls["consumer"] == ["primary"]
+    assert calls["retention"] == ["started"]
+    assert calls["ws"] == []
+    assert calls["audit"] == []
 
 
 def test_configure_tracing_initializes_when_enabled(

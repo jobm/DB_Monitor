@@ -1,40 +1,56 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- range $role := list "api" "consumer" }}
+{{- $np := (index $.Values.networkPolicy $role) | default dict }}
+---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "db-monitor.fullname" . }}
+  name: {{ include "db-monitor.fullname" $ }}-{{ $role }}
   labels:
-    {{- include "db-monitor.labels" . | nindent 4 }}
+    {{- include "db-monitor.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $role }}
 spec:
   podSelector:
     matchLabels:
-      {{- include "db-monitor.selectorLabels" . | nindent 6 }}
+      {{- include "db-monitor.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $role }}
   policyTypes:
     - Ingress
     - Egress
   ingress:
-    # Allow traffic from ingress/load balancer to the HTTP port
+    {{- if eq $role "api" }}
+    # Client traffic from ingress controllers and in-cluster callers.
     - ports:
-        - port: {{ .Values.service.port }}
+        - port: {{ $.Values.service.port }}
           protocol: TCP
       from:
         - namespaceSelector: {}
+    {{- end }}
+    # Prometheus scraping is the only inbound traffic a consumer needs.
+    - ports:
+        - port: {{ $.Values.service.port }}
+          protocol: TCP
+      from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
   egress:
-    # Allow DNS
+    # DNS
     - ports:
         - port: 53
           protocol: UDP
       to:
         - namespaceSelector: {}
-    # Allow PostgreSQL egress
+    # PostgreSQL (both roles touch the monitor database)
     - ports:
-        - port: {{ .Values.database.port }}
+        - port: {{ $.Values.database.port }}
           protocol: TCP
       to:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: postgresql
-    # Allow Kafka egress
+    {{- if eq $role "consumer" }}
+    # Broker (only the consumer connects to Kafka/RabbitMQ)
     - ports:
         - port: 9092
           protocol: TCP
@@ -42,15 +58,9 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: kafka
-    # Allow Prometheus scraping
-    - ports:
-        - port: 8000
-          protocol: TCP
-      to:
-        - podSelector:
-            matchLabels:
-              app.kubernetes.io/name: prometheus
-    {{- with .Values.networkPolicy.extraEgress }}
+    {{- end }}
+    {{- with $np.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+{{- end }}
 {{- end }}

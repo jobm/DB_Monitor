@@ -2,7 +2,7 @@ apiVersion: v2
 name: db-monitor
 description: A Helm chart for DB Monitor — a pluggable CDC audit-log framework
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.1.0"
 keywords:
   - cdc

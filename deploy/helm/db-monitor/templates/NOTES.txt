@@ -4,10 +4,13 @@
   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
 {{- end }}
 {{- else }}
-  export POD_NAME=$(kubectl get pods -l "app.kubernetes.io/name={{ include "db-monitor.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
+  kubectl port-forward svc/{{ include "db-monitor.fullname" . }}-api 8000:8000
   echo "Visit http://127.0.0.1:8000 to use the API"
-  kubectl port-forward $POD_NAME 8000:8000
 {{- end }}
+
+   The release runs two workloads from one image: an `api` Deployment that
+   serves clients and a `consumer` Deployment that ingests from the broker.
+   Only the `api` Service is meant for client traffic.
 
 2. Bootstrap the first admin API key:
 {{- if .Values.app.allowBootstrap }}

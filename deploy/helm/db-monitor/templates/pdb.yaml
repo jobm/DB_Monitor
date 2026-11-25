@@ -1,13 +1,20 @@
-{{- if .Values.podDisruptionBudget.enabled }}
+{{- range $role := list "api" "consumer" }}
+{{- $workload := (index $.Values $role) | default dict }}
+{{- $pdb := $workload.podDisruptionBudget | default dict }}
+{{- if $pdb.enabled }}
+---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: {{ include "db-monitor.fullname" . }}
+  name: {{ include "db-monitor.fullname" $ }}-{{ $role }}
   labels:
-    {{- include "db-monitor.labels" . | nindent 4 }}
+    {{- include "db-monitor.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $role }}
 spec:
-  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ $pdb.minAvailable }}
   selector:
     matchLabels:
-      {{- include "db-monitor.selectorLabels" . | nindent 6 }}
+      {{- include "db-monitor.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $role }}
+{{- end }}
 {{- end }}

@@ -35,6 +35,7 @@ def _build_settings_from_env() -> "AppSettings":
     """Load and validate all settings from environment variables once."""
     from db_monitor.core.config.dataclasses.core import AppSettings
     env = os.getenv("APP_ENV", "development").lower()
+    service_role = os.getenv("SERVICE_ROLE", "all").strip().lower()
 
     db = DatabaseSettings()
     broker = BrokerSettings()
@@ -96,6 +97,7 @@ def _build_settings_from_env() -> "AppSettings":
     settings_obj = AppSettings(
         env=env,
         db_schema_mode=db_schema_mode,
+        service_role=service_role,
         app_shutdown_timeout_seconds=float(
             os.getenv("APP_SHUTDOWN_TIMEOUT_SECONDS", "45")
         ),

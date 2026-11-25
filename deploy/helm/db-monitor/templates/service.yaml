@@ -1,15 +1,26 @@
+{{- range $role := list "api" "consumer" }}
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "db-monitor.fullname" . }}
+  name: {{ include "db-monitor.fullname" $ }}-{{ $role }}
   labels:
-    {{- include "db-monitor.labels" . | nindent 4 }}
+    {{- include "db-monitor.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $role }}
+  {{- if eq $role "consumer" }}
+  annotations:
+    # Consumer pods serve no client traffic; this Service exists so
+    # Prometheus can scrape the consumer workload.
+    db-monitor.io/purpose: metrics
+  {{- end }}
 spec:
-  type: {{ .Values.service.type }}
+  type: {{ $.Values.service.type }}
   ports:
-    - port: {{ .Values.service.port }}
+    - port: {{ $.Values.service.port }}
       targetPort: http
       protocol: TCP
       name: http
   selector:
-    {{- include "db-monitor.selectorLabels" . | nindent 4 }}
+    {{- include "db-monitor.selectorLabels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $role }}
+{{- end }}

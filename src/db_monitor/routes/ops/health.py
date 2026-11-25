@@ -25,8 +25,14 @@ router = APIRouter()
 
 
 def readiness_payload() -> dict[str, object]:
-    """Build readiness payload from lifecycle and consumer state."""
+    """Build readiness payload from lifecycle and consumer state.
+
+    A ``SERVICE_ROLE=api`` pod runs no consumers, so consumer checks are
+    reported as ``not_applicable`` and do not gate readiness; they would
+    otherwise keep every API pod permanently unready.
+    """
     consumer_health = get_consumer_health()
+    consumer_applies = settings.service_role != "api"
 
     last_commit_age_seconds = timestamp_age_seconds(
         cast(str | None, consumer_health.get("last_commit_at"))
@@ -60,9 +66,13 @@ def readiness_payload() -> dict[str, object]:
     consumer_status = "healthy" if consumer_ready else "unhealthy"
     if consumer_health.get("reconnecting"):
         consumer_status = "reconnecting"
+    if not consumer_applies:
+        consumer_status = "not_applicable"
     return {
         "status": (
-            "ready" if consumer_ready and lifecycle_ready else "not_ready"
+            "ready"
+            if lifecycle_ready and (consumer_ready or not consumer_applies)
+            else "not_ready"
         ),
         "checks": {
             "consumer": {
@@ -99,16 +109,20 @@ async def health_check():
         database_error = str(exc)
 
     consumer_health = get_consumer_health()
+    consumer_applies = settings.service_role != "api"
     audit_log_status = (
         "healthy" if not audit_log_writer.has_flush_failure else "unhealthy"
     )
     lifecycle_status = (
         "healthy" if lifecycle_manager.is_healthy else "unhealthy"
     )
+    consumer_ok = (
+        not consumer_applies or consumer_health["status"] == "healthy"
+    )
     overall_status = (
         "healthy"
         if database_status == "healthy"
-        and consumer_health["status"] == "healthy"
+        and consumer_ok
         and lifecycle_status == "healthy"
         else "unhealthy"
     )
@@ -130,7 +144,11 @@ async def health_check():
                 "has_flush_failure": audit_log_writer.has_flush_failure,
                 "last_flush_error": audit_log_writer.last_flush_error,
             },
-            "consumer": consumer_health,
+            "consumer": (
+                consumer_health
+                if consumer_applies
+                else {**consumer_health, "status": "not_applicable"}
+            ),
             "lifecycle": {
                 "status": lifecycle_status,
                 "shutting_down": lifecycle_manager.is_shutting_down,

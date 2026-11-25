@@ -409,6 +409,56 @@ async def test_readiness_reports_reconnecting_consumer(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_readiness_api_role_ignores_absent_consumer(monkeypatch):
+    """An API-only pod has no consumers and must still become ready."""
+    monkeypatch.setattr(
+        "db_monitor.routes.ops.health.AsyncSessionLocal",
+        lambda: FakeSession(),
+    )
+    monkeypatch.setattr(
+        "db_monitor.routes.ops.health.get_consumer_health",
+        lambda: {
+            "status": "unhealthy",
+            "running": False,
+            "connected": False,
+            "topics": [],
+            "last_error": None,
+            "last_message_at": None,
+            "last_commit_at": None,
+            "lag_total": 0,
+            "lag_by_partition": {},
+            "dlq_messages_total": 0,
+            "circuit_breaker_state": "closed",
+        },
+    )
+    monkeypatch.setattr(
+        "db_monitor.routes.ops.health.settings.service_role",
+        "api",
+    )
+    monkeypatch.setattr(
+        routes_ops.lifecycle_manager,
+        "_startup_complete",
+        True,
+    )
+    monkeypatch.setattr(
+        routes_ops.lifecycle_manager.shutdown_manager,
+        "_shutdown_in_progress",
+        False,
+    )
+
+    response = await routes_ops.readiness_check()
+    payload = json.loads(response.body)
+
+    assert response.status_code == 200
+    assert payload["status"] == "ready"
+    assert payload["checks"]["consumer"]["status"] == "not_applicable"
+
+    health = await routes_ops.health_check()
+    assert health["status"] == "healthy"
+    assert health["checks"]["consumer"]["status"] == "not_applicable"
+
+
+@pytest.mark.anyio
 async def test_bootstrap_admin_key_rejects_when_disabled(monkeypatch):
     monkeypatch.setattr(routes_auth.settings.auth, "allow_bootstrap", False)
 

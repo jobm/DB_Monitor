@@ -30,6 +30,12 @@ class AppSettings:
     """Runtime environment: ``development``, ``production``, ``prod``, etc."""
     db_schema_mode: str = "apply"
     """Schema migration strategy: ``apply``, ``validate``, or ``skip``."""
+    service_role: str = "all"
+    """Process role: ``all`` (API + consumer), ``api``, or ``consumer``.
+
+    Split deployments set this so the API tier does not also consume from the
+    broker and the consumer tier does not serve client traffic.
+    """
     app_shutdown_timeout_seconds: float = 45.0
     """Graceful shutdown timeout in seconds. Default: 45."""
 

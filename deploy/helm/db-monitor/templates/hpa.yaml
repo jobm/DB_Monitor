@@ -1,28 +1,34 @@
-{{- if .Values.autoscaling.enabled }}
+{{- range $role := list "api" "consumer" }}
+{{- $workload := (index $.Values $role) | default dict }}
+{{- $autoscaling := $workload.autoscaling | default dict }}
+{{- if $autoscaling.enabled }}
+---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "db-monitor.fullname" . }}
+  name: {{ include "db-monitor.fullname" $ }}-{{ $role }}
   labels:
-    {{- include "db-monitor.labels" . | nindent 4 }}
+    {{- include "db-monitor.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $role }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "db-monitor.fullname" . }}
-  minReplicas: {{ .Values.autoscaling.minReplicas }}
-  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+    name: {{ include "db-monitor.fullname" $ }}-{{ $role }}
+  minReplicas: {{ $autoscaling.minReplicas }}
+  maxReplicas: {{ $autoscaling.maxReplicas }}
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+          averageUtilization: {{ $autoscaling.targetCPUUtilizationPercentage }}
     - type: Resource
       resource:
         name: memory
         target:
           type: Utilization
-          averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
+          averageUtilization: {{ $autoscaling.targetMemoryUtilizationPercentage }}
+{{- end }}
 {{- end }}

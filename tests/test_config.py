@@ -138,6 +138,31 @@ def test_config_rejects_invalid_schema_mode_with_hint(
         _build_settings_from_env(monkeypatch)
 
 
+def test_config_rejects_invalid_service_role_with_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SERVICE_ROLE is an enum; typos must fail at startup, not silently."""
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("SERVICE_ROLE", "worker")
+
+    with pytest.raises(
+        ValueError,
+        match="Invalid SERVICE_ROLE='worker'.*all, api, consumer",
+    ):
+        _build_settings_from_env(monkeypatch)
+
+
+def test_config_normalizes_service_role(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("SERVICE_ROLE", " API ")
+
+    config = _build_settings_from_env(monkeypatch)
+
+    assert config.service_role == "api"
+
+
 def test_config_reports_missing_secret_file_with_remediation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

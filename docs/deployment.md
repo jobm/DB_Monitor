@@ -151,9 +151,25 @@ helm install db-monitor ./deploy/helm/db-monitor \
 **Post-install:**
 ```
 helm test db-monitor
-kubectl port-forward svc/db-monitor 8000:8000
+kubectl port-forward svc/db-monitor-api 8000:8000
 curl -X POST "http://localhost:8000/auth/bootstrap?owner_name=admin"
 ```
+
+**API and consumer workloads:**
+
+The chart runs two Deployments from the same image, matching
+[ADR-007](adr/ADR-007-deployment-topology.md):
+
+| Workload | `SERVICE_ROLE` | Responsibilities | Service |
+|----------|----------------|------------------|---------|
+| `<release>-db-monitor-api` | `api` | HTTP/WebSocket clients, audit-log writer | `<release>-db-monitor-api` |
+| `<release>-db-monitor-consumer` | `consumer` | Broker consumers, retention cleanup, partition maintenance | `<release>-db-monitor-consumer` (metrics only) |
+
+Both workloads share the ConfigMap and Secret but have their own replica
+count, resources, HPA, PDB, NetworkPolicy, and ServiceMonitor. Route client
+traffic to the `api` Service only. Keep the consumer replica count at or below
+the topic partition count; extra replicas stay idle. Set `SERVICE_ROLE=all`
+only for single-process deployments such as the Compose sandbox.
 
 **Upgrade:**
 ```bash
@@ -178,8 +194,12 @@ kafka:
   broker: kafka.internal:9092
   securityProtocol: SSL
 
-autoscaling:
-  enabled: true
+api:
+  autoscaling:
+    enabled: true
+
+consumer:
+  replicaCount: 2
 
 monitoring:
   serviceMonitor:
@@ -190,8 +210,8 @@ See `deploy/helm/db-monitor/values.yaml` for all available options.
 
 The Helm chart includes:
 
-- Configurable `monitor-server` deployment with replica count, resource limits,
-  and HPA
+- Separate `api` and `consumer` deployments with per-role replica counts,
+  resource limits, HPAs, and PDBs
 - Configurable PostgreSQL connection (external or bundled)
 - Kafka/RabbitMQ broker connection settings
 - Secrets management via Kubernetes Secrets (mapped to `*_FILE` env vars)

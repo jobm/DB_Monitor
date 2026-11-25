@@ -113,6 +113,7 @@ async def lifespan_manager(app: FastAPI):
         batch_enabled=settings.broker.batch_enabled,
         batch_size=settings.broker.batch_size,
         logger=logger,
+        service_role=settings.service_role,
     ):
         yield
 

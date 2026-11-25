@@ -41,6 +41,7 @@ KAFKA_SSL_PASSWORD_FILE=/run/secrets/kafka_ssl_password
 | --- | --- | --- |
 | `APP_ENV` | ⚙️ Environment mode used for safety defaults | `development` |
 | `DB_SCHEMA_MODE` | ⚙️ Schema handling policy: `apply`, `validate`, or `skip` | `apply` in dev, `validate` in prod |
+| `SERVICE_ROLE` | ⚙️ Process role: `all` (API + consumer), `api`, or `consumer`. See [ADR-007](adr/ADR-007-deployment-topology.md). | `all` |
 | `POSTGRES_URL` | ✅ Async SQLAlchemy connection string for the monitor database | local monitor DB |
 | `CONNECTOR_SOURCES_FILE` | ⚙️ Path to the source manifest JSON file | `/connectors/sources.json` in docker, else `connectors/sources.json` |
 | `MESSAGE_BROKER` | ⚙️ Active single-broker mode: `kafka` or `rabbitmq` | `kafka` |

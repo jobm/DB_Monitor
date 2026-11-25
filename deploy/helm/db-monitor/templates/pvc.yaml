@@ -5,6 +5,7 @@ metadata:
   name: {{ include "db-monitor.fullname" . }}-archive
   labels:
     {{- include "db-monitor.labels" . | nindent 4 }}
+    app.kubernetes.io/component: consumer
 spec:
   accessModes:
     - {{ .Values.persistence.accessMode }}

@@ -16,6 +16,13 @@ def _validate_app_settings(settings) -> None:
             hint="Use one of: apply, validate, skip.",
         )
 
+    # Process role
+    if settings.service_role not in {"all", "api", "consumer"}:
+        config_error(
+            f"Invalid SERVICE_ROLE='{settings.service_role}'.",
+            hint="Use one of: all, api, consumer.",
+        )
+
     # Production hardening
     if settings.env in {"production", "prod"}:
         if settings.db.pool_size < 1:

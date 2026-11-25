@@ -6,9 +6,6 @@ nameOverride: ""
 # -- Override the fully qualified app name
 fullnameOverride: ""
 
-# -- Number of replicas
-replicaCount: 2
-
 image:
   # -- Container image repository
   repository: ghcr.io/jobm/db-monitor
@@ -23,6 +20,78 @@ imagePullSecrets: []
 serviceAccount:
   create: true
   name: ""
+
+# ── Workloads (ADR-007) ──────────────────────────────────────────────
+#
+# The chart runs the same image as two Deployments with different
+# responsibilities. Each pod gets SERVICE_ROLE injected explicitly and the
+# process only starts the tasks it owns:
+#
+#   api      — HTTP/WebSocket clients and the audit-log writer; no consumers
+#   consumer — broker consumers, retention, partition maintenance; no clients
+#
+# Scale the consumer up to the topic partition count; replicas beyond that
+# stay idle.
+
+api:
+  # -- Number of API replicas
+  replicaCount: 2
+  # -- API resource requests and limits
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  # -- API Horizontal Pod Autoscaler
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  # -- API Pod Disruption Budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+consumer:
+  # -- Number of consumer replicas (bounded by the topic partition count)
+  replicaCount: 2
+  # -- Consumer resource requests and limits
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  # -- Consumer Horizontal Pod Autoscaler
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  # -- Consumer Pod Disruption Budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # -- Enable batch processing
+  batchEnabled: true
+  # -- Batch size for consumer writes
+  batchSize: 100
+  # -- Enable bulk write ingestion path
+  bulkWriteEnabled: true
+  # -- Enable DLQ persistence
+  dlqEnabled: true
+  # -- Readiness threshold for stale commits (seconds)
+  readinessMaxCommitAgeSeconds: 300
+  # -- Readiness threshold for lag backlog
+  readinessMaxConsumerLag: 1000
+  # -- Readiness threshold for pending DLQ rows
+  readinessMaxDlqMessages: 0
 
 # -- Pod annotations
 podAnnotations: {}
@@ -59,28 +128,6 @@ ingress:
         - path: /
           pathType: Prefix
   tls: []
-
-# -- Resource requests and limits
-resources:
-  limits:
-    cpu: 2000m
-    memory: 2Gi
-  requests:
-    cpu: 500m
-    memory: 512Mi
-
-# -- Horizontal Pod Autoscaler
-autoscaling:
-  enabled: true
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
-  targetMemoryUtilizationPercentage: 80
-
-# -- Pod Disruption Budget
-podDisruptionBudget:
-  enabled: true
-  minAvailable: 1
 
 # -- Node selector
 nodeSelector: {}
@@ -199,24 +246,6 @@ rabbitmq:
   prefetchCount: 100
   dlqQueue: db-monitor-dlq
 
-# ── Consumer configuration ───────────────────────────────────────────
-
-consumer:
-  # -- Enable batch processing
-  batchEnabled: true
-  # -- Batch size for consumer writes
-  batchSize: 100
-  # -- Enable bulk write ingestion path
-  bulkWriteEnabled: true
-  # -- Enable DLQ persistence
-  dlqEnabled: true
-  # -- Readiness threshold for stale commits (seconds)
-  readinessMaxCommitAgeSeconds: 300
-  # -- Readiness threshold for lag backlog
-  readinessMaxConsumerLag: 1000
-  # -- Readiness threshold for pending DLQ rows
-  readinessMaxDlqMessages: 0
-
 # ── Auth configuration ───────────────────────────────────────────────
 
 auth:
@@ -324,8 +353,13 @@ monitoring:
 
 networkPolicy:
   enabled: false
-  # -- Additional egress rules (broker and database egress are auto-generated)
-  extraEgress: []
+  api:
+    # -- Additional API egress rules (database egress is auto-generated)
+    extraEgress: []
+  consumer:
+    # -- Additional consumer egress rules (database and broker egress are
+    #   auto-generated)
+    extraEgress: []
 
 # ── Extra environment variables ──────────────────────────────────────
 

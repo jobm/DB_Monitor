@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Split API and consumer workloads (ADR-007):**
+  - `SERVICE_ROLE` (`all`, `api`, `consumer`) selects which tasks a process
+    starts: API pods run no broker consumers, consumer pods serve no clients
+  - `/health` and `/readyz` report the consumer as `not_applicable` on API
+    pods so they no longer stay permanently unready
+  - Helm chart 0.2.0 renders separate `api` and `consumer` Deployments,
+    Services, HPAs, PDBs, NetworkPolicies, and ServiceMonitors, with per-role
+    `replicaCount`, `resources`, `autoscaling`, and `podDisruptionBudget`
+    values; the old top-level workload knobs moved under those sections
 - **Tenant-cohort SLOs:**
   - `docs/runbooks/slo-and-error-budgets.md`: published availability and
     freshness targets, error budgets, metric mapping, and cohort assignment
