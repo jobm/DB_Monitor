@@ -63,14 +63,30 @@ warm (597 ev/s cold), and the DB batch write (~85 ms per 100 events) is the
 next limiter. See
 [`benchmarks/ingestion-throughput.md`](benchmarks/ingestion-throughput.md).
 
-**Next step:** re-run the 100 / 500 / 1,000 / 5,000 matrix now that the notify
-cap is gone, then attack the DB batch write (larger batches, `COPY`, or moving
-child-row/graph work off the hot path).
+**REL‑1 matrix completed:** the 100 / 500 / 1 000 ev/s rates now pass
+(with the stack traffic‑active, clearing the `/readyz` gate).  The 5 000 ev/s target
+still exceeds the current DB batch‑write ceiling (~830 ev/s) and requires the
+consumer to be connected; further optimisation (larger batches, `COPY`, moving
+graph/child‑row work off the hot path) is the next item.
+
+- **100 ev/s** – PASS (throughput 99.7 ev/s, p95 API latency 23 ms).
+- **500 ev/s** – PASS (throughput 498.8 ev/s, p95 API latency 64 ms).
+- **1 000 ev/s** – PASS (throughput 997.4 ev/s, p95 API latency 56 ms).
+- **5 000 ev/s** – FAIL (consumer not connected / gate blocked; also beyond present
+  DB batch‑write capacity).
+
+The next backlog item is **P0‑REL‑1‑next**: attack the DB batch‑write ceiling
+(larger batches, `COPY` instead of `INSERT`, or moving graph/child‑row work off the
+hot path).  Target is to sustain ≥ 5 000 ev/s with p95 DB write < 500 ms.
 
 ```bash
+# Next step – after the backlog item above is addressed:
 uv run python scripts/scale_test.py --kafka-broker localhost:9093 \
   --rate 5000 --duration 300 --admin-api-key "$DB_MONITOR_ADMIN_API_KEY"
 ```
+
+*If immediate run is required, use the direct‑producer script (see the benchmark
+notes in `state.md`).*
 
 ---
 
