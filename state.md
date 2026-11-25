@@ -1,7 +1,7 @@
 # State — ingestion consumer throughput investigation
 
 Last updated: 2026-11-25
-Branch: `main` (46 commits ahead of `origin/main`, not pushed)
+Branch: `main` (49 commits ahead of `origin/main`, not pushed)
 
 ## TL;DR
 
@@ -15,7 +15,9 @@ working tree was clean at that point. Details below.
 Separately, the **ADR-007 runtime split is implemented and committed**
 (`0700ecd`): `SERVICE_ROLE` (`all`/`api`/`consumer`) selects which tasks a
 process starts, and Helm chart 0.2.0 deploys separate API and consumer
-workloads. `helm lint --strict`, ruff, mypy and all targeted tests are green.
+workloads. `helm lint --strict`, ruff, mypy and all targeted tests are green,
+and a Kind smoke test confirmed both roles become ready with the correct
+Service endpoints and readiness semantics.
 
 ## What was asked
 
@@ -120,9 +122,9 @@ KIND_EXPERIMENTAL_PROVIDER=podman ./kind create cluster --name dbm
 ```
 
 The chart and images are identical, so expected throughput is unchanged
-(~830–870 ev/s warm, ~597 ev/s cold). Run the cluster once to confirm chart
-0.2.0's API/consumer split schedules and scrapes correctly, then compare with
-the compose numbers.
+(~830–870 ev/s warm, ~597 ev/s cold). The split itself has now been validated
+in Kind (see the smoke test below); the remaining optional step is running the
+load generator inside Kind to compare throughput with the compose numbers.
 
 ## REL‑1 matrix results (post‑fix)
 
@@ -209,6 +211,46 @@ Verification (2026-11-25): `helm lint --strict` clean; default and
 because the running consumer is idle — the documented gotcha, not a
 regression); `ruff` and `mypy` clean.
 
+## Kind smoke test of chart 0.2.0 (2026-11-25)
+
+Ran a real single-node Kind cluster (`kind` v0.23.0,
+`KIND_EXPERIMENTAL_PROVIDER=podman`, `kindest/node:v1.30.0`) with in-cluster
+Postgres 15, ZooKeeper, and Kafka (Confluent 7.5.0), then installed chart
+0.2.0 from the working tree.
+
+| Check | Result |
+| --- | --- |
+| API Deployment | 1/1 Ready |
+| Consumer Deployment | 1/1 Ready |
+| `smoke-db-monitor-api` endpoint | API pod only |
+| `smoke-db-monitor-consumer` endpoint | consumer pod only |
+| API `/health` | healthy, `ready=true`, consumer `not_applicable` |
+| API `/readyz` | 200, consumer `not_applicable` |
+| Consumer `/health` | healthy, consumer `healthy` |
+| Consumer `/readyz` | 200, consumer `healthy` |
+| `/metrics` via both Services | 200, both expose `db_monitor_events_processed_total` |
+| API log | `SERVICE_ROLE=api: consumer tasks disabled`, no Kafka consumer |
+| Consumer log | subscribed to `['orderdb.public.orders']` |
+
+Setup notes:
+
+- Build the image from the tree, then load **one archive at a time**:
+  `podman save --format docker-archive -o pg.tar docker.io/library/postgres:15`
+  followed by `kind load image-archive pg.tar`. Passing several refs to one
+  `kind load docker-image` call under the podman provider tagged every image
+  with the same ID (all pointed at the app image).
+- Kafka pods need `enableServiceLinks: false` in this namespace: the `kafka`
+  Service otherwise injects `KAFKA_PORT`, which the Confluent entrypoint treats
+  as a deprecated setting and exits with code 1.
+- The install used `app.schemaMode=apply`, `api.replicaCount=1`,
+  `consumer.replicaCount=1`, and autoscaling disabled to fit the sandbox.
+- Cluster was deleted after the run to free memory. Recreate with
+  `KIND_EXPERIMENTAL_PROVIDER=podman ./kind create cluster --name dbm`.
+
+Two chart bugs were fixed as a result (commit `2171952`): the ServiceAccount
+the Deployments referenced was never templated, and the read-only root
+filesystem had no writable `/tmp` (Compose mounts a tmpfs there).
+
 ## Pending items
 
 1. **Next ceiling: the DB batch write.** Warm runs are limited by ~83–90 ms
@@ -242,13 +284,10 @@ regression); `ruff` and `mypy` clean.
 3. **Optional robustness**: make the backplane publish non-blocking (bounded
    queue) so a slow backplane cannot stall the consumer; consider skipping
    publish when there are no local clients and no peer replicas.
-4. **Validate chart 0.2.0 on a real cluster**: `kind` v0.23.0 is now in the
-   repo root and the podman provider works
-   (`KIND_EXPERIMENTAL_PROVIDER=podman ./kind ...`). Deploy the chart and
-   confirm both `<release>-db-monitor-api` and `-consumer` pods become ready,
-   the API Service routes clients, and Prometheus scrapes both Services.
-   This also replaces the "Kind not possible" limitation above.
-5. **Push decision**: 46 commits are local-only.
+4. **Kind smoke test — done (2026-11-25).** Chart 0.2.0 schedules both
+   roles with correct endpoints and readiness semantics; results above.
+   Optional follow-up: run the throughput benchmark inside Kind.
+5. **Push decision**: 49 commits are local-only.
 
 ## Environment / reproduction
 
