@@ -140,9 +140,12 @@ Connect a client to the live WebSocket feed to watch changes as they happen:
 You can launch the bundled terminal dashboard to browse tables, watch stream health, and explore diff details:
 
 ```bash
-cd tui
-uv run python main.py
+# From the repository root (this runs `uv run python app.py` inside tui/)
+make monitor-tui
 ```
+
+The login screen expects the FastAPI host (`http://localhost:8000`) and an API key
+in the `id.secret` form returned by `POST /auth/bootstrap`.
 
 ---
 
