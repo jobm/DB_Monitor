@@ -72,6 +72,10 @@ class RabbitMQConsumerAdapter:
         for message in messages:
             await message.ack_callback()
 
+    async def lag_snapshot(self) -> dict[tuple[str, int], int]:
+        """RabbitMQ does not expose consumer lag through this adapter."""
+        return {}
+
     def __aiter__(self):
         return self._iterate_messages()
 

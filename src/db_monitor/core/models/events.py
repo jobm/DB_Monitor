@@ -58,6 +58,11 @@ class KafkaEvent(Base):
     event_data = Column(JSONB, nullable=True)
     raw_payload = Column(Text, nullable=False)
     capture_time = Column(DateTime(timezone=True), server_default=func.now())
+    ingested_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
 
     __table_args__ = (
         Index("ix_events_type_time", "event_type", "event_time"),

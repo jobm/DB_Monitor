@@ -39,6 +39,9 @@ class MessageConsumerAdapter(Protocol):
     async def ack_batch(self, messages: list[BrokerMessage]) -> None:
         """Acknowledge one processed batch of broker messages."""
 
+    async def lag_snapshot(self) -> dict[tuple[str, int], int]:
+        """Return current lag per ``(destination, partition)`` if supported."""
+
     def __aiter__(self) -> Any:
         """Iterate consumed broker messages."""
 

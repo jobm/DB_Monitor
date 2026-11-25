@@ -33,6 +33,7 @@ from db_monitor.core.migrations.schema import (
     _apply_base_schema,
     _apply_bigint_kafka_offsets,
     _apply_event_ingestion_columns,
+    _apply_events_ingested_at,
     _apply_events_unique_constraint,
     _apply_legacy_event_backfill,
     _apply_row_identity_columns,
@@ -160,6 +161,14 @@ MIGRATIONS: tuple[Migration, ...] = (
             "equality queries)"
         ),
         apply=_apply_high_cardinality_indexes,
+    ),
+    Migration(
+        version="0019_events_ingested_at",
+        description=(
+            "Add ingested_at to events so ingestion latency is not derived "
+            "from capture_time, which mirrors event_time for dedupe"
+        ),
+        apply=_apply_events_ingested_at,
     ),
 )
 

@@ -1995,3 +1995,53 @@ def test_get_consumer_health_aggregates_multiple_cluster_runtimes() -> None:
     assert "secondary" in health["clusters"]
     assert health["clusters"]["secondary"]["last_error"] == "timeout"
 
+
+def test_refresh_runtime_lag_replaces_stale_partition_entries() -> None:
+    runtime: dict[str, object] = {
+        "lag_by_partition": {"default:orders:9": 1234},
+        "lag_total": 1234,
+    }
+
+    consumer_mod._refresh_runtime_lag(
+        runtime,
+        "default",
+        {("orders", 0): 40, ("orders", 1): 2},
+    )
+
+    assert runtime["lag_by_partition"] == {
+        "default:orders:0": 40,
+        "default:orders:1": 2,
+    }
+    assert runtime["lag_total"] == 42
+
+
+@pytest.mark.anyio
+async def test_kafka_lag_snapshot_reports_broker_side_lag() -> None:
+    from aiokafka import TopicPartition
+
+    from db_monitor.ingestion.brokers.kafka import KafkaConsumerAdapter
+
+    class FakeConsumer:
+        def assignment(self):
+            return [TopicPartition("orders", 0), TopicPartition("orders", 1)]
+
+        async def end_offsets(self, partitions):
+            return {
+                TopicPartition("orders", 0): 100,
+                TopicPartition("orders", 1): 50,
+            }
+
+        async def position(self, topic_partition):
+            return 90 if topic_partition.partition == 0 else 50
+
+    adapter = KafkaConsumerAdapter(
+        bootstrap_servers="localhost:9092",
+        consumer_group="group",
+        topics=["orders"],
+        topic_partitions=None,
+    )
+    adapter._consumer = FakeConsumer()
+
+    snapshot = await adapter.lag_snapshot()
+
+    assert snapshot == {("orders", 0): 10, ("orders", 1): 0}

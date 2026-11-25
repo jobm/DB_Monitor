@@ -422,6 +422,27 @@ async def _apply_row_identity_columns(
         await connection.execute(text(statement))
 
 
+async def _apply_events_ingested_at(
+    connection: AsyncConnection,
+    session_factory: Callable,
+) -> None:
+    """Record true ingestion time separately from the dedupe timestamp.
+
+    ``capture_time`` has to stay equal to the event timestamp because the
+    partitioned ``events`` unique constraint includes it; using it for latency
+    always produced zero. ``ingested_at`` is the real write time.
+    """
+    del session_factory
+    statements = [
+        (
+            "ALTER TABLE events ADD COLUMN IF NOT EXISTS "
+            "ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW()"
+        ),
+    ]
+    for statement in statements:
+        await connection.execute(text(statement))
+
+
 async def _apply_events_unique_constraint(
     connection: AsyncConnection,
     session_factory: Callable,

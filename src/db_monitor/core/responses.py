@@ -27,6 +27,7 @@ class EventItemResponse(BaseModel):
     event_type: str
     event_time: str | None
     capture_time: str | None = None
+    ingested_at: str | None = None
     user_id: str | None
     service_name: str | None
     operation: str | None

@@ -35,6 +35,7 @@ async def _insert_event_record(
                 if event_obj.event_time is not None
                 else now
             ),
+            ingested_at=now,
         )
         .on_conflict_do_nothing(
             index_elements=[

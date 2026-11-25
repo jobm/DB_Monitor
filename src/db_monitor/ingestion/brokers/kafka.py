@@ -58,6 +58,34 @@ class KafkaConsumerAdapter:
         if self._consumer is not None:
             await self._consumer.commit()
 
+    async def lag_snapshot(self) -> dict[tuple[str, int], int]:
+        """Return broker-side lag for every assigned partition.
+
+        The per-message ``highwater`` cache only reflects the fetch that
+        delivered that message, so summing it under-reports a deep backlog by
+        an order of magnitude.  Asking the broker for end offsets gives the
+        real current lag.
+        """
+        if self._consumer is None:
+            return {}
+        assignments = self._consumer.assignment()
+        if not assignments:
+            return {}
+        end_offsets = await self._consumer.end_offsets(assignments)
+        snapshot: dict[tuple[str, int], int] = {}
+        for topic_partition in assignments:
+            end_offset = end_offsets.get(topic_partition)
+            if end_offset is None:
+                continue
+            position = await self._consumer.position(topic_partition)
+            if position is None or position < 0:
+                continue
+            snapshot[(topic_partition.topic, topic_partition.partition)] = max(
+                end_offset - position,
+                0,
+            )
+        return snapshot
+
     def __aiter__(self):
         return self._iterate_messages()
 

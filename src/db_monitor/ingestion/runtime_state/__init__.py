@@ -16,6 +16,7 @@ from db_monitor.ingestion.runtime_state.metrics import (
     get_consumer_health,
     _record_committed_offsets,
     _record_successful_commit,
+    _refresh_runtime_lag,
     _update_runtime_lag,
 )
 from db_monitor.ingestion.runtime_state.state import (
@@ -41,6 +42,7 @@ __all__ = [
     "_new_consumer_runtime_state",
     "_record_committed_offsets",
     "_record_successful_commit",
+    "_refresh_runtime_lag",
     "_timestamp_to_age_seconds",
     "_update_runtime_lag",
     "_utc_now_iso",

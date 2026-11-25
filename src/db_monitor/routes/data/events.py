@@ -186,6 +186,11 @@ async def get_events(
                     if event.capture_time
                     else None
                 ),
+                "ingested_at": (
+                    event.ingested_at.isoformat()
+                    if event.ingested_at
+                    else None
+                ),
                 "user_id": event.user_id,
                 "service_name": event.service_name,
                 "operation": event.operation,

@@ -28,32 +28,49 @@ def _update_runtime_lag(
     offset: int,
     lag_value: int | None,
 ) -> None:
-    """Update current lag snapshots for readiness and metrics."""
+    """Record the position of the message just consumed.
+
+    The broker-side lag is refreshed separately (``_refresh_runtime_lag``);
+    the per-message value is only a stale fetch-time estimate and is used
+    purely to keep the highwater watermark for commit-lag metrics.
+    """
     if lag_value is None:
         return
 
     lag_key = f"{cluster_name}:{destination}:{partition}"
-    lag_by_partition = dict(
-        cast(dict[str, int], runtime.get("lag_by_partition") or {})
-    )
-    lag_by_partition[lag_key] = lag_value
-    runtime["lag_by_partition"] = lag_by_partition
+    # Only track the shared highwater watermark here. Lag is refreshed from
+    # broker end offsets: per-message values come from a cached fetch response
+    # and under-report how far behind the consumer really is.
     highwater_by_partition = dict(
         cast(dict[str, int], runtime.get("highwater_by_partition") or {})
     )
     highwater_by_partition[lag_key] = offset + lag_value + 1
     runtime["highwater_by_partition"] = highwater_by_partition
-    runtime["lag_total"] = sum(lag_by_partition.values())
-    consumer_lag.labels(
-        cluster=cluster_name,
-        topic=destination,
-        partition=str(partition),
-    ).set(lag_value)
     consumer_current_offset.labels(
         cluster=cluster_name,
         topic=destination,
         partition=str(partition),
     ).set(offset)
+
+
+def _refresh_runtime_lag(
+    runtime: dict[str, object],
+    cluster_name: str,
+    snapshot: dict[tuple[str, int], int],
+) -> None:
+    """Replace cached lag with a broker-side snapshot for assigned partitions."""
+    lag_by_partition = {
+        f"{cluster_name}:{destination}:{partition}": lag
+        for (destination, partition), lag in snapshot.items()
+    }
+    runtime["lag_by_partition"] = lag_by_partition
+    runtime["lag_total"] = sum(lag_by_partition.values())
+    for (destination, partition), lag in snapshot.items():
+        consumer_lag.labels(
+            cluster=cluster_name,
+            topic=destination,
+            partition=str(partition),
+        ).set(lag)
 
 
 def _record_committed_offsets(

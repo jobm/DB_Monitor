@@ -152,6 +152,7 @@ async def _store_batch_graph_with_retries(
                                     is not None
                                     else now
                                 ),
+                                "ingested_at": now,
                             }
                             for event_obj in events
                         ]

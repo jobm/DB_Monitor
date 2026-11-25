@@ -17,6 +17,7 @@ from db_monitor.ingestion.runtime_state import (
     CircuitBreaker,
     _get_circuit_breaker,
     _get_consumer_runtime,
+    _refresh_runtime_lag,
     cluster_circuit_breakers,
     consumer_runtime,
     consumer_runtimes,
@@ -48,6 +49,7 @@ __all__ = [
 RECONNECT_INITIAL_DELAY_SECONDS = 1.0
 RECONNECT_MAX_DELAY_SECONDS = 60.0
 RECONNECT_RESET_AFTER_SECONDS = 60.0
+LAG_REFRESH_INTERVAL_SECONDS = 5.0
 
 
 def get_consumer_health() -> dict[str, object]:
@@ -64,6 +66,28 @@ def _reconnect_delay(attempt: int) -> float:
             RECONNECT_MAX_DELAY_SECONDS,
         )
     )
+
+
+async def _refresh_consumer_lag(
+    consumer: object,
+    runtime: dict[str, object],
+    cluster_name: str,
+) -> None:
+    """Refresh broker-side lag on a fixed interval."""
+    lag_snapshot = getattr(consumer, "lag_snapshot", None)
+    if lag_snapshot is None:
+        return
+    while True:
+        try:
+            snapshot = await lag_snapshot()
+            _refresh_runtime_lag(runtime, cluster_name, snapshot)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Lag refresh failed for cluster %s: %s", cluster_name, exc
+            )
+        await asyncio.sleep(LAG_REFRESH_INTERVAL_SECONDS)
 
 
 async def consumer_task(
@@ -140,19 +164,27 @@ async def consumer_task(
                 )
                 await _start_dlq_publisher(dlq_publisher)
 
-            await _message_loop(
-                consumer,  # type: ignore[arg-type]
-                cluster_name=cluster_name,
-                broker_kind=broker_kind,
-                consumer_group=consumer_group,
-                dlq_publisher=dlq_publisher,
-                dlq_destination=dlq_destination,
-                enable_dlq=enable_dlq,
-                enable_batch=enable_batch,
-                batch_size=batch_size,
-                runtime=runtime,
-                breaker=breaker,
+            lag_task = asyncio.create_task(
+                _refresh_consumer_lag(consumer, runtime, cluster_name),
+                name=f"consumer-lag-refresh-{cluster_name}",
             )
+            try:
+                await _message_loop(
+                    consumer,  # type: ignore[arg-type]
+                    cluster_name=cluster_name,
+                    broker_kind=broker_kind,
+                    consumer_group=consumer_group,
+                    dlq_publisher=dlq_publisher,
+                    dlq_destination=dlq_destination,
+                    enable_dlq=enable_dlq,
+                    enable_batch=enable_batch,
+                    batch_size=batch_size,
+                    runtime=runtime,
+                    breaker=breaker,
+                )
+            finally:
+                lag_task.cancel()
+                await asyncio.gather(lag_task, return_exceptions=True)
             runtime["running"] = False
             runtime["connected"] = False
             runtime["reconnecting"] = False
