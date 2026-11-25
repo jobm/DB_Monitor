@@ -74,6 +74,42 @@ jobs:
             docker.io/prom/prometheus:v2.53.0 \
             check config /etc/prometheus/prometheus.yml
 
+  helm:
+    name: Helm chart lint and render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.21.1
+
+      - name: Lint chart
+        run: helm lint --strict deploy/helm/db-monitor
+
+      - name: Render with default values
+        run: |
+          helm template db-monitor deploy/helm/db-monitor \
+            > "$RUNNER_TEMP/rendered-default.yaml"
+
+      - name: Render with optional manifests enabled
+        run: |
+          helm template db-monitor deploy/helm/db-monitor \
+            --set networkPolicy.enabled=true \
+            --set monitoring.serviceMonitor.enabled=true \
+            --set kafka.topicPartitionCount=6 \
+            --set 'kafka.topicNames[0]=orderdb.public.orders' \
+            > "$RUNNER_TEMP/rendered-full.yaml"
+
+      - name: Check optional manifests rendered
+        run: |
+          for kind in NetworkPolicy ServiceMonitor Job; do
+            grep -q "^kind: ${kind}$" "$RUNNER_TEMP/rendered-full.yaml" \
+              || { echo "::error::${kind} missing from rendered chart"; exit 1; }
+          done
+
   test-core:
     name: Core tests
     runs-on: ubuntu-latest
