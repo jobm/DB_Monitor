@@ -336,10 +336,12 @@ async def _publish_synthetic_events(
         )
         return
 
+    # No compression: gzip on one message at a time dominated the generator's
+    # CPU budget and capped publishing far below the target rate.
     producer = AIOKafkaProducer(
         bootstrap_servers=config.kafka_broker,
         value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-        compression_type="gzip",
+        compression_type=None,
         linger_ms=5,
     )
     await producer.start()
@@ -349,28 +351,34 @@ async def _publish_synthetic_events(
             f"  Publishing to Kafka broker {config.kafka_broker} topic {topic}"
         )
         batch: list[dict] = []
-        interval = 1.0 / max(config.rate, 1)
+        batch_size = max(config.batch_size, 1)
+        # Pace whole batches instead of sleeping after every event: the old
+        # per-event sleep capped the generator around 460 ev/s, so targets
+        # above that were never actually exercised.
+        batch_interval = batch_size / max(config.rate, 1)
+        next_batch_at = time.monotonic()
 
         while time.monotonic() < end_time:
-            ts_ms = int(time.time() * 1000)
-            service = service_name
-            table = random.choice(_TABLES.get(service, ["default"]))
-            op = random.choice(_OPERATIONS)
+            for _ in range(batch_size):
+                ts_ms = int(time.time() * 1000)
+                service = service_name
+                table = random.choice(_TABLES.get(service, ["default"]))
+                op = random.choice(_OPERATIONS)
 
-            payload = _make_debezium_payload(service, table, op, ts_ms)
-            batch.append(payload)
-            results.events_generated += 1
+                batch.append(_make_debezium_payload(service, table, op, ts_ms))
+                results.events_generated += 1
 
-            if len(batch) >= config.batch_size:
-                for p in batch:
-                    await producer.send(topic, p)
-                batch.clear()
+            for p in batch:
+                await producer.send(topic, p)
+            batch.clear()
 
-            await asyncio.sleep(interval)
+            # Absolute deadlines: sleeping a fixed interval after the work
+            # made the generator drift below the requested rate.
+            next_batch_at += batch_interval
+            delay = next_batch_at - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
 
-        # Flush remaining
-        for p in batch:
-            await producer.send(topic, p)
         await producer.flush()
 
         print(f"  Published {results.events_generated} events to Kafka")
@@ -483,8 +491,10 @@ async def run_scale_test(config: ScaleTestConfig) -> ScaleTestResults:
         ]
         while time.monotonic() < end_time:
             for ep in endpoints:
-                lat, _ = _make_request(
-                    f"{config.api_base}{ep}", token, 5
+                # Blocking urllib must not run on the event loop: it stalled
+                # the load generator and capped publishing well below target.
+                lat, _ = await asyncio.to_thread(
+                    _make_request, f"{config.api_base}{ep}", token, 5
                 )
                 results.api_latencies.append(lat)
             await asyncio.sleep(1.0)
@@ -495,8 +505,8 @@ async def run_scale_test(config: ScaleTestConfig) -> ScaleTestResults:
     async def sample_lag():
         while time.monotonic() < end_time:
             try:
-                _, health = _make_request(
-                    f"{config.api_base}/health", token, 5
+                _, health = await asyncio.to_thread(
+                    _make_request, f"{config.api_base}/health", token, 5
                 )
                 if isinstance(health, dict):
                     consumer = health.get("consumer", {})
