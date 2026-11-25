@@ -1,7 +1,7 @@
 # State — ingestion consumer throughput investigation
 
 Last updated: 2026-11-25
-Branch: `main` (44 commits ahead of `origin/main`, not pushed)
+Branch: `main` (46 commits ahead of `origin/main`, not pushed)
 
 ## TL;DR
 
@@ -10,7 +10,12 @@ The ingestion consumer was capped at ~190–300 ev/s by a **per-event
 to one per batch: measured drain rate went from **~290 ev/s to ~830–870 ev/s
 on a warm stack** (597 ev/s on a just-restarted, cold-cache stack; 1,005 ev/s
 in the first session run). Code + tests are **committed** as `f34cea7`;
-working tree is clean. Details below.
+working tree was clean at that point. Details below.
+
+Separately, the **ADR-007 runtime split is implemented and committed**
+(`0700ecd`): `SERVICE_ROLE` (`all`/`api`/`consumer`) selects which tasks a
+process starts, and Helm chart 0.2.0 deploys separate API and consumer
+workloads. `helm lint --strict`, ruff, mypy and all targeted tests are green.
 
 ## What was asked
 
@@ -18,6 +23,7 @@ working tree is clean. Details below.
 2. Commit the tombstone fix, scale-test generator fixes and benchmark results. — done (`6108991`, `6678af0`, `b6847fa`)
 3. Resume, rerun the live benchmark, and write findings/pending work into
    this file. — done (rerun table below)
+4. Implement ADR-007's API/consumer runtime and Helm split. — done (`0700ecd`)
 
 ## Root cause (measured, not inferred)
 
@@ -103,16 +109,20 @@ checkpoints ~5 ms + notify ~3 ms ≈ 95 ms per 100 events → the observed
 ~850–1,000 ev/s. The backplane no longer appears in the budget as a
 per-event cost.
 
-## Benchmark in Kind (attempted)
+## Benchmark in Kind (not yet run)
 
-A local Kind cluster could not be started in this sandbox environment (no
-root access for `kind`/`docker`).  The same Helm chart and Docker images
-that run under `podman‑compose` were used for the numbers above; a Kind
-cluster would deploy the identical containers, so the expected ev/s figures
-are the same (~830–870 ev/s warm, ~597 ev/s cold).  If you have a machine
-with `sudo`/root you can follow the Kind‑cluster recipe (install `kind`,
-  load the images, deploy the chart, run `scripts/scale_test.py`) to generate
-real numbers and compare them side‑by‑side with the compose results.
+The numbers above come from the `podman-compose` stack. A Kind cluster was
+previously reported as impossible (no root for `kind`/`docker`), but `kind`
+v0.23.0 is now in the repo root and its podman provider works:
+
+```bash
+KIND_EXPERIMENTAL_PROVIDER=podman ./kind create cluster --name dbm
+```
+
+The chart and images are identical, so expected throughput is unchanged
+(~830–870 ev/s warm, ~597 ev/s cold). Run the cluster once to confirm chart
+0.2.0's API/consumer split schedules and scrapes correctly, then compare with
+the compose numbers.
 
 ## REL‑1 matrix results (post‑fix)
 
@@ -166,6 +176,39 @@ comparable warm‑steady‑state ev/s (≈ 830‑870 ev/s) once the stack is
 *(If you have a machine with `sudo`/root you can follow the Kind‑cluster recipe
 in the earlier message to generate a real Kind comparison.)*
 
+## ADR-007 workload split (committed `0700ecd`)
+
+One image, two roles. `SERVICE_ROLE` is parsed, lowercased and validated at
+startup (`core/config/dataclasses/{core,factory,validation}.py`); the default
+`all` preserves single-process behaviour, so the Compose sandbox is unchanged.
+
+| Role | Starts | Does not start |
+| --- | --- | --- |
+| `api` | audit-log writer, WebSocket backplane listener, schema-cache listener | broker consumers, retention, partition maintenance |
+| `consumer` | broker consumers, retention, partition maintenance, schema-cache listener | audit-log writer, WebSocket backplane listener |
+| `all` | everything (previous behaviour) | — |
+
+`/health` and `/readyz` now report the consumer check as `not_applicable` on
+API pods. Without that, every API replica would stay permanently unready on an
+idle broker (`last_commit_age_seconds` grows with no traffic).
+
+Helm chart 0.2.0 renders `<release>-db-monitor-api` and
+`<release>-db-monitor-consumer` Deployments. Each has its own Service, HPA,
+PDB, NetworkPolicy and ServiceMonitor; only the consumer mounts the retention
+archive PVC and gets broker egress. Client traffic should target the `api`
+Service; the consumer Service exists for Prometheus scraping.
+
+**Breaking values change:** `replicaCount`, `resources`, `autoscaling` and
+`podDisruptionBudget` moved under `api:` and `consumer:`. Old override files
+still render, but the top-level values are ignored.
+
+Verification (2026-11-25): `helm lint --strict` clean; default and
+`networkPolicy`/`serviceMonitor`/archive renders inspected; `uv run pytest`
+→ 366 passed, 10 skipped, 1 failed
+(`tests/test_sandbox_stack.py` hits the live stack's `/readyz`, which is 503
+because the running consumer is idle — the documented gotcha, not a
+regression); `ruff` and `mypy` clean.
+
 ## Pending items
 
 1. **Next ceiling: the DB batch write.** Warm runs are limited by ~83–90 ms
@@ -199,7 +242,13 @@ in the earlier message to generate a real Kind comparison.)*
 3. **Optional robustness**: make the backplane publish non-blocking (bounded
    queue) so a slow backplane cannot stall the consumer; consider skipping
    publish when there are no local clients and no peer replicas.
-4. **Push decision**: 44 commits are local-only.
+4. **Validate chart 0.2.0 on a real cluster**: `kind` v0.23.0 is now in the
+   repo root and the podman provider works
+   (`KIND_EXPERIMENTAL_PROVIDER=podman ./kind ...`). Deploy the chart and
+   confirm both `<release>-db-monitor-api` and `-consumer` pods become ready,
+   the API Service routes clients, and Prometheus scrapes both Services.
+   This also replaces the "Kind not possible" limitation above.
+5. **Push decision**: 46 commits are local-only.
 
 ## Environment / reproduction
 
@@ -231,9 +280,15 @@ in the earlier message to generate a real Kind comparison.)*
 
 ## Gotchas
 
+- `SERVICE_ROLE` defaults to `all`; the Compose sandbox is therefore unchanged
+  by the ADR-007 split. Helm sets it per Deployment (`api` / `consumer`).
+- Chart 0.2.0 moved `replicaCount`, `resources`, `autoscaling` and
+  `podDisruptionBudget` under `api:`/`consumer:`. Top-level overrides from
+  older value files are silently ignored.
 - `/readyz` is `not_ready` on an idle stack (`last_commit_age_seconds` exceeds
   threshold with zero traffic). That is why direct producer injection is used
-  instead of `scale_test.py`.
+  instead of `scale_test.py`. On API-only pods the consumer check is
+  `not_applicable`, so this does not apply there.
 - Benchmark numbers depend on Postgres cache warmth. Always discard the first
   run after a stack restart or use it only as a cold-cache figure; compare
   warm runs (2nd onward).
