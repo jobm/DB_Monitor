@@ -30,8 +30,10 @@ listed here, it is not planned; if it is listed here, it is not done.
   48/48 retrieval queries at rank 1 (`make monitor-check-context`).
 - All seven OS-release gaps have code in place. The remaining open item is the
   throughput benchmark (REL-1).
-- Recorded throughput is 382–573 events/sec against a 500–5,000 target, with
-  single-partition topics documented as the bottleneck.
+- Recorded throughput is 382–573 events/sec against a 500–5,000 target. A
+  six-partition run reached 190 ev/s; profiling traced that to a per-event
+  `pg_notify` round trip, now coalesced per batch, giving ~830–870 ev/s warm
+  (~3x). The DB batch write is the next limiter.
 
 ---
 
@@ -49,13 +51,21 @@ write latency < 500 ms, results committed under `docs/benchmarks/`.
 
 **Multi-partition re-run (2026-11-24):** six partitions on
 `orderdb.public.orders` received the load evenly and the fixed load generator
-published at 4,982 ev/s, but the consumer sustained only 190 ev/s. DB batch
-writes accounted for ~96 ms per 100-event batch, so the ceiling is per-event
-work in the consumer loop, not partitioning. Raw result:
+published at 4,982 ev/s, but the consumer sustained only 190 ev/s. Raw result:
 [`benchmarks/results-5000-multipartition.json`](benchmarks/results-5000-multipartition.json).
 
-**Next step:** profile the per-event path (`parse_event_payload`, pipeline
-transform, span/metric bookkeeping) before re-running the matrix.
+**Profiling result (2026-11-25):** the ceiling was not per-event Python work —
+parse, transform, metrics and spans cost ~0.065 ms per event. `_process_batch`
+published one `pg_notify` per inserted event via the WebSocket backplane
+(~3.3 ms each, ~300 ev/s), even with no clients connected. Notifications are
+now coalesced per batch; the same six-partition setup drains at ~830–870 ev/s
+warm (597 ev/s cold), and the DB batch write (~85 ms per 100 events) is the
+next limiter. See
+[`benchmarks/ingestion-throughput.md`](benchmarks/ingestion-throughput.md).
+
+**Next step:** re-run the 100 / 500 / 1,000 / 5,000 matrix now that the notify
+cap is gone, then attack the DB batch write (larger batches, `COPY`, or moving
+child-row/graph work off the hot path).
 
 ```bash
 uv run python scripts/scale_test.py --kafka-broker localhost:9093 \

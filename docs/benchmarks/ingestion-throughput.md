@@ -127,9 +127,46 @@ sampling requests in a worker thread, and publishes uncompressed.
 | DLQ events | 0 |
 | DB batch write duration | 95.7 ms mean per 100-event batch |
 
-**Verdict: FAIL.** Partitioning is not the binding constraint. The batch write
-on its own would support roughly 1,000 ev/s; the remaining time per batch is
-per-event Python work in the consumer loop.
+**Verdict: FAIL at the time of the run.** Partitioning is not the binding
+constraint, but the original explanation was wrong. Profiling on 2026-11-25
+showed per-event Python work was not the ceiling: parsing, `KafkaEvent()`
+construction, transform, metrics and span work together cost ~0.065 ms per
+event (~15,000 ev/s of headroom). The cap was a `SELECT pg_notify(...)` round
+trip per inserted event from the WebSocket backplane (`WS_BACKPLANE_ENABLED`
+defaults to true), costing ~3.3 ms per event (~300 ev/s) even with no clients
+connected. Treat the p95 API latency above as load-generator entrained rather
+than consumer-caused.
+
+### Measurement bugs found by this run (fixed)
+
+- `/health` reported ~15k lag against a 274k broker backlog. Lag was derived
+  from the per-message `highwater` cache, which only reflects the fetch that
+  delivered that message. It now comes from a broker `end_offsets` snapshot per
+  assigned partition, refreshed every 5 s, so `/readyz` reflects the real
+  backlog.
+- Ingestion latency always read ~0 ms because storage keeps `capture_time`
+  equal to `event_time` (the partitioned unique constraint uses it for dedupe).
+  Migration `0019_events_ingested_at` adds a real `ingested_at` write timestamp;
+  latency is now `ingested_at - event_time`, exposed by `GET /events`.
+
+### Post-fix throughput (2026-11-25)
+
+The consumer now publishes one backplane notification per batch instead of one
+per event (`ws_manager.publish_event_notifications`), with the listener fanning
+out each event id. Same stack, same payload shape, 20,000 published events per
+run, metrics sampled once per second:
+
+| Run | Conditions | Mean drain | DB batch write | Kafka commit |
+|---|---|---|---|---|
+| 1 | Long-running stack | ~1,005 ev/s | 65–81 ms | ~2 ms |
+| 2 | Cold, just restarted | 597 ev/s | 140.6 ms | 3–11 ms |
+| 3 | Warm | 830 ev/s | 89.6 ms | 2.3 ms |
+| 4 | Warm | 868 ev/s | 83.0 ms | — |
+
+Warm steady state is ~830–870 ev/s, roughly 3x the 290 ev/s pre-fix drain and
+4.5x the 190 ev/s recorded above. The limiter is now the DB batch write
+(~85 ms per 100 events) plus commit; the backplane no longer costs anything
+per event. Cold-cache runs immediately after a restart are not comparable.
 
 ### Raw Data
 
