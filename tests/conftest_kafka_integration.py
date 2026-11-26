@@ -120,6 +120,23 @@ async def wait_for_topic(
     """
     from aiokafka import AIOKafkaConsumer
 
+    # Ensure the topic exists (auto-creation may be disabled on the broker).
+    try:
+        from aiokafka.admin import AIOKafkaAdminClient, NewTopic
+
+        admin = AIOKafkaAdminClient(bootstrap_servers=bootstrap_servers)
+        await admin.start()
+        try:
+            await admin.create_topics(
+                [NewTopic(name=topic, num_partitions=1, replication_factor=1)]
+            )
+        except Exception:
+            pass
+        finally:
+            await admin.stop()
+    except Exception:
+        pass
+
     deadline = asyncio.get_event_loop().time() + timeout
     while True:
         consumer = AIOKafkaConsumer(
