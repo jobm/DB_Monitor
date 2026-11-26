@@ -110,7 +110,7 @@ async def wait_for_topic(
     bootstrap_servers: str,
     topic: str,
     *,
-    timeout: float = 30.0,
+    timeout: float = 90.0,
     interval: float = 0.25,
 ) -> None:
     """Wait until *topic* is visible in the cluster metadata.
