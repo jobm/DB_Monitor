@@ -340,7 +340,7 @@ async def test_consumer_adapter_partition_assignment(
 
     topic = "test-partition-assignment"
     # 3 partitions
-    await wait_for_topic(kafka_bootstrap_servers, topic)
+    await wait_for_topic(kafka_bootstrap_servers, topic, partitions=3)
 
     # Produce messages to partitions 0, 1, and 2
     # We'll use a raw aiokafka producer with a custom partitioner
@@ -411,7 +411,7 @@ async def test_batch_processing_acks_partition_group(
 
     topic = "test-batch-partitions"
 
-    await wait_for_topic(kafka_bootstrap_servers, topic)
+    await wait_for_topic(kafka_bootstrap_servers, topic, partitions=3)
 
     # Produce 4 messages across 2 partitions
     from aiokafka import AIOKafkaProducer

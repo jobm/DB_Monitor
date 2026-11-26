@@ -112,6 +112,7 @@ async def wait_for_topic(
     *,
     timeout: float = 90.0,
     interval: float = 0.25,
+    partitions: int = 1,
 ) -> None:
     """Wait until *topic* is visible in the cluster metadata.
 
@@ -128,7 +129,7 @@ async def wait_for_topic(
         await admin.start()
         try:
             await admin.create_topics(
-                [NewTopic(name=topic, num_partitions=3, replication_factor=1)]
+                [NewTopic(name=topic, num_partitions=partitions, replication_factor=1)]
             )
         except Exception:
             pass
