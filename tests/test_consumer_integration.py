@@ -318,10 +318,10 @@ async def test_dlq_publisher_multiple_messages(kafka_bootstrap_servers: str) -> 
             decoded = json.loads(msg_value.decode("utf-8"))
             assert decoded["seq"] == idx, f"Message {idx} seq mismatch"
             header_dict = {k: v for k, v in msg_headers}
-            assert header_dict.get(b"dlq-record-id") == str(idx + 10).encode(), (
+            assert header_dict.get("dlq-record-id") == str(idx + 10).encode(), (
                 f"Message {idx} dlq-record-id mismatch"
             )
-            assert header_dict.get(b"source-offset") == str(idx).encode(), (
+            assert header_dict.get("source-offset") == str(idx).encode(), (
                 f"Message {idx} source-offset mismatch"
             )
     finally:

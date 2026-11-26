@@ -128,7 +128,7 @@ async def wait_for_topic(
         await admin.start()
         try:
             await admin.create_topics(
-                [NewTopic(name=topic, num_partitions=1, replication_factor=1)]
+                [NewTopic(name=topic, num_partitions=3, replication_factor=1)]
             )
         except Exception:
             pass
