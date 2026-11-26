@@ -37,6 +37,8 @@ make monitor-up-sandbox
 ```
 
 See [Quick Start (with example stack)](#quick-start-using-the-local-example-stack) for the full sandbox flow.
+See [USAGE.md](USAGE.md) for the full make-target reference (Compose vs. Kind,
+TUI, seeding, API keys, diagnostics).
 
 ---
 

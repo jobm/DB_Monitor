@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -58,14 +59,14 @@ def main() -> int:
     )
     parser.add_argument(
         "--owner-name",
-        default="ci-smoke",
-        help="Owner name recorded for the generated key.",
+        default=os.environ.get("OWNER_NAME", "ci-smoke"),
+        help="Owner name recorded for the generated key (env: OWNER_NAME).",
     )
     parser.add_argument(
         "--ttl-days",
         type=int,
-        default=1,
-        help="Expiration window for the generated key.",
+        default=int(os.environ.get("TTL_DAYS", "1")),
+        help="Expiration window for the generated key (env: TTL_DAYS).",
     )
     args = parser.parse_args()
 

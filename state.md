@@ -328,6 +328,22 @@ filesystem had no writable `/tmp` (Compose mounts a tmpfs there).
 
 ## Gotchas
 
+- Local TUI access in Kind: run `make monitor-port-forward` (foreground,
+  Ctrl-C to stop) or `make monitor-port-forward-stop` to clear forwards. The
+  script (`scripts/kind_port_forward.sh`) supervises both forwards and
+  restarts them whenever the pod/connection blips, so `localhost:8000`
+  (API) and `localhost:8001` (consumer) stay reachable.
+- The snap `kubectl` (`/snap/bin/kubectl`) hangs ~12 s and exits 46 when
+  snapd is down. The helper prefers a real binary (`$HOME/kubectl`,
+  `/usr/local/bin/kubectl`, ...) and skips `/snap/*`; set `KUBECTL=` to
+  override. Per-forward logs go to `/tmp/db-monitor-port-forward/`.
+- Partial consumer batches now flush after 5 idle seconds
+  (`BATCH_FLUSH_TIMEOUT_SECONDS` in `consumer/loop.py`). Previously a burst
+  smaller than `BATCH_SIZE` (100) on a quiet topic sat in memory until the
+  next message arrived, which made a fresh Kind stack look empty.
+- Demo data for the TUI: `make monitor-seed-kind` publishes synthetic
+  Debezium events through the consumer pod; pass `SEED_BASE=100` for a second
+  collision-free batch (`scripts/seed_kind_events.py`).
 - `SERVICE_ROLE` defaults to `all`; the Compose sandbox is therefore unchanged
   by the ADR-007 split. Helm sets it per Deployment (`api` / `consumer`).
 - Chart 0.2.0 moved `replicaCount`, `resources`, `autoscaling` and

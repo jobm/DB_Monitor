@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 from db_monitor.core.config import settings
@@ -34,6 +35,10 @@ logger = logging.getLogger(__name__)
 
 AnyConsumer = object  # Union of KafkaConsumerAdapter | RabbitMQConsumerAdapter
 
+# Flush a partial batch after this many idle seconds. Without an idle flush a
+# burst smaller than ``batch_size`` on a quiet topic never reaches the DB.
+BATCH_FLUSH_TIMEOUT_SECONDS = 5.0
+
 
 async def _message_loop(
     consumer: AnyConsumer,
@@ -51,115 +56,147 @@ async def _message_loop(
 ) -> None:
     """Process messages from the consumer in a loop with batching support."""
     batch: list[tuple[KafkaEvent, str, BrokerMessage]] = []
-    batch_timeout = 5.0
+    batch_timeout = BATCH_FLUSH_TIMEOUT_SECONDS
     last_batch_time: float = 0.0
 
-    async for msg in consumer:  # type: ignore[union-attr,type-var,attr-defined]
-        if not breaker.can_execute():
-            logger.warning(
-                "Circuit breaker open for cluster '%s', skipping message processing",
-                cluster_name,
-            )
-            await asyncio.sleep(1.0)
-            continue
+    # Pump the (potentially blocking) adapter iterator into a queue so the
+    # batch loop can wake up on a timeout.  Reading the adapter directly means
+    # a partial batch only flushes when the next message arrives, which
+    # strands quiet-topic bursts smaller than `batch_size` in memory forever.
+    message_queue: asyncio.Queue[BrokerMessage | None] = asyncio.Queue(
+        maxsize=max(batch_size, 1) * 2
+    )
+    pump_error: BaseException | None = None
 
-        current_event: KafkaEvent | None = None
+    async def _pump_messages() -> None:
+        nonlocal pump_error
         try:
-            if msg.value is None:
-                # Debezium emits tombstones (null values) after delete events;
-                # the delete itself already arrived as a payload with op="d".
+            async for incoming in consumer:  # type: ignore[attr-defined]
+                await message_queue.put(incoming)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - re-raised by caller
+            pump_error = exc
+        finally:
+            await message_queue.put(None)
+
+    pump_task = asyncio.create_task(_pump_messages())
+
+    try:
+        while True:
+            timeout: float | None = None
+            if batch:
+                elapsed = (
+                    asyncio.get_event_loop().time() - last_batch_time
+                )
+                timeout = max(0.0, batch_timeout - elapsed)
+
+            try:
+                msg = await asyncio.wait_for(
+                    message_queue.get(),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                batch_processed = await _process_batch(
+                    batch,
+                    consumer.ack_batch,  # type: ignore[union-attr,attr-defined]
+                    dlq_publisher,
+                    dlq_destination,
+                    enable_dlq,
+                    runtime,
+                    cluster_name,
+                    consumer_group,
+                    broker_kind,
+                )
+                if not batch_processed:
+                    raise ConsumerStopRequested(
+                        "Batch timeout flush aborted before ack."
+                    )
+                batch = []
+                continue
+
+            if msg is None:
+                break
+
+            if not breaker.can_execute():
+                logger.warning(
+                    "Circuit breaker open for cluster '%s', skipping message processing",
+                    cluster_name,
+                )
+                await asyncio.sleep(1.0)
+                continue
+
+            current_event: KafkaEvent | None = None
+            try:
+                if msg.value is None:
+                    # Debezium emits tombstones (null values) after delete events;
+                    # the delete itself already arrived as a payload with op="d".
+                    logger.debug(
+                        "Skipping tombstone destination=%s partition=%d offset=%d",
+                        msg.destination,
+                        msg.partition,
+                        msg.offset,
+                    )
+                    await msg.ack_callback()
+                    runtime["last_message_at"] = _utc_now_iso()
+                    continue
+
+                data = msg.value.decode("utf-8")
                 logger.debug(
-                    "Skipping tombstone destination=%s partition=%d offset=%d",
+                    "Received message destination=%s partition=%d offset=%d",
                     msg.destination,
                     msg.partition,
                     msg.offset,
                 )
-                await msg.ack_callback()
+
+                parsed = parse_event_payload(data)
+                operation = extract_operation(parsed.event_data or {})
                 runtime["last_message_at"] = _utc_now_iso()
-                continue
-
-            data = msg.value.decode("utf-8")
-            logger.debug(
-                "Received message destination=%s partition=%d offset=%d",
-                msg.destination,
-                msg.partition,
-                msg.offset,
-            )
-
-            parsed = parse_event_payload(data)
-            operation = extract_operation(parsed.event_data or {})
-            runtime["last_message_at"] = _utc_now_iso()
-            _update_runtime_lag(
-                runtime,
-                cluster_name,
-                msg.destination,
-                msg.partition,
-                msg.offset,
-                msg.lag,
-            )
-
-            event = KafkaEvent(
-                event_type=parsed.event_type,
-                event_time=parsed.event_time,
-                user_id=parsed.user_id,
-                service_name=_get_canonical_service_name(
+                _update_runtime_lag(
+                    runtime,
+                    cluster_name,
                     msg.destination,
-                    parsed.service_name,
-                ),
-                kafka_topic=msg.destination,
-                kafka_partition=msg.partition,
-                kafka_offset=msg.offset,
-                event_data=parsed.event_data,
-                raw_payload=parsed.raw_payload,
-                operation=operation,
-            )
-            current_event = event
+                    msg.partition,
+                    msg.offset,
+                    msg.lag,
+                )
 
-            events_consumed_total.labels(
-                service=event.service_name or "unknown",
-                operation=event.operation or "unknown",
-            ).inc()
+                event = KafkaEvent(
+                    event_type=parsed.event_type,
+                    event_time=parsed.event_time,
+                    user_id=parsed.user_id,
+                    service_name=_get_canonical_service_name(
+                        msg.destination,
+                        parsed.service_name,
+                    ),
+                    kafka_topic=msg.destination,
+                    kafka_partition=msg.partition,
+                    kafka_offset=msg.offset,
+                    event_data=parsed.event_data,
+                    raw_payload=parsed.raw_payload,
+                    operation=operation,
+                )
+                current_event = event
 
-            with start_span(
-                "kafka.consumer.message",
-                attributes={
-                    "db_monitor.cluster": cluster_name,
-                    "messaging.system": broker_kind,
-                    "messaging.destination.name": msg.destination,
-                    "messaging.destination.partition.id": msg.partition,
-                    "messaging.message.id": msg.offset,
-                },
-            ):
-                if not event_pipeline.should_process(event):
-                    await _handle_filtered_event(
-                        event=event,
-                        msg=msg,
-                        runtime=runtime,
-                        cluster_name=cluster_name,
-                        consumer_group=consumer_group,
-                        broker_kind=broker_kind,
-                        breaker=breaker,
-                    )
-                    continue
+                events_consumed_total.labels(
+                    service=event.service_name or "unknown",
+                    operation=event.operation or "unknown",
+                ).inc()
 
-                event = event_pipeline.transform(event)
-
-                if settings.ingestion.quota_enabled:
-                    quota_decision = await quota_limiter.apply(event)
-                    if quota_decision.throttled:
-                        ingestion_quota_throttled_total.labels(
-                            dimension=quota_decision.dimension or "unknown",
-                            identity=quota_decision.key or "unknown",
-                        ).inc()
-                        ingestion_quota_sleep_seconds.observe(
-                            quota_decision.sleep_seconds
-                        )
-
-                    if not quota_decision.allowed:
-                        await _handle_quota_dropped_event(
+                with start_span(
+                    "kafka.consumer.message",
+                    attributes={
+                        "db_monitor.cluster": cluster_name,
+                        "messaging.system": broker_kind,
+                        "messaging.destination.name": msg.destination,
+                        "messaging.destination.partition.id": msg.partition,
+                        "messaging.message.id": msg.offset,
+                    },
+                ):
+                    if not event_pipeline.should_process(event):
+                        await _handle_filtered_event(
                             event=event,
                             msg=msg,
-                            quota_decision=quota_decision,
                             runtime=runtime,
                             cluster_name=cluster_name,
                             consumer_group=consumer_group,
@@ -168,89 +205,120 @@ async def _message_loop(
                         )
                         continue
 
-                if enable_batch:
-                    if not batch:
-                        last_batch_time = asyncio.get_event_loop().time()
-                    batch.append((event, data, msg))
-                    batch_elapsed = asyncio.get_event_loop().time() - last_batch_time
-                    if len(batch) >= batch_size or batch_elapsed >= batch_timeout:
-                        batch_processed = await _process_batch(
-                            batch,
-                            consumer.ack_batch,  # type: ignore[union-attr,attr-defined]
-                            dlq_publisher,
-                            dlq_destination,
-                            enable_dlq,
-                            runtime,
-                            cluster_name,
-                            consumer_group,
-                            broker_kind,
-                        )
-                        if not batch_processed:
-                            raise ConsumerStopRequested("Batch processing aborted before ack.")
-                        batch = []
-                else:
-                    processed = await _process_single_event(
-                        event,
-                        msg,
-                        dlq_publisher=dlq_publisher,
-                        dlq_destination=dlq_destination,
-                        enable_dlq=enable_dlq,
-                        raw_data=data,
-                        runtime=runtime,
-                        cluster_name=cluster_name,
-                        consumer_group=consumer_group,
-                        broker_kind=broker_kind,
-                    )
-                    if not processed:
-                        raise ConsumerStopRequested(
-                            "Message processing aborted before ack."
-                        )
+                    event = event_pipeline.transform(event)
 
-            breaker.record_success()
+                    if settings.ingestion.quota_enabled:
+                        quota_decision = await quota_limiter.apply(event)
+                        if quota_decision.throttled:
+                            ingestion_quota_throttled_total.labels(
+                                dimension=quota_decision.dimension or "unknown",
+                                identity=quota_decision.key or "unknown",
+                            ).inc()
+                            ingestion_quota_sleep_seconds.observe(
+                                quota_decision.sleep_seconds
+                            )
 
-        except asyncio.CancelledError:
-            logger.info("Consumer task received cancellation signal")
-            raise
-        except ConsumerStopRequested:
-            breaker.record_failure()
-            raise
-        except Exception as e:
-            logger.exception("Error processing message: %s", e)
-            raw_payload = (
-                msg.value.decode("utf-8", errors="replace")
-                if msg.value is not None
-                else ""
-            )
-            should_continue = await _handle_message_processing_error(
-                msg=msg,
-                raw_payload=raw_payload,
-                exc=e,
-                dlq_publisher=dlq_publisher,
-                dlq_destination=dlq_destination,
-                enable_dlq=enable_dlq,
-                broker_kind=broker_kind,
-            )
-            breaker.record_failure()
-            if not should_continue:
+                        if not quota_decision.allowed:
+                            await _handle_quota_dropped_event(
+                                event=event,
+                                msg=msg,
+                                quota_decision=quota_decision,
+                                runtime=runtime,
+                                cluster_name=cluster_name,
+                                consumer_group=consumer_group,
+                                broker_kind=broker_kind,
+                                breaker=breaker,
+                            )
+                            continue
+
+                    if enable_batch:
+                        if not batch:
+                            last_batch_time = asyncio.get_event_loop().time()
+                        batch.append((event, data, msg))
+                        batch_elapsed = asyncio.get_event_loop().time() - last_batch_time
+                        if len(batch) >= batch_size or batch_elapsed >= batch_timeout:
+                            batch_processed = await _process_batch(
+                                batch,
+                                consumer.ack_batch,  # type: ignore[union-attr,attr-defined]
+                                dlq_publisher,
+                                dlq_destination,
+                                enable_dlq,
+                                runtime,
+                                cluster_name,
+                                consumer_group,
+                                broker_kind,
+                            )
+                            if not batch_processed:
+                                raise ConsumerStopRequested("Batch processing aborted before ack.")
+                            batch = []
+                    else:
+                        processed = await _process_single_event(
+                            event,
+                            msg,
+                            dlq_publisher=dlq_publisher,
+                            dlq_destination=dlq_destination,
+                            enable_dlq=enable_dlq,
+                            raw_data=data,
+                            runtime=runtime,
+                            cluster_name=cluster_name,
+                            consumer_group=consumer_group,
+                            broker_kind=broker_kind,
+                        )
+                        if not processed:
+                            raise ConsumerStopRequested(
+                                "Message processing aborted before ack."
+                            )
+
+                breaker.record_success()
+
+            except asyncio.CancelledError:
+                logger.info("Consumer task received cancellation signal")
                 raise
-
-            fallback_event = (
-                current_event
-                if current_event is not None
-                else _fallback_event_from_message(msg, raw_payload)
-            )
-            acknowledged = await _ack_message_and_record_progress(
-                msg=msg,
-                event=fallback_event,
-                runtime=runtime,
-                cluster_name=cluster_name,
-                consumer_group=consumer_group,
-                broker_kind=broker_kind,
-            )
-            if not acknowledged:
-                raise ConsumerStopRequested(
-                    "DLQ-handled message could not be acknowledged."
+            except ConsumerStopRequested:
+                breaker.record_failure()
+                raise
+            except Exception as e:
+                logger.exception("Error processing message: %s", e)
+                raw_payload = (
+                    msg.value.decode("utf-8", errors="replace")
+                    if msg.value is not None
+                    else ""
                 )
+                should_continue = await _handle_message_processing_error(
+                    msg=msg,
+                    raw_payload=raw_payload,
+                    exc=e,
+                    dlq_publisher=dlq_publisher,
+                    dlq_destination=dlq_destination,
+                    enable_dlq=enable_dlq,
+                    broker_kind=broker_kind,
+                )
+                breaker.record_failure()
+                if not should_continue:
+                    raise
+
+                fallback_event = (
+                    current_event
+                    if current_event is not None
+                    else _fallback_event_from_message(msg, raw_payload)
+                )
+                acknowledged = await _ack_message_and_record_progress(
+                    msg=msg,
+                    event=fallback_event,
+                    runtime=runtime,
+                    cluster_name=cluster_name,
+                    consumer_group=consumer_group,
+                    broker_kind=broker_kind,
+                )
+                if not acknowledged:
+                    raise ConsumerStopRequested(
+                        "DLQ-handled message could not be acknowledged."
+                    )
+
+    finally:
+        pump_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pump_task
 
     # Flush remaining batch on graceful consumer exit
     if batch:
@@ -267,3 +335,6 @@ async def _message_loop(
         )
         if not batch_processed:
             raise ConsumerStopRequested("Final batch processing aborted before ack.")
+
+    if pump_error is not None:
+        raise pump_error

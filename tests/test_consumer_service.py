@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -12,6 +14,7 @@ from db_monitor.consumer.batch import core as batch_core
 from db_monitor.consumer.batch import processing as batch_processing
 from db_monitor.consumer import checkpoint as consumer_checkpoint
 from db_monitor.consumer import consumer as consumer_mod
+from db_monitor.consumer import loop as consumer_loop
 from db_monitor.consumer import dlq as consumer_dlq
 from db_monitor.core.config import settings
 from db_monitor.core.models import DeadLetterEvent, KafkaEvent
@@ -835,6 +838,82 @@ async def test_broadcast_event_persists_webhook_failures_to_dlq(
             "webhook",
         )
     ]
+
+
+@pytest.mark.anyio
+async def test_message_loop_flushes_partial_batch_when_topic_goes_idle(
+    monkeypatch,
+):
+    """A burst smaller than batch_size must still reach the DB."""
+
+    class IdleConsumer(FakeBrokerConsumerAdapter):
+        async def _iterate(self):
+            for message in self.messages:
+                yield message
+            # Topic is quiet: no further message will wake the batch loop.
+            await asyncio.Event().wait()
+
+    payload = json.dumps(
+        {
+            "op": "c",
+            "ts_ms": 1_700_000_000_000,
+            "source": {
+                "name": "orderdb",
+                "db": "orderdb",
+                "schema": "public",
+                "table": "orders",
+            },
+            "after": {"id": 1, "status": "pending"},
+        }
+    )
+    messages = [
+        FakeBrokerMessage("orderdb.public.orders", payload, offset=offset)
+        for offset in range(3)
+    ]
+    consumer = IdleConsumer(messages)
+    flushed: list[list[KafkaEvent]] = []
+
+    async def fake_process_batch(batch, ack_batch, *_args, **_kwargs):
+        flushed.append([event for event, _raw, _msg in batch])
+        await ack_batch([msg for _event, _raw, msg in batch])
+        return True
+
+    monkeypatch.setattr(consumer_loop, "_process_batch", fake_process_batch)
+    monkeypatch.setattr(
+        consumer_loop,
+        "BATCH_FLUSH_TIMEOUT_SECONDS",
+        0.05,
+    )
+
+    runtime = {"last_message_at": None}
+    task = asyncio.create_task(
+        consumer_loop._message_loop(
+            consumer,
+            cluster_name="idle-batch-test",
+            broker_kind="kafka",
+            consumer_group="group-idle",
+            dlq_publisher=None,
+            dlq_destination="db-monitor-dlq",
+            enable_dlq=False,
+            enable_batch=True,
+            batch_size=100,
+            runtime=runtime,
+            breaker=consumer_loop.RuntimeCircuitBreaker(),
+        )
+    )
+    try:
+        for _ in range(100):
+            if flushed:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    assert len(flushed) == 1
+    assert len(flushed[0]) == 3
+    assert [message.acked for message in messages] == [1, 1, 1]
 
 
 @pytest.mark.anyio

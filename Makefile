@@ -1,4 +1,4 @@
-.PHONY: monitor-help monitor-up monitor-check-context monitor-up-sandbox monitor-down monitor-down-sandbox monitor-logs monitor-logs-sandbox monitor-register monitor-dev monitor-migrate monitor-test monitor-test-core monitor-test-integration monitor-test-sandbox monitor-test-sandbox-pytest monitor-test-smoke monitor-test-scale monitor-test-scale-target monitor-test-container-readyz monitor-lint monitor-lint-fix monitor-typecheck monitor-package-smoke monitor-recovery monitor-tui monitor-tui-build monitor-test-quota monitor-test-lifecycle test lint typecheck
+.PHONY: monitor-help monitor-up monitor-start monitor-check-context monitor-up-sandbox monitor-down monitor-down-sandbox monitor-logs monitor-logs-sandbox monitor-register monitor-dev monitor-migrate monitor-test monitor-test-core monitor-test-integration monitor-test-sandbox monitor-test-sandbox-pytest monitor-test-smoke monitor-test-scale monitor-test-scale-target monitor-test-container-readyz monitor-lint monitor-lint-fix monitor-typecheck monitor-package-smoke monitor-recovery monitor-tui monitor-tui-kind monitor-tui-build monitor-port-forward monitor-port-forward-stop monitor-seed-kind monitor-api-key monitor-api-key-kind monitor-status monitor-check monitor-demo-reset monitor-demo-reset-kind monitor-demo-kind monitor-test-quota monitor-test-lifecycle test lint typecheck
 
 PODMAN_COMPOSE ?= $(shell command -v podman-compose 2>/dev/null || echo "docker compose")
 
@@ -25,6 +25,27 @@ monitor-up: ## Start only the core platform services via Docker Compose
 
 monitor-up-sandbox: ## Start the core platform plus the optional sandbox services
 	$(PODMAN_COMPOSE) --profile sandbox up -d
+
+monitor-demo-reset: ## Reset demo data in the local (Compose) monitor DB (requires DEMO_MODE=1)
+	DEMO_MODE=1 uv run python scripts/reset_demo_db.py --yes
+
+monitor-demo-reset-kind: ## Reset demo data in the Kind monitor DB
+	@kubectl --context $${KIND_CONTEXT:-kind-dbm} -n $${NAMESPACE:-dbm-smoke} \
+	 exec -i deploy/$${RELEASE:-smoke}-db-monitor-api -- \
+	 env DEMO_MODE=1 python - --yes < scripts/reset_demo_db.py
+
+monitor-demo-kind: ## Reset + seed demo data in Kind, then print next steps
+	@$(MAKE) monitor-demo-reset-kind
+	@SEED_BASE=0 $(MAKE) monitor-seed-kind
+	@echo "Demo data ready. Run: make monitor-tui-kind"
+
+monitor-start: ## One command: start the full local (Compose) stack and wait for health
+	@$(PODMAN_COMPOSE) --profile sandbox up -d
+	@echo "Waiting for the API to become healthy..."
+	@until curl -fsS http://localhost:8000/health >/dev/null 2>&1; do sleep 2; done
+	@echo "Stack is up. Next steps:"
+	@echo "  make monitor-api-key          # generate an admin API key"
+	@echo "  make monitor-tui             # launch the dashboard"
 
 monitor-down: ## Stop the active core-platform services
 	$(PODMAN_COMPOSE) down
@@ -172,8 +193,55 @@ monitor-test-scale-target: ## Run scale validation at target throughput (100-DB 
 monitor-tui-build: ## Build/install TUI dependencies
 	cd tui && uv sync
 
-monitor-tui: ## Run the Textual UI dashboard
+monitor-tui: ## Run the Textual UI dashboard against the local Compose stack (localhost:8000)
 	cd tui && uv run python app.py
+
+monitor-tui-kind: ## Run the Textual UI dashboard against the Kind stack (requires monitor-port-forward)
+	@for p in 8000 8001; do \
+	  code=$$(curl -s -o /dev/null -w "%{http_code}" -m 3 http://localhost:$$p/health 2>/dev/null || echo "000"); \
+	  if [ "$$code" != "200" ]; then \
+	    echo "localhost:$$p not reachable (got $$code). Run 'make monitor-port-forward' first."; \
+	    exit 1; \
+	  fi; \
+	done
+	cd tui && DB_MONITOR_BASE_URL=http://localhost:8000 uv run python app.py
+
+monitor-status: ## Show which stack (Compose/Kind) is responding on 8000/8001
+	@echo "localhost:8000/health -> $$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://localhost:8000/health 2>/dev/null || echo 000)"
+	@echo "localhost:8001/health -> $$(curl -s -o /dev/null -w '%{http_code}' -m 3 http://localhost:8001/health 2>/dev/null || echo 000)"
+	@curl -s -m 3 http://localhost:8001/health 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); c=d.get('checks',{}).get('consumer',{}); print('consumer running=',c.get('running'),'connected=',c.get('connected'),'lag=',c.get('lag_total'))" 2>/dev/null || true
+
+monitor-port-forward: ## Keep Kind API/consumer port-forwards alive (8000/8001) for the TUI
+	@KIND_CONTEXT=$${KIND_CONTEXT:-kind-dbm} \
+	 NAMESPACE=$${NAMESPACE:-dbm-smoke} \
+	 RELEASE=$${RELEASE:-smoke} \
+	 API_PORT=$${API_PORT:-8000} \
+	 CONSUMER_PORT=$${CONSUMER_PORT:-8001} \
+	 bash scripts/kind_port_forward.sh
+
+monitor-port-forward-stop: ## Stop the Kind port-forwards started by monitor-port-forward
+	@bash scripts/kind_port_forward.sh --stop
+
+monitor-seed-kind: ## Publish synthetic CDC events into the Kind cluster (TUI demo data)
+	@kubectl --context $${KIND_CONTEXT:-kind-dbm} -n $${NAMESPACE:-dbm-smoke} \
+	 exec -i deploy/$${RELEASE:-smoke}-db-monitor-consumer -- \
+	 env SEED_BASE=$${SEED_BASE:-0} python - < scripts/seed_kind_events.py
+
+monitor-api-key: ## Generate an admin API key against the local (Compose) database
+	@uv run python scripts/seed_admin_api_key.py \
+		--owner-name $${OWNER_NAME:-admin} \
+		--ttl-days $${TTL_DAYS:-90}
+
+monitor-api-key-kind: ## Generate an admin API key inside the Kind cluster (prints composite key)
+	@kubectl --context $${KIND_CONTEXT:-kind-dbm} -n $${NAMESPACE:-dbm-smoke} \
+	 exec -i deploy/$${RELEASE:-smoke}-db-monitor-api -- \
+	 env OWNER_NAME=$${OWNER_NAME:-admin} TTL_DAYS=$${TTL_DAYS:-90} \
+	 python - < scripts/seed_admin_api_key.py
+
+monitor-check: ## Run the standard verification gate (lint + typecheck + core tests)
+	@$(MAKE) monitor-lint
+	@$(MAKE) monitor-typecheck
+	@$(MAKE) monitor-test-core
 
 monitor-docs-build: ## Build the MkDocs documentation site
 	uv run --group dev mkdocs build --strict
